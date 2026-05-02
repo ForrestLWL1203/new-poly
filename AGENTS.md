@@ -186,7 +186,8 @@ python3 /Users/forrestliao/workspace/new-poly/scripts/prob_edge_dry_run.py \
   --interval-sec 1 \
   --jsonl /Users/forrestliao/workspace/new-poly/data/prob-edge-dry-run.jsonl \
   --sigma-eff 0.6 \
-  --sigma-source manual
+  --sigma-source manual \
+  --windows 12
 ```
 
 Safe VPS command after copying the script:
@@ -196,8 +197,12 @@ Safe VPS command after copying the script:
   --interval-sec 1 \
   --jsonl /opt/new-poly/data/prob-edge-dry-run.jsonl \
   --sigma-eff 0.6 \
-  --sigma-source manual
+  --sigma-source manual \
+  --windows 12
 ```
+
+By default the logger runs until interrupted. Use `--windows N` to stop after
+observing `N` distinct five-minute market slugs.
 
 Copy to VPS:
 

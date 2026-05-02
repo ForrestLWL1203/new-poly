@@ -83,8 +83,13 @@ Useful options:
 --sigma-eff 0.6
 --sigma-source manual
 --warmup-timeout-sec 8
+--windows 12
 --verbose
 ```
+
+By default the logger runs forever. Use `--windows N` to stop after observing
+`N` distinct five-minute market slugs. For example, `--windows 12` records about
+one hour of BTC 5m windows.
 
 ## VPS Usage
 
@@ -105,7 +110,8 @@ ssh -i /Users/forrestliao/workspace/new-poly/docs/LightsailDefaultKey-eu-west-1.
     --interval-sec 1 \
     --jsonl /opt/new-poly/data/prob-edge-dry-run.jsonl \
     --sigma-eff 0.6 \
-    --sigma-source manual'
+    --sigma-source manual \
+    --windows 12'
 ```
 
 ## JSONL Schema

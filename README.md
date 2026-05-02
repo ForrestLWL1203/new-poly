@@ -100,7 +100,8 @@ python3 scripts/prob_edge_dry_run.py \
   --interval-sec 1 \
   --jsonl data/prob-edge-dry-run.jsonl \
   --sigma-eff 0.6 \
-  --sigma-source manual
+  --sigma-source manual \
+  --windows 12
 ```
 
 The script extracts the Polymarket UI Price to Beat from event-page HTML as

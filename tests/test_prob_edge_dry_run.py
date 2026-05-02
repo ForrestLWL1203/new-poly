@@ -152,3 +152,20 @@ def test_basis_adjusted_price_state_uses_polymarket_k_and_binance_basis() -> Non
     assert state.k_price == 100_000.0
     assert state.s_price == 100_070.0
     assert state.basis_bps == 5.0
+
+
+def test_window_tracker_stops_after_n_distinct_windows() -> None:
+    tracker = dry_run.WindowLimitTracker(limit=2)
+
+    assert tracker.observe("btc-updown-5m-1") is False
+    assert tracker.observe("btc-updown-5m-1") is False
+    assert tracker.observe("btc-updown-5m-2") is False
+    assert tracker.observe("btc-updown-5m-2") is False
+    assert tracker.observe("btc-updown-5m-3") is True
+
+
+def test_window_tracker_without_limit_never_stops() -> None:
+    tracker = dry_run.WindowLimitTracker(limit=None)
+
+    assert tracker.observe("btc-updown-5m-1") is False
+    assert tracker.observe("btc-updown-5m-2") is False

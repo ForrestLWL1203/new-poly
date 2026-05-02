@@ -82,6 +82,19 @@ class WindowPriceState:
         self.binance_open_price = binance_open_price
 
 
+class WindowLimitTracker:
+    def __init__(self, limit: int | None) -> None:
+        self.limit = limit
+        self.seen: list[str] = []
+
+    def observe(self, slug: str) -> bool:
+        if self.limit is None:
+            return False
+        if slug not in self.seen:
+            self.seen.append(slug)
+        return len(self.seen) > self.limit
+
+
 class TokenBookState:
     def __init__(self, token_id: str) -> None:
         self.token_id = token_id
@@ -827,6 +840,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chainlink-s-price", type=float, default=None)
     parser.add_argument("--chainlink-k-price", type=float, default=None)
     parser.add_argument("--warmup-timeout-sec", type=float, default=8.0)
+    parser.add_argument(
+        "--windows",
+        type=int,
+        default=None,
+        help="Stop after observing this many distinct BTC 5m windows. Omit to run forever.",
+    )
     return parser
 
 
@@ -835,6 +854,7 @@ async def run(args: argparse.Namespace) -> int:
     stop = asyncio.Event()
     tasks: list[asyncio.Task[Any]] = []
     try:
+        window_tracker = WindowLimitTracker(args.windows)
         market = await discover_btc_5m()
         window_prices = await fetch_window_prices(market)
         window_prices.binance_open_price = await asyncio.to_thread(fetch_binance_open_price, market["start"])
@@ -859,6 +879,8 @@ async def run(args: argparse.Namespace) -> int:
         first = True
         deadline = time.monotonic() + max(0.0, args.warmup_timeout_sec)
         while True:
+            if window_tracker.observe(str(market["slug"])):
+                return 0
             if first:
                 while time.monotonic() < deadline:
                     if shared_price.binance_price is not None and all(book.received_at is not None for book in books.values()):
@@ -888,6 +910,34 @@ async def run(args: argparse.Namespace) -> int:
             if args.once:
                 return 0
             await asyncio.sleep(args.interval_sec)
+            now_utc = dt.datetime.now(dt.timezone.utc)
+            if now_utc >= market["end"]:
+                market = await discover_btc_5m()
+                window_prices = await fetch_window_prices(market)
+                window_prices.binance_open_price = await asyncio.to_thread(fetch_binance_open_price, market["start"])
+                market["k_source"] = window_prices.k_source
+                market["close_price"] = window_prices.close_price
+                books = {
+                    market["up_token"]: TokenBookState(market["up_token"]),
+                    market["down_token"]: TokenBookState(market["down_token"]),
+                }
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                stop = asyncio.Event()
+                tasks = [
+                    asyncio.create_task(binance_trade_task(shared_price, stop)),
+                    asyncio.create_task(
+                        clob_books_task(
+                            books,
+                            [market["up_token"], market["down_token"]],
+                            stop,
+                            log_every_book_change=args.log_every_book_change,
+                        )
+                    ),
+                ]
+                deadline = time.monotonic() + max(0.0, args.warmup_timeout_sec)
+                first = True
     except Exception as exc:
         writer.write(error_row(str(exc)))
         return 1
