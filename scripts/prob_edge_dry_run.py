@@ -27,6 +27,12 @@ BINANCE_BTC_TRADE_WS = "wss://stream.binance.com:9443/ws/btcusdt@trade"
 BTC_5M_PREFIX = "btc-updown-5m"
 BTC_5M_STEP = 300
 SECONDS_PER_YEAR = 31_536_000
+K_RETRY_AGES_SEC = (20.0, 25.0, 30.0, 35.0)
+K_RETRY_TIMEOUT_SEC = 35.0
+POLYMARKET_EVENT_PREFIXES = (
+    "https://polymarket.com/zh/event/",
+    "https://polymarket.com/event/",
+)
 
 SKIP_REASONS = {
     "warmup",
@@ -36,6 +42,7 @@ SKIP_REASONS = {
     "missing_chainlink_price",
     "paper_proxy_only",
     "missing_k",
+    "missing_k_timeout",
     "stale_price",
     "stale_book",
     "missing_book",
@@ -80,6 +87,21 @@ class WindowPriceState:
         self.close_price = close_price
         self.k_source = k_source
         self.binance_open_price = binance_open_price
+
+
+class KRetryState:
+    def __init__(self) -> None:
+        self.attempted_slots: set[float] = set()
+        self.last_attempt_age: float | None = None
+        self.timed_out = False
+
+    def record_attempt(self, age_sec: float) -> None:
+        eligible = [slot for slot in K_RETRY_AGES_SEC if slot <= age_sec and slot not in self.attempted_slots]
+        if eligible:
+            self.attempted_slots.add(max(eligible))
+        self.last_attempt_age = age_sec
+        if K_RETRY_TIMEOUT_SEC in self.attempted_slots:
+            self.timed_out = True
 
 
 class WindowLimitTracker:
@@ -369,6 +391,7 @@ def choose_skip_reason(
     now_mono: float,
     best_edge: float | None,
     required_edge: float,
+    k_timed_out: bool = False,
 ) -> str | None:
     if not good_resolution:
         return "bad_resolution_source"
@@ -378,14 +401,14 @@ def choose_skip_reason(
         return "warmup"
     if phase == "no_entry":
         return "final_no_entry"
+    if price_state.k_price is None:
+        return "missing_k_timeout" if k_timed_out else "missing_k"
     if price_state.source == "proxy_binance":
         return "paper_proxy_only"
     if price_state.source == "proxy_binance_basis_adjusted":
         return "paper_proxy_only"
     if price_state.source != "chainlink":
         return "missing_chainlink_price"
-    if price_state.k_price is None:
-        return "missing_k"
     if up_book.received_at is None or down_book.received_at is None:
         return "missing_book"
     ages = [age for age in (up_book.age_ms(now_mono), down_book.age_ms(now_mono)) if age is not None]
@@ -468,6 +491,7 @@ def build_log_row(
         now_mono=now_mono,
         best_edge=best_edge,
         required_edge=required_edge,
+        k_timed_out=bool(market.get("k_timed_out")),
     )
     decision = "candidate" if skip_reason is None and candidate_side is not None else "skip"
     if decision == "skip":
@@ -586,7 +610,7 @@ def fetch_gamma_markets(slug: str) -> Any:
 
 def fetch_polymarket_html(slug: str) -> str:
     last_error: Exception | None = None
-    for prefix in ("https://polymarket.com/event/", "https://polymarket.com/zh/event/"):
+    for prefix in POLYMARKET_EVENT_PREFIXES:
         try:
             req = urllib.request.Request(prefix + slug, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=15.0) as resp:
@@ -596,18 +620,66 @@ def fetch_polymarket_html(slug: str) -> str:
     raise RuntimeError(f"failed to fetch Polymarket event HTML: {last_error}")
 
 
+def fetch_polymarket_html_candidates(slug: str) -> list[str]:
+    htmls: list[str] = []
+    last_error: Exception | None = None
+    for prefix in POLYMARKET_EVENT_PREFIXES:
+        try:
+            req = urllib.request.Request(prefix + slug, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15.0) as resp:
+                htmls.append(resp.read().decode("utf-8", "ignore"))
+        except Exception as exc:
+            last_error = exc
+    if not htmls and last_error is not None:
+        raise RuntimeError(f"failed to fetch Polymarket event HTML: {last_error}")
+    return htmls
+
+
 async def fetch_window_prices(market: dict[str, Any]) -> WindowPriceState:
     start = market["start"]
     end = market["end"]
-    html = await asyncio.to_thread(fetch_polymarket_html, market["slug"])
-    data = extract_crypto_prices_from_html(html, start_iso=iso_z(start), end_iso=iso_z(end))
-    if data is None:
+    htmls = await asyncio.to_thread(fetch_polymarket_html_candidates, market["slug"])
+    data = None
+    for html in htmls:
+        data = extract_crypto_prices_from_html(html, start_iso=iso_z(start), end_iso=iso_z(end))
+        if data is not None and data.get("openPrice") is not None:
+            break
+    if data is None or data.get("openPrice") is None:
         return WindowPriceState()
     return WindowPriceState(
         k_price=data["openPrice"],
         close_price=data["closePrice"],
         k_source="polymarket_html_crypto_prices",
     )
+
+
+def should_retry_k_price(retry_state: KRetryState, age_sec: float) -> bool:
+    if retry_state.timed_out:
+        return False
+    if age_sec > K_RETRY_TIMEOUT_SEC:
+        retry_state.timed_out = True
+        return False
+    return any(slot <= age_sec and slot not in retry_state.attempted_slots for slot in K_RETRY_AGES_SEC)
+
+
+async def refresh_missing_window_prices(
+    market: dict[str, Any],
+    window_prices: WindowPriceState,
+    *,
+    retry_state: KRetryState,
+    age_sec: float,
+) -> tuple[WindowPriceState, KRetryState]:
+    if window_prices.k_price is not None:
+        return window_prices, retry_state
+    if not should_retry_k_price(retry_state, age_sec):
+        return window_prices, retry_state
+    retry_state.record_attempt(age_sec)
+    fetched = await fetch_window_prices(market)
+    if fetched.binance_open_price is None:
+        fetched.binance_open_price = window_prices.binance_open_price
+    if fetched.k_price is None:
+        return window_prices, retry_state
+    return fetched, retry_state
 
 
 def fetch_binance_open_price(start: dt.datetime) -> float | None:
@@ -856,10 +928,12 @@ async def run(args: argparse.Namespace) -> int:
     try:
         window_tracker = WindowLimitTracker(args.windows)
         market = await discover_btc_5m()
-        window_prices = await fetch_window_prices(market)
+        window_prices = WindowPriceState()
         window_prices.binance_open_price = await asyncio.to_thread(fetch_binance_open_price, market["start"])
+        k_retry_state = KRetryState()
         market["k_source"] = window_prices.k_source
         market["close_price"] = window_prices.close_price
+        market["k_timed_out"] = k_retry_state.timed_out
         books = {
             market["up_token"]: TokenBookState(market["up_token"]),
             market["down_token"]: TokenBookState(market["down_token"]),
@@ -887,11 +961,22 @@ async def run(args: argparse.Namespace) -> int:
                         break
                     await asyncio.sleep(0.1)
                 first = False
+            now_for_row = dt.datetime.now(dt.timezone.utc)
+            age_sec = (now_for_row - market["start"]).total_seconds()
+            window_prices, k_retry_state = await refresh_missing_window_prices(
+                market,
+                window_prices,
+                retry_state=k_retry_state,
+                age_sec=age_sec,
+            )
+            market["k_source"] = window_prices.k_source
+            market["close_price"] = window_prices.close_price
+            market["k_timed_out"] = k_retry_state.timed_out
             price_state = build_effective_price_state(args, shared_price, window_prices)
             edge_components = {"base": args.base_edge}
             row = build_log_row(
                 market=market,
-                now=dt.datetime.now(dt.timezone.utc),
+                now=now_for_row,
                 order_notional=args.order_notional,
                 sigma_source=args.sigma_source if args.sigma_eff is not None else "missing",
                 sigma_eff=args.sigma_eff,
@@ -913,10 +998,12 @@ async def run(args: argparse.Namespace) -> int:
             now_utc = dt.datetime.now(dt.timezone.utc)
             if now_utc >= market["end"]:
                 market = await discover_btc_5m()
-                window_prices = await fetch_window_prices(market)
+                window_prices = WindowPriceState()
                 window_prices.binance_open_price = await asyncio.to_thread(fetch_binance_open_price, market["start"])
+                k_retry_state = KRetryState()
                 market["k_source"] = window_prices.k_source
                 market["close_price"] = window_prices.close_price
+                market["k_timed_out"] = k_retry_state.timed_out
                 books = {
                     market["up_token"]: TokenBookState(market["up_token"]),
                     market["down_token"]: TokenBookState(market["down_token"]),

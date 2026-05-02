@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 
@@ -114,7 +115,7 @@ def test_compact_row_contains_stable_schema_and_no_secrets() -> None:
     assert expected <= row.keys()
     assert row["settlement_aligned"] is False
     assert row["live_ready"] is False
-    assert row["skip_reason"] in {"missing_chainlink_price", "paper_proxy_only"}
+    assert row["skip_reason"] in {"missing_chainlink_price", "paper_proxy_only", "missing_k"}
     assert "private" not in str(row).lower()
 
 
@@ -169,3 +170,52 @@ def test_window_tracker_without_limit_never_stops() -> None:
 
     assert tracker.observe("btc-updown-5m-1") is False
     assert tracker.observe("btc-updown-5m-2") is False
+
+
+def test_k_retry_schedule_starts_at_20s_then_every_5s_until_35s() -> None:
+    state = dry_run.KRetryState()
+
+    assert dry_run.should_retry_k_price(state, age_sec=19.9) is False
+    assert dry_run.should_retry_k_price(state, age_sec=20.0) is True
+    state.record_attempt(20.0)
+    assert dry_run.should_retry_k_price(state, age_sec=24.9) is False
+    assert dry_run.should_retry_k_price(state, age_sec=25.0) is True
+    state.record_attempt(25.0)
+    assert dry_run.should_retry_k_price(state, age_sec=30.0) is True
+    state.record_attempt(30.0)
+    assert dry_run.should_retry_k_price(state, age_sec=35.0) is True
+    state.record_attempt(35.0)
+    assert dry_run.should_retry_k_price(state, age_sec=40.0) is False
+    assert state.timed_out is True
+
+
+def test_missing_window_k_retries_and_preserves_binance_open(monkeypatch) -> None:
+    market = {
+        "slug": "btc-updown-5m-1",
+        "start": dry_run.dt.datetime(2026, 5, 3, 0, 0, tzinfo=dry_run.dt.timezone.utc),
+        "end": dry_run.dt.datetime(2026, 5, 3, 0, 5, tzinfo=dry_run.dt.timezone.utc),
+    }
+    state = dry_run.WindowPriceState(binance_open_price=100_050.0)
+
+    async def fake_fetch_window_prices(_market):
+        return dry_run.WindowPriceState(
+            k_price=100_000.0,
+            close_price=None,
+            k_source="polymarket_html_crypto_prices",
+        )
+
+    monkeypatch.setattr(dry_run, "fetch_window_prices", fake_fetch_window_prices)
+
+    updated, last_attempt = asyncio.run(
+        dry_run.refresh_missing_window_prices(
+            market,
+            state,
+            retry_state=dry_run.KRetryState(),
+            age_sec=20.0,
+        )
+    )
+
+    assert updated.k_price == 100_000.0
+    assert updated.k_source == "polymarket_html_crypto_prices"
+    assert updated.binance_open_price == 100_050.0
+    assert last_attempt.last_attempt_age == 20.0
