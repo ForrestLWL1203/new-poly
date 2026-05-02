@@ -449,11 +449,7 @@ def choose_skip_reason(
         return "final_no_entry"
     if price_state.k_price is None:
         return "missing_k_timeout" if k_timed_out else "missing_k"
-    if price_state.source == "proxy_binance":
-        return "paper_proxy_only"
-    if price_state.source == "proxy_binance_basis_adjusted":
-        return "paper_proxy_only"
-    if price_state.source != "chainlink":
+    if price_state.source not in {"chainlink", "proxy_binance", "proxy_binance_basis_adjusted"}:
         return "missing_effective_price"
     if up_book.received_at is None or down_book.received_at is None:
         return "missing_book"
@@ -549,10 +545,6 @@ def build_log_row(
     if up_log["bid_avg"] is not None and down_log["bid_avg"] is not None:
         bid_sum = up_log["bid_avg"] + down_log["bid_avg"]
     warnings: list[str] = []
-    if price_state.source == "proxy_binance":
-        warnings.append("binance_proxy_not_settlement_source")
-    if price_state.source == "proxy_binance_basis_adjusted":
-        warnings.append("basis_adjusted_binance_proxy_not_settlement_source")
     if market.get("binance_open_source") == "rest_kline":
         warnings.append("binance_open_rest_fallback")
     if not up_depth_ok or not down_depth_ok:

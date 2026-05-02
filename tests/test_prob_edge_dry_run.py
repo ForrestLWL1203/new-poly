@@ -117,8 +117,39 @@ def test_compact_row_contains_stable_schema_and_no_secrets() -> None:
     assert expected <= row.keys()
     assert row["settlement_aligned"] is False
     assert row["live_ready"] is False
-    assert row["skip_reason"] in {"missing_chainlink_price", "paper_proxy_only", "missing_k"}
+    assert row["skip_reason"] in {"missing_effective_price", "missing_k"}
     assert "private" not in str(row).lower()
+
+
+def test_proxy_price_does_not_force_paper_proxy_skip_reason() -> None:
+    now_mono = dry_run.time.monotonic()
+    up = dry_run.TokenBookState(token_id="up")
+    down = dry_run.TokenBookState(token_id="down")
+    up.update_snapshot(bids=[(0.49, 100.0)], asks=[(0.51, 100.0)], now=now_mono - 3.0)
+    down.update_snapshot(bids=[(0.49, 100.0)], asks=[(0.51, 100.0)], now=now_mono - 3.0)
+
+    row = dry_run.build_log_row(
+        market={
+            "slug": "btc-updown-5m-1",
+            "start": dry_run.dt.datetime(2026, 5, 3, 0, 0, tzinfo=dry_run.dt.timezone.utc),
+            "end": dry_run.dt.datetime(2026, 5, 3, 0, 5, tzinfo=dry_run.dt.timezone.utc),
+            "resolution_source": "https://data.chain.link/streams/btc-usd",
+        },
+        now=dry_run.dt.datetime(2026, 5, 3, 0, 1, tzinfo=dry_run.dt.timezone.utc),
+        order_notional=5.0,
+        sigma_source="manual",
+        sigma_eff=0.6,
+        price_state=dry_run.PriceState(source="proxy_binance_basis_adjusted", s_price=100_000.0, k_price=100_000.0),
+        up_state=up,
+        down_state=down,
+        required_edge=0.07,
+        edge_components={"base": 0.07},
+        max_book_age_ms=5000,
+        stable_depth_sec=2.0,
+    )
+
+    assert row["skip_reason"] == "edge_too_small"
+    assert row["price_source"] == "proxy_binance_basis_adjusted"
 
 
 def test_extract_crypto_prices_from_hydration_html() -> None:
