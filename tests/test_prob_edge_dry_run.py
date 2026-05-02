@@ -176,6 +176,40 @@ def test_price_state_falls_back_to_live_binance_when_open_basis_missing() -> Non
     assert state.basis_bps is None
 
 
+def test_boundary_open_sampler_prefers_first_trade_at_or_after_start() -> None:
+    start = dry_run.dt.datetime.fromtimestamp(1_000, dry_run.dt.timezone.utc)
+    sampler = dry_run.BoundaryOpenSampler()
+    sampler.set_target(start)
+
+    sampler.record_trade(event_ts_ms=999_800, price=99.8, recv_mono=1.0)
+    sampler.record_trade(event_ts_ms=1_000_020, price=100.02, recv_mono=2.0)
+    sampler.record_trade(event_ts_ms=1_000_100, price=100.10, recv_mono=3.0)
+
+    result = sampler.open_price()
+
+    assert result is not None
+    assert result["price"] == 100.02
+    assert result["source"] == "ws_first_after"
+    assert result["delta_ms"] == 20
+
+
+def test_boundary_open_sampler_uses_last_trade_before_start_when_no_after() -> None:
+    start = dry_run.dt.datetime.fromtimestamp(1_000, dry_run.dt.timezone.utc)
+    sampler = dry_run.BoundaryOpenSampler()
+    sampler.set_target(start)
+
+    sampler.record_trade(event_ts_ms=994_999, price=94.999, recv_mono=1.0)
+    sampler.record_trade(event_ts_ms=999_700, price=99.7, recv_mono=2.0)
+    sampler.record_trade(event_ts_ms=999_950, price=99.95, recv_mono=3.0)
+
+    result = sampler.open_price()
+
+    assert result is not None
+    assert result["price"] == 99.95
+    assert result["source"] == "ws_last_before"
+    assert result["delta_ms"] == -50
+
+
 def test_window_tracker_stops_after_n_distinct_windows() -> None:
     tracker = dry_run.WindowLimitTracker(limit=2)
 

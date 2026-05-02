@@ -29,6 +29,8 @@ BTC_5M_STEP = 300
 SECONDS_PER_YEAR = 31_536_000
 K_RETRY_AGES_SEC = (25.0, 30.0, 35.0, 40.0)
 K_RETRY_TIMEOUT_SEC = 40.0
+BINANCE_OPEN_SAMPLE_BEFORE_SEC = 5.0
+BINANCE_OPEN_SAMPLE_AFTER_SEC = 5.0
 POLYMARKET_EVENT_PREFIXES = (
     "https://polymarket.com/zh/event/",
     "https://polymarket.com/event/",
@@ -84,11 +86,53 @@ class WindowPriceState:
         close_price: float | None = None,
         k_source: str = "missing",
         binance_open_price: float | None = None,
+        binance_open_source: str = "missing",
+        binance_open_delta_ms: int | None = None,
+        binance_open_rest_attempted: bool = False,
     ) -> None:
         self.k_price = k_price
         self.close_price = close_price
         self.k_source = k_source
         self.binance_open_price = binance_open_price
+        self.binance_open_source = binance_open_source
+        self.binance_open_delta_ms = binance_open_delta_ms
+        self.binance_open_rest_attempted = binance_open_rest_attempted
+
+
+class BoundaryOpenSampler:
+    def __init__(
+        self,
+        before_sec: float = BINANCE_OPEN_SAMPLE_BEFORE_SEC,
+        after_sec: float = BINANCE_OPEN_SAMPLE_AFTER_SEC,
+    ) -> None:
+        self.before_ms = int(before_sec * 1000)
+        self.after_ms = int(after_sec * 1000)
+        self.target_ms: int | None = None
+        self.trades: list[tuple[int, float, float]] = []
+
+    def set_target(self, start: dt.datetime) -> None:
+        self.target_ms = int(start.timestamp() * 1000)
+        self.trades = []
+
+    def record_trade(self, *, event_ts_ms: int, price: float, recv_mono: float) -> None:
+        if self.target_ms is None:
+            return
+        if self.target_ms - self.before_ms <= event_ts_ms <= self.target_ms + self.after_ms:
+            self.trades.append((event_ts_ms, price, recv_mono))
+
+    def open_price(self) -> dict[str, Any] | None:
+        if self.target_ms is None or not self.trades:
+            return None
+        ordered = sorted(self.trades, key=lambda row: (row[0], row[2]))
+        after = [row for row in ordered if row[0] >= self.target_ms]
+        if after:
+            event_ts_ms, price, _ = after[0]
+            return {"price": price, "source": "ws_first_after", "delta_ms": event_ts_ms - self.target_ms}
+        before = [row for row in ordered if row[0] < self.target_ms]
+        if before:
+            event_ts_ms, price, _ = before[-1]
+            return {"price": price, "source": "ws_last_before", "delta_ms": event_ts_ms - self.target_ms}
+        return None
 
 
 class KRetryState:
@@ -509,6 +553,8 @@ def build_log_row(
         warnings.append("binance_proxy_not_settlement_source")
     if price_state.source == "proxy_binance_basis_adjusted":
         warnings.append("basis_adjusted_binance_proxy_not_settlement_source")
+    if market.get("binance_open_source") == "rest_kline":
+        warnings.append("binance_open_rest_fallback")
     if not up_depth_ok or not down_depth_ok:
         warnings.append("depth_below_target_notional")
     row = {
@@ -529,6 +575,9 @@ def build_log_row(
         "k_price": compact_float(price_state.k_price, 2),
         "k_source": market.get("k_source"),
         "close_price": compact_float(market.get("close_price"), 2),
+        "binance_open_price": compact_float(market.get("binance_open_price"), 2),
+        "binance_open_source": market.get("binance_open_source"),
+        "binance_open_delta_ms": market.get("binance_open_delta_ms"),
         "basis_bps": compact_float(price_state.basis_bps, 3),
         "up_prob": compact_float(up_prob),
         "down_prob": compact_float(down_prob),
@@ -679,6 +728,8 @@ async def refresh_missing_window_prices(
     fetched = await fetch_window_prices(market)
     if fetched.binance_open_price is None:
         fetched.binance_open_price = window_prices.binance_open_price
+        fetched.binance_open_source = window_prices.binance_open_source
+        fetched.binance_open_delta_ms = window_prices.binance_open_delta_ms
     if fetched.k_price is None:
         return window_prices, retry_state
     return fetched, retry_state
@@ -760,7 +811,11 @@ def should_prefetch_next_market(remaining_sec: float, has_task: bool) -> bool:
     return not has_task and 0.0 < remaining_sec <= NEXT_MARKET_PREFETCH_SEC
 
 
-async def binance_trade_task(price_state: PriceState, stop: asyncio.Event) -> None:
+async def binance_trade_task(
+    price_state: PriceState,
+    stop: asyncio.Event,
+    open_sampler: BoundaryOpenSampler | None = None,
+) -> None:
     try:
         import websockets
     except ModuleNotFoundError:
@@ -772,11 +827,15 @@ async def binance_trade_task(price_state: PriceState, stop: asyncio.Event) -> No
                     raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
                     data = json.loads(raw)
                     price = float(data["p"])
+                    now_mono = time.monotonic()
                     price_state.binance_price = price
-                    price_state.binance_updated_at = time.monotonic()
+                    price_state.binance_updated_at = now_mono
                     if price_state.source == "missing":
                         price_state.source = "proxy_binance"
                         price_state.s_price = price
+                    if open_sampler is not None:
+                        event_ts_ms = int(data.get("T") or data.get("E"))
+                        open_sampler.record_trade(event_ts_ms=event_ts_ms, price=price, recv_mono=now_mono)
         except asyncio.TimeoutError:
             continue
         except Exception:
@@ -933,6 +992,29 @@ def build_effective_price_state(
     )
 
 
+def update_binance_open_from_sampler(window_prices: WindowPriceState, sampler: BoundaryOpenSampler) -> None:
+    if window_prices.binance_open_price is not None:
+        return
+    sampled = sampler.open_price()
+    if sampled is None:
+        return
+    window_prices.binance_open_price = sampled["price"]
+    window_prices.binance_open_source = sampled["source"]
+    window_prices.binance_open_delta_ms = sampled["delta_ms"]
+
+
+async def fill_rest_binance_open(window_prices: WindowPriceState, start: dt.datetime) -> None:
+    if window_prices.binance_open_price is not None or window_prices.binance_open_rest_attempted:
+        return
+    window_prices.binance_open_rest_attempted = True
+    price = await asyncio.to_thread(fetch_binance_open_price, start)
+    if price is None:
+        return
+    window_prices.binance_open_price = price
+    window_prices.binance_open_source = "rest_kline"
+    window_prices.binance_open_delta_ms = None
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Emit compact JSONL dry-run rows for BTC 5m probability edge.")
     parser.add_argument("--order-notional", type=float, default=5.0)
@@ -970,10 +1052,14 @@ async def run(args: argparse.Namespace) -> int:
         window_tracker = WindowLimitTracker(args.windows)
         market = await discover_btc_5m()
         window_prices = WindowPriceState()
-        window_prices.binance_open_price = await asyncio.to_thread(fetch_binance_open_price, market["start"])
+        open_sampler = BoundaryOpenSampler()
+        open_sampler.set_target(market["start"])
         k_retry_state = KRetryState()
         market["k_source"] = window_prices.k_source
         market["close_price"] = window_prices.close_price
+        market["binance_open_price"] = window_prices.binance_open_price
+        market["binance_open_source"] = window_prices.binance_open_source
+        market["binance_open_delta_ms"] = window_prices.binance_open_delta_ms
         market["k_timed_out"] = k_retry_state.timed_out
         books = {
             market["up_token"]: TokenBookState(market["up_token"]),
@@ -981,7 +1067,7 @@ async def run(args: argparse.Namespace) -> int:
         }
         shared_price = PriceState()
         tasks = [
-            asyncio.create_task(binance_trade_task(shared_price, stop)),
+            asyncio.create_task(binance_trade_task(shared_price, stop, open_sampler)),
             asyncio.create_task(
                 clob_books_task(
                     books,
@@ -1008,8 +1094,14 @@ async def run(args: argparse.Namespace) -> int:
                 retry_state=k_retry_state,
                 age_sec=age_sec,
             )
+            update_binance_open_from_sampler(window_prices, open_sampler)
+            if age_sec >= 10.0:
+                await fill_rest_binance_open(window_prices, market["start"])
             market["k_source"] = window_prices.k_source
             market["close_price"] = window_prices.close_price
+            market["binance_open_price"] = window_prices.binance_open_price
+            market["binance_open_source"] = window_prices.binance_open_source
+            market["binance_open_delta_ms"] = window_prices.binance_open_delta_ms
             market["k_timed_out"] = k_retry_state.timed_out
             if window_tracker.observe(str(market["slug"]), count=window_prices.k_price is not None):
                 return 0
@@ -1056,10 +1148,13 @@ async def run(args: argparse.Namespace) -> int:
                 market = next_market
                 next_market_task = None
                 window_prices = WindowPriceState()
-                window_prices.binance_open_price = await asyncio.to_thread(fetch_binance_open_price, market["start"])
+                open_sampler.set_target(market["start"])
                 k_retry_state = KRetryState()
                 market["k_source"] = window_prices.k_source
                 market["close_price"] = window_prices.close_price
+                market["binance_open_price"] = window_prices.binance_open_price
+                market["binance_open_source"] = window_prices.binance_open_source
+                market["binance_open_delta_ms"] = window_prices.binance_open_delta_ms
                 market["k_timed_out"] = k_retry_state.timed_out
                 books = {
                     market["up_token"]: TokenBookState(market["up_token"]),
@@ -1070,7 +1165,7 @@ async def run(args: argparse.Namespace) -> int:
                 await asyncio.gather(*tasks, return_exceptions=True)
                 stop = asyncio.Event()
                 tasks = [
-                    asyncio.create_task(binance_trade_task(shared_price, stop)),
+                    asyncio.create_task(binance_trade_task(shared_price, stop, open_sampler)),
                     asyncio.create_task(
                         clob_books_task(
                             books,
