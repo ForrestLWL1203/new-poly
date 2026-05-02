@@ -296,7 +296,7 @@ def binary_probs(
 def phase_for_window(age_sec: float, remaining_sec: float) -> str:
     if remaining_sec <= 0:
         return "closed"
-    if age_sec < 15:
+    if age_sec < 20:
         return "warmup"
     if age_sec < 120:
         return "early"

@@ -49,6 +49,8 @@ def test_avg_price_for_notional_reports_insufficient_depth() -> None:
 def test_phase_for_window() -> None:
     assert dry_run.phase_for_window(age_sec=-1, remaining_sec=301) == "warmup"
     assert dry_run.phase_for_window(age_sec=10, remaining_sec=290) == "warmup"
+    assert dry_run.phase_for_window(age_sec=19, remaining_sec=281) == "warmup"
+    assert dry_run.phase_for_window(age_sec=20, remaining_sec=280) == "early"
     assert dry_run.phase_for_window(age_sec=60, remaining_sec=240) == "early"
     assert dry_run.phase_for_window(age_sec=180, remaining_sec=120) == "core"
     assert dry_run.phase_for_window(age_sec=250, remaining_sec=50) == "late"
