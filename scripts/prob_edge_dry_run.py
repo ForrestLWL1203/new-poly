@@ -41,6 +41,7 @@ SKIP_REASONS = {
     "closed_market",
     "bad_resolution_source",
     "missing_chainlink_price",
+    "missing_effective_price",
     "paper_proxy_only",
     "missing_k",
     "missing_k_timeout",
@@ -101,8 +102,6 @@ class KRetryState:
         if eligible:
             self.attempted_slots.add(max(eligible))
         self.last_attempt_age = age_sec
-        if K_RETRY_TIMEOUT_SEC in self.attempted_slots:
-            self.timed_out = True
 
 
 class WindowLimitTracker:
@@ -411,7 +410,7 @@ def choose_skip_reason(
     if price_state.source == "proxy_binance_basis_adjusted":
         return "paper_proxy_only"
     if price_state.source != "chainlink":
-        return "missing_chainlink_price"
+        return "missing_effective_price"
     if up_book.received_at is None or down_book.received_at is None:
         return "missing_book"
     ages = [age for age in (up_book.age_ms(now_mono), down_book.age_ms(now_mono)) if age is not None]
@@ -659,7 +658,7 @@ async def fetch_window_prices(market: dict[str, Any]) -> WindowPriceState:
 def should_retry_k_price(retry_state: KRetryState, age_sec: float) -> bool:
     if retry_state.timed_out:
         return False
-    if age_sec > K_RETRY_TIMEOUT_SEC:
+    if age_sec > K_RETRY_TIMEOUT_SEC and K_RETRY_TIMEOUT_SEC in retry_state.attempted_slots:
         retry_state.timed_out = True
         return False
     return any(slot <= age_sec and slot not in retry_state.attempted_slots for slot in K_RETRY_AGES_SEC)
@@ -875,6 +874,14 @@ def basis_adjusted_price_state(
             s_price=adjusted,
             k_price=k_price,
             basis_bps=(basis / k_price) * 10_000.0,
+            binance_price=shared.binance_price,
+            binance_updated_at=shared.binance_updated_at,
+        )
+    if shared.binance_price is not None:
+        return PriceState(
+            source="proxy_binance",
+            s_price=shared.binance_price,
+            k_price=k_price,
             binance_price=shared.binance_price,
             binance_updated_at=shared.binance_updated_at,
         )

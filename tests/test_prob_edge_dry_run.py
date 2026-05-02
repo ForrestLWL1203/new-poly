@@ -157,6 +157,25 @@ def test_basis_adjusted_price_state_uses_polymarket_k_and_binance_basis() -> Non
     assert state.basis_bps == 5.0
 
 
+def test_price_state_falls_back_to_live_binance_when_open_basis_missing() -> None:
+    shared = dry_run.PriceState(
+        source="proxy_binance",
+        binance_price=100_120.0,
+        binance_updated_at=123.0,
+    )
+
+    state = dry_run.basis_adjusted_price_state(
+        shared,
+        k_price=100_000.0,
+        binance_open_price=None,
+    )
+
+    assert state.source == "proxy_binance"
+    assert state.k_price == 100_000.0
+    assert state.s_price == 100_120.0
+    assert state.basis_bps is None
+
+
 def test_window_tracker_stops_after_n_distinct_windows() -> None:
     tracker = dry_run.WindowLimitTracker(limit=2)
 
@@ -230,6 +249,7 @@ def test_k_retry_schedule_starts_at_25s_then_every_5s_until_40s() -> None:
     state.record_attempt(35.0)
     assert dry_run.should_retry_k_price(state, age_sec=40.0) is True
     state.record_attempt(40.0)
+    assert state.timed_out is False
     assert dry_run.should_retry_k_price(state, age_sec=45.0) is False
     assert state.timed_out is True
 
