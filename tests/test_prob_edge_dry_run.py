@@ -167,6 +167,16 @@ def test_window_tracker_stops_after_n_distinct_windows() -> None:
     assert tracker.observe("btc-updown-5m-3") is True
 
 
+def test_window_tracker_does_not_count_skipped_windows() -> None:
+    tracker = dry_run.WindowLimitTracker(limit=2)
+
+    assert tracker.observe("btc-updown-5m-late", count=False) is False
+    assert tracker.observe("btc-updown-5m-1") is False
+    assert tracker.observe("btc-updown-5m-2") is False
+    assert tracker.observe("btc-updown-5m-3") is True
+    assert tracker.seen == ["btc-updown-5m-1", "btc-updown-5m-2", "btc-updown-5m-3"]
+
+
 def test_window_tracker_without_limit_never_stops() -> None:
     tracker = dry_run.WindowLimitTracker(limit=None)
 

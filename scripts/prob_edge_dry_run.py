@@ -110,8 +110,10 @@ class WindowLimitTracker:
         self.limit = limit
         self.seen: list[str] = []
 
-    def observe(self, slug: str) -> bool:
+    def observe(self, slug: str, count: bool = True) -> bool:
         if self.limit is None:
+            return False
+        if not count:
             return False
         if slug not in self.seen:
             self.seen.append(slug)
@@ -983,8 +985,6 @@ async def run(args: argparse.Namespace) -> int:
         first = True
         deadline = time.monotonic() + max(0.0, args.warmup_timeout_sec)
         while True:
-            if window_tracker.observe(str(market["slug"])):
-                return 0
             if first:
                 while time.monotonic() < deadline:
                     if shared_price.binance_price is not None and all(book.received_at is not None for book in books.values()):
@@ -1002,6 +1002,8 @@ async def run(args: argparse.Namespace) -> int:
             market["k_source"] = window_prices.k_source
             market["close_price"] = window_prices.close_price
             market["k_timed_out"] = k_retry_state.timed_out
+            if window_tracker.observe(str(market["slug"]), count=window_prices.k_price is not None):
+                return 0
             price_state = build_effective_price_state(args, shared_price, window_prices)
             edge_components = {"base": args.base_edge}
             row = build_log_row(
