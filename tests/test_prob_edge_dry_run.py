@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "prob_edge_dry_run.py"
+spec = importlib.util.spec_from_file_location("prob_edge_dry_run", SCRIPT)
+dry_run = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(dry_run)
+
+
+def test_parse_tokens_accepts_json_string_and_list() -> None:
+    assert dry_run.parse_tokens('["up","down"]') == ["up", "down"]
+    assert dry_run.parse_tokens(["up", "down"]) == ["up", "down"]
+
+
+def test_black_scholes_probabilities_are_complementary() -> None:
+    up, down = dry_run.binary_probs(s_price=100_100, k_price=100_000, sigma_eff=0.6, remaining_sec=120)
+
+    assert 0 < up < 1
+    assert 0 < down < 1
+    assert up > down
+    assert abs((up + down) - 1.0) < 1e-12
+
+
+def test_avg_price_for_notional_stops_when_target_is_filled() -> None:
+    levels = [(0.40, 10.0), (0.42, 20.0), (0.60, 1000.0)]
+
+    result = dry_run.avg_price_for_notional(levels, target_notional=8.0)
+
+    assert result["ok"] is True
+    assert result["avg"] == 0.409756
+    assert result["shares"] == 19.52381
+    assert result["notional"] == 8.0
+
+
+def test_avg_price_for_notional_reports_insufficient_depth() -> None:
+    result = dry_run.avg_price_for_notional([(0.50, 2.0)], target_notional=5.0)
+
+    assert result["ok"] is False
+    assert result["avg"] == 0.5
+    assert result["shares"] == 2.0
+    assert result["notional"] == 1.0
+
+
+def test_phase_for_window() -> None:
+    assert dry_run.phase_for_window(age_sec=-1, remaining_sec=301) == "warmup"
+    assert dry_run.phase_for_window(age_sec=10, remaining_sec=290) == "warmup"
+    assert dry_run.phase_for_window(age_sec=60, remaining_sec=240) == "early"
+    assert dry_run.phase_for_window(age_sec=180, remaining_sec=120) == "core"
+    assert dry_run.phase_for_window(age_sec=250, remaining_sec=50) == "late"
+    assert dry_run.phase_for_window(age_sec=275, remaining_sec=25) == "no_entry"
+    assert dry_run.phase_for_window(age_sec=301, remaining_sec=-1) == "closed"
+
+
+def test_chainlink_resolution_validator() -> None:
+    assert dry_run.is_chainlink_btc_resolution("https://data.chain.link/streams/btc-usd")
+    assert dry_run.is_chainlink_btc_resolution(
+        "The resolution source is Chainlink BTC/USD data stream."
+    )
+    assert not dry_run.is_chainlink_btc_resolution("https://example.com/btc")
+
+
+def test_compact_row_contains_stable_schema_and_no_secrets() -> None:
+    row = dry_run.build_log_row(
+        market={
+            "slug": "btc-updown-5m-1",
+            "start": dry_run.dt.datetime(2026, 5, 3, 0, 0, tzinfo=dry_run.dt.timezone.utc),
+            "end": dry_run.dt.datetime(2026, 5, 3, 0, 5, tzinfo=dry_run.dt.timezone.utc),
+            "resolution_source": "https://data.chain.link/streams/btc-usd",
+        },
+        now=dry_run.dt.datetime(2026, 5, 3, 0, 1, tzinfo=dry_run.dt.timezone.utc),
+        order_notional=5.0,
+        sigma_source="manual",
+        sigma_eff=0.6,
+        price_state=dry_run.PriceState(source="missing"),
+        up_state=dry_run.TokenBookState(token_id="up"),
+        down_state=dry_run.TokenBookState(token_id="down"),
+        required_edge=0.07,
+        edge_components={"base": 0.07, "fee": 0.0},
+    )
+
+    expected = {
+        "ts",
+        "market_slug",
+        "window_start",
+        "window_end",
+        "age_sec",
+        "remaining_sec",
+        "phase",
+        "resolution_source",
+        "settlement_aligned",
+        "live_ready",
+        "sigma_source",
+        "sigma_eff",
+        "price_source",
+        "s_price",
+        "k_price",
+        "basis_bps",
+        "up_prob",
+        "down_prob",
+        "required_edge",
+        "edge_components",
+        "order_notional",
+        "up",
+        "down",
+        "yes_no_sum",
+        "decision",
+        "candidate_side",
+        "skip_reason",
+    }
+    assert expected <= row.keys()
+    assert row["settlement_aligned"] is False
+    assert row["live_ready"] is False
+    assert row["skip_reason"] in {"missing_chainlink_price", "paper_proxy_only"}
+    assert "private" not in str(row).lower()
+
+
+def test_extract_crypto_prices_from_hydration_html() -> None:
+    html = """
+    <script>
+    {"dehydratedAt":1,"state":{"data":{"openPrice":78417.388005,"closePrice":78461.2}},
+    "queryKey":["crypto-prices","price","BTC","2026-05-02T17:45:00Z","fiveminute","2026-05-02T17:50:00Z"]}
+    </script>
+    """
+
+    result = dry_run.extract_crypto_prices_from_html(
+        html,
+        start_iso="2026-05-02T17:45:00Z",
+        end_iso="2026-05-02T17:50:00Z",
+    )
+
+    assert result == {"openPrice": 78417.388005, "closePrice": 78461.2}
+
+
+def test_basis_adjusted_price_state_uses_polymarket_k_and_binance_basis() -> None:
+    shared = dry_run.PriceState(
+        source="proxy_binance",
+        binance_price=100_120.0,
+        binance_updated_at=123.0,
+    )
+
+    state = dry_run.basis_adjusted_price_state(
+        shared,
+        k_price=100_000.0,
+        binance_open_price=100_050.0,
+    )
+
+    assert state.source == "proxy_binance_basis_adjusted"
+    assert state.k_price == 100_000.0
+    assert state.s_price == 100_070.0
+    assert state.basis_bps == 5.0

@@ -1,0 +1,437 @@
+# AGENTS.md - New Polymarket Arbitrage Bot
+
+## Project Intent
+
+This is a fresh project for a new Polymarket trading/arbitrage bot.
+
+The old project at `/Users/forrestliao/workspace/poly-bot` is only a reference
+for infrastructure knowledge:
+
+- Binance BTC WebSocket data feed usage.
+- Polymarket Gamma API market/token discovery.
+- Polymarket CLOB API authentication, balances, tick sizes, and order posting.
+- Polymarket CLOB WebSocket market channel and order-book cache handling.
+- General retry/reconnect hygiene for production data feeds.
+
+Do not copy or reintroduce old strategy logic from `paired_window`, `crowd_m1`,
+or any historical BTC 5-minute strategy. Strategy design in this repo starts
+from zero.
+
+## Clean-Room Strategy Rule
+
+Allowed to reuse:
+
+- API endpoints and protocol details.
+- Authentication flow and SDK usage patterns.
+- WebSocket subscription formats.
+- Order-book event parsing and local book-cache mechanics.
+- Safe operational notes such as fresh-book checks, reconnect backoff, tick-size
+  rounding, and balance lookup before selling.
+
+Do not reuse unless explicitly requested:
+
+- Old entry/exit windows.
+- Old thresholds, caps, signal formulas, persistence rules, or stop-loss rules.
+- Old backtest results, parameter grids, candidate names, or PnL claims.
+- Old VPS run presets or strategy-specific commands.
+
+## Infrastructure Facts
+
+### AWS VPS Access
+
+Current AWS/Lightsail VPS:
+
+- Public IP: `176.34.134.21`
+- SSH user: `ubuntu`
+- Local PEM path:
+  `/Users/forrestliao/workspace/new-poly/docs/LightsailDefaultKey-eu-west-1.pem`
+- Required PEM permissions: `600` or stricter.
+- Verified SSH command:
+
+```bash
+ssh -i /Users/forrestliao/workspace/new-poly/docs/LightsailDefaultKey-eu-west-1.pem \
+  ubuntu@176.34.134.21
+```
+
+Observed network behavior:
+
+- Some VPN/proxy exit IPs can reach TCP 22 but are closed before or during SSH
+  handshake.
+- Verified working exits during setup included a Germany route and a Hong Kong
+  route.
+- A Poland route and one Tokyo route were observed failing with
+  `Connection closed by 176.34.134.21 port 22`.
+- If SSH starts failing, first check current egress IP and route before changing
+  VPS settings.
+
+### AWS Runtime Layout
+
+VPS base OS and runtime:
+
+- Ubuntu `22.04.5 LTS`
+- Python `3.10.12`
+- Project root: `/opt/new-poly`
+- Virtualenv: `/opt/new-poly/venv`
+- App scripts: `/opt/new-poly/app`
+- Shared secrets/config: `/opt/new-poly/shared`
+- Logs: `/opt/new-poly/logs`
+- Data: `/opt/new-poly/data`
+- Swap: `/swapfile`, 2 GB, enabled and persisted in `/etc/fstab`
+
+Use the venv explicitly:
+
+```bash
+/opt/new-poly/venv/bin/python
+/opt/new-poly/venv/bin/pip
+```
+
+Installed system packages include Python venv/pip/dev headers, build tools,
+`git`, `curl`, `jq`, `libffi-dev`, and `libssl-dev`.
+
+Installed Python packages include:
+
+```text
+py-clob-client-v2==1.0.0
+python-dotenv
+eth-account
+eth-utils
+requests
+httpx
+websockets
+pyyaml
+pytest
+pytest-asyncio
+```
+
+### Polymarket Account Config
+
+Sensitive account config is present on the VPS at:
+
+```text
+/opt/new-poly/shared/polymarket_config.json
+```
+
+Permissions are `600`; do not print, commit, or copy its contents into docs.
+The file was copied from local Polymarket CLI config and contains fields such as
+`private_key`, `proxy_address`, `chain_id`, and `signature_type`.
+
+Local source paths used during setup:
+
+```text
+/Users/forrestliao/.config/polymarket/config.json
+/Users/forrestliao/.polybot/accounts/newuser_poly.json
+```
+
+Treat both as secret material.
+
+### Lightweight CLOB Probe
+
+Safe CLOB smoke-test script:
+
+```text
+local: /Users/forrestliao/workspace/new-poly/scripts/probe_clob_light.py
+VPS:   /opt/new-poly/app/probe_clob_light.py
+```
+
+Default mode does not submit an order. It:
+
+- discovers the current BTC 5-minute UP/DOWN market using Gamma,
+- initializes CLOB auth,
+- reads midpoint, tick size, neg-risk, and balance for both tokens,
+- creates a signed local FAK order,
+- exits without calling `POST /order`.
+
+Safe command:
+
+```bash
+ssh -i /Users/forrestliao/workspace/new-poly/docs/LightsailDefaultKey-eu-west-1.pem \
+  ubuntu@176.34.134.21 \
+  '/opt/new-poly/venv/bin/python /opt/new-poly/app/probe_clob_light.py --side down --order-side buy --price 0.01 --size 1'
+```
+
+The script also has `--post-intentional-fail`, which really calls
+`POST /order` with an intentionally non-marketable FAK limit order. Use that
+flag only when the user explicitly asks for an order-posting probe.
+
+### Probability Edge Dry-Run Logger
+
+Current strategy-observation script:
+
+```text
+local: /Users/forrestliao/workspace/new-poly/scripts/prob_edge_dry_run.py
+VPS:   /opt/new-poly/app/prob_edge_dry_run.py
+```
+
+This script is dry-run only. It does not authenticate to CLOB, does not read
+private keys or API credentials, and does not submit orders.
+
+It emits compact JSONL, one row per evaluation tick, with enough fields for
+later strategy analysis:
+
+- market slug, start/end time, phase, remaining seconds,
+- Polymarket resolution source,
+- Polymarket HTML-derived `k_price` / Price to Beat,
+- Binance basis-adjusted proxy `s_price`,
+- `basis_bps`,
+- UP/DOWN model probabilities when `sigma_eff` is supplied,
+- compact UP/DOWN book summaries,
+- size-aware edge fields,
+- YES+NO sum monitoring,
+- `decision`, `candidate_side`, and stable `skip_reason`.
+
+Safe local command:
+
+```bash
+python3 /Users/forrestliao/workspace/new-poly/scripts/prob_edge_dry_run.py \
+  --interval-sec 1 \
+  --jsonl /Users/forrestliao/workspace/new-poly/data/prob-edge-dry-run.jsonl \
+  --sigma-eff 0.6 \
+  --sigma-source manual
+```
+
+Safe VPS command after copying the script:
+
+```bash
+/opt/new-poly/venv/bin/python /opt/new-poly/app/prob_edge_dry_run.py \
+  --interval-sec 1 \
+  --jsonl /opt/new-poly/data/prob-edge-dry-run.jsonl \
+  --sigma-eff 0.6 \
+  --sigma-source manual
+```
+
+Copy to VPS:
+
+```bash
+scp -i /Users/forrestliao/workspace/new-poly/docs/LightsailDefaultKey-eu-west-1.pem \
+  /Users/forrestliao/workspace/new-poly/scripts/prob_edge_dry_run.py \
+  ubuntu@176.34.134.21:/opt/new-poly/app/prob_edge_dry_run.py
+```
+
+Current status:
+
+- `k_price` is extracted from Polymarket event-page HTML hydration data:
+  `["crypto-prices", "price", "BTC", <start>, "fiveminute", <end>]`.
+- `k_source` is `polymarket_html_crypto_prices`.
+- `S` is currently a Binance proxy adjusted by the window-start basis:
+  `s_price = latest_binance_price - (binance_open_at_start - k_price)`.
+- `price_source` is `proxy_binance_basis_adjusted`.
+- `settlement_aligned` and `live_ready` intentionally remain `false`, because
+  this is not direct Chainlink Data Streams realtime access.
+- The script should be used for data collection and paper analysis, not live
+  order decisions.
+
+### Dependencies
+
+Known useful Python dependencies from the previous implementation:
+
+```text
+py-clob-client-v2==1.0.0
+python-dotenv>=1.0.0
+eth-account>=0.13.0
+eth-utils>=4.1.1
+requests>=2.31.0
+httpx>=0.27
+websockets>=12.0
+pyyaml>=6.0
+pytest>=8.0
+pytest-asyncio>=0.23
+```
+
+### Binance BTC Trade Feed
+
+- WebSocket URL template: `wss://stream.binance.com:9443/ws/{symbol}@trade`
+- For BTC/USDT trades, use symbol `btcusdt`.
+- Trade payload price field is `p`.
+- The old feed stored `(local_time, price)` in a rolling deque and pruned by
+  age.
+- Useful methods for a strategy-neutral price feed:
+  - latest price
+  - first price at or after a timestamp
+  - price at or before a timestamp
+- REST fallback for a missing open price used:
+  - `GET https://api.binance.com/api/v3/klines`
+  - params: `symbol=BTCUSDT`, `interval=1m`, `startTime=<epoch_ms>`, `limit=1`
+  - open price is response item `[0][1]`
+
+### Polymarket API Systems
+
+| API | Base URL | Purpose |
+|---|---|---|
+| CLOB | `https://clob.polymarket.com` | Trading, order book, balances, tick sizes |
+| Gamma | `https://gamma-api.polymarket.com` | Market/event metadata and slug discovery |
+| Data | `https://data-api.polymarket.com` | Positions, activity, history |
+
+### CLOB Authentication
+
+- Runtime SDK: `py-clob-client-v2==1.0.0`.
+- Chain ID: `137` for Polygon mainnet.
+- Signature types:
+  - `0` = EOA
+  - `1` = proxy/Magic wallet
+  - `2` = Gnosis Safe
+- The old project used signature type `1` for Polymarket proxy wallets.
+- A `ClobClient` needs host, private key, chain ID, signature type, and funder.
+- For proxy wallets, funder should be the proxy contract address when known.
+- API credentials are required for L2 trading auth. The old flow first tried
+  `derive_api_key()` and used `create_api_key()` only if derive returned none,
+  then called `client.set_api_creds(creds)`.
+- Existing CLI config may live at `~/.config/polymarket/config.json`.
+
+### Environment Variables
+
+Useful names:
+
+```text
+PK=0x...
+FUNDER=0x...
+CLOB_API_KEY=
+CLOB_SECRET=
+CLOB_PASS_PHRASE=
+CLOB_API_URL=https://clob.polymarket.com
+CHAIN_ID=137
+HTTPS_PROXY=
+```
+
+Do not commit real private keys, account configs, or API credentials.
+
+### Gamma Market Discovery
+
+- BTC 5-minute market slugs use epoch starts, e.g. `btc-updown-5m-<epoch>`.
+- The slug step is 300 seconds.
+- Query exact market by slug with:
+  - `GET https://gamma-api.polymarket.com/markets?slug=<slug>`
+- Useful fields from Gamma market response:
+  - `slug`
+  - `question`
+  - `active`
+  - `closed`
+  - `endDate`
+  - `eventStartTime`
+  - `clobTokenIds`
+- `clobTokenIds` may be a JSON string or a list.
+- For UP/DOWN markets observed in the old project:
+  - token index 0 = Up/Yes
+  - token index 1 = Down/No
+
+### BTC 5m Price-To-Beat / K Source
+
+For current BTC 5-minute UP/DOWN markets, Gamma and Polymarket pages show:
+
+```text
+resolutionSource = https://data.chain.link/streams/btc-usd
+```
+
+The market resolves Up if the BTC/USD price at the end of the five-minute
+window is greater than or equal to the price at the beginning of that window.
+
+Gamma market metadata does not directly expose `k_price`. The Polymarket event
+page UI shows the target price / Price to Beat, and the same value is present in
+the page HTML hydration data as `openPrice` under a query shaped like:
+
+```json
+["crypto-prices", "price", "BTC", "<eventStartTime>", "fiveminute", "<endDate>"]
+```
+
+Use that `openPrice` as the dry-run `K` value. Do not extract `K` from
+`question` or `description`; current BTC 5m descriptions describe the rule but
+do not include the numeric target price.
+
+The Chainlink website may show delayed informational prices. Do not compare the
+current Chainlink webpage display directly with Polymarket Price to Beat and
+assume they are the same timestamp.
+
+### Polymarket CLOB WebSocket Market Feed
+
+- URL: `wss://ws-subscriptions-clob.polymarket.com/ws/market`
+- Subscribe:
+
+```json
+{
+  "type": "market",
+  "assets_ids": ["<token_id_1>", "<token_id_2>"],
+  "operation": "subscribe",
+  "custom_feature_enabled": true
+}
+```
+
+- Unsubscribe:
+
+```json
+{
+  "assets_ids": ["<token_id_1>", "<token_id_2>"],
+  "operation": "unsubscribe"
+}
+```
+
+- Heartbeat: send `{}` about every 10 seconds.
+- Events can arrive as a single object or a list of objects.
+- Important `event_type` values:
+  - `book`: full L2 book snapshot. Use it to seed local bids/asks.
+  - `price_change`: incremental book update. Often contains `price_changes`.
+  - `best_bid_ask`: current top of book.
+  - `last_trade_price`: latest execution price.
+  - `tick_size_change`: tick-size update notification.
+
+### Local Order-Book Cache
+
+Recommended strategy-neutral cache shape:
+
+```python
+books[token_id] = {
+    "bids": [(price, size), ...],  # sorted high to low
+    "asks": [(price, size), ...],  # sorted low to high
+    "received_at": monotonic_time,
+}
+```
+
+Book parsing notes:
+
+- Convert `price` and `size` to floats.
+- Drop levels with non-positive size.
+- Sort bids descending and asks ascending.
+- On `book`, replace the full local book for that token.
+- On `price_change`, update or delete the affected level:
+  - old implementation treated `side == "BUY"` as bid-side update
+  - old implementation treated `side == "SELL"` as ask-side update
+  - if new size is zero, remove the level
+  - otherwise insert/update and re-sort
+- Track freshness with local monotonic timestamps.
+- Any execution logic that uses book depth should reject stale or missing books.
+
+### CLOB REST/SDK Trading Notes
+
+- `MarketOrderArgs(..., order_type=OrderType.FAK)` with
+  `client.post_order(signed, OrderType.FAK)` was used for taking liquidity.
+- `price=<nonzero hint>` in `MarketOrderArgs` skips the SDK's internal
+  `GET /book` call, so a fresh WS-derived hint can reduce latency.
+- FAK means fill available liquidity immediately and cancel the remainder.
+- Partial fills are possible and should be handled.
+- BUY and SELL amount semantics differ in `py-clob-client-v2`:
+  - BUY `amount` = dollars to spend, not shares.
+  - SELL `amount` = shares to sell.
+- `POST /order` may return only status/order identifiers and may omit fill
+  details. When fill details are missing, use follow-up order/trade/balance
+  queries for accounting.
+- Useful CLOB methods/endpoints:
+  - `get_midpoint(token_id)`
+  - `get_tick_size(token_id)`
+  - `get_neg_risk(token_id)`
+  - `get_balance_allowance(asset_type=CONDITIONAL, token_id=...)`
+  - `GET /order/{orderID}`
+  - `GET /trades`
+- Balance response uses 6-decimal integer units. Convert shares with:
+  `float(balance) / 1_000_000`.
+- There is no generic "sell all" order. Query actual token balance, then sell a
+  concrete share amount.
+- Tick size can vary. Fetch `get_tick_size(token_id)` and round/clamp prices to
+  valid ticks in `[0, 1]`.
+
+### Operational Hygiene
+
+- Use one persistent market WebSocket connection where possible; switch token
+  subscriptions between markets instead of reconnecting unnecessarily.
+- Clear cached prices/books when switching token sets.
+- Use reconnect backoff for WebSocket failures.
+- Record local receive times for every external data event.
+- Keep raw API credentials and private keys out of logs.
+- Log enough non-secret order diagnostics to debug latency and response shape.
