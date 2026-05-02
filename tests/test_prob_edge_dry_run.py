@@ -203,10 +203,18 @@ def test_window_tracker_without_limit_never_stops() -> None:
     assert tracker.observe("btc-updown-5m-2") is False
 
 
-def test_candidate_epochs_start_from_current_window() -> None:
+def test_candidate_epochs_start_from_next_window_by_default() -> None:
     now = dry_run.dt.datetime.fromtimestamp(1777749001, dry_run.dt.timezone.utc)
 
     epochs = dry_run.candidate_btc_5m_epochs(now, max_windows=3)
+
+    assert epochs == [1777749300, 1777749600, 1777749900]
+
+
+def test_candidate_epochs_can_include_current_window_for_diagnostics() -> None:
+    now = dry_run.dt.datetime.fromtimestamp(1777749001, dry_run.dt.timezone.utc)
+
+    epochs = dry_run.candidate_btc_5m_epochs(now, max_windows=3, include_current=True)
 
     assert epochs == [1777749000, 1777749300, 1777749600]
 
@@ -217,7 +225,7 @@ def test_candidate_epochs_can_require_newer_than_old_start() -> None:
 
     epochs = dry_run.candidate_btc_5m_epochs(now, max_windows=3, min_start=old_start)
 
-    assert epochs == [1777749300, 1777749600]
+    assert epochs == [1777749300, 1777749600, 1777749900]
 
 
 def test_sanitize_next_market_rejects_same_or_older_window() -> None:

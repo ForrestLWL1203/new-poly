@@ -705,9 +705,11 @@ def candidate_btc_5m_epochs(
     *,
     max_windows: int = 8,
     min_start: dt.datetime | None = None,
+    include_current: bool = False,
 ) -> list[int]:
     base = int(now.timestamp()) // BTC_5M_STEP * BTC_5M_STEP
-    epochs = [base + offset * BTC_5M_STEP for offset in range(max_windows)]
+    first = base if include_current else base + BTC_5M_STEP
+    epochs = [first + offset * BTC_5M_STEP for offset in range(max_windows)]
     if min_start is not None:
         min_epoch = int(min_start.timestamp())
         epochs = [epoch for epoch in epochs if epoch > min_epoch]
