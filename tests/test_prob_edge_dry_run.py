@@ -49,8 +49,8 @@ def test_avg_price_for_notional_reports_insufficient_depth() -> None:
 def test_phase_for_window() -> None:
     assert dry_run.phase_for_window(age_sec=-1, remaining_sec=301) == "warmup"
     assert dry_run.phase_for_window(age_sec=10, remaining_sec=290) == "warmup"
-    assert dry_run.phase_for_window(age_sec=19, remaining_sec=281) == "warmup"
-    assert dry_run.phase_for_window(age_sec=20, remaining_sec=280) == "early"
+    assert dry_run.phase_for_window(age_sec=24, remaining_sec=276) == "warmup"
+    assert dry_run.phase_for_window(age_sec=25, remaining_sec=275) == "early"
     assert dry_run.phase_for_window(age_sec=60, remaining_sec=240) == "early"
     assert dry_run.phase_for_window(age_sec=180, remaining_sec=120) == "core"
     assert dry_run.phase_for_window(age_sec=250, remaining_sec=50) == "late"
@@ -174,12 +174,43 @@ def test_window_tracker_without_limit_never_stops() -> None:
     assert tracker.observe("btc-updown-5m-2") is False
 
 
-def test_k_retry_schedule_starts_at_20s_then_every_5s_until_35s() -> None:
+def test_candidate_epochs_start_from_current_window() -> None:
+    now = dry_run.dt.datetime.fromtimestamp(1777749001, dry_run.dt.timezone.utc)
+
+    epochs = dry_run.candidate_btc_5m_epochs(now, max_windows=3)
+
+    assert epochs == [1777749000, 1777749300, 1777749600]
+
+
+def test_candidate_epochs_can_require_newer_than_old_start() -> None:
+    now = dry_run.dt.datetime.fromtimestamp(1777749001, dry_run.dt.timezone.utc)
+    old_start = dry_run.dt.datetime.fromtimestamp(1777749000, dry_run.dt.timezone.utc)
+
+    epochs = dry_run.candidate_btc_5m_epochs(now, max_windows=3, min_start=old_start)
+
+    assert epochs == [1777749300, 1777749600]
+
+
+def test_sanitize_next_market_rejects_same_or_older_window() -> None:
+    current = {"slug": "btc-updown-5m-1000", "start": dry_run.dt.datetime.fromtimestamp(1000, dry_run.dt.timezone.utc)}
+    same = {"slug": "btc-updown-5m-1000", "start": dry_run.dt.datetime.fromtimestamp(1000, dry_run.dt.timezone.utc)}
+    older = {"slug": "btc-updown-5m-700", "start": dry_run.dt.datetime.fromtimestamp(700, dry_run.dt.timezone.utc)}
+    newer = {"slug": "btc-updown-5m-1300", "start": dry_run.dt.datetime.fromtimestamp(1300, dry_run.dt.timezone.utc)}
+
+    assert dry_run.sanitize_next_market(current, same) is None
+    assert dry_run.sanitize_next_market(current, older) is None
+    assert dry_run.sanitize_next_market(current, newer) is newer
+
+
+def test_should_prefetch_next_market_once_near_window_end() -> None:
+    assert dry_run.should_prefetch_next_market(remaining_sec=31.0, has_task=False) is False
+    assert dry_run.should_prefetch_next_market(remaining_sec=30.0, has_task=False) is True
+    assert dry_run.should_prefetch_next_market(remaining_sec=10.0, has_task=True) is False
+
+
+def test_k_retry_schedule_starts_at_25s_then_every_5s_until_40s() -> None:
     state = dry_run.KRetryState()
 
-    assert dry_run.should_retry_k_price(state, age_sec=19.9) is False
-    assert dry_run.should_retry_k_price(state, age_sec=20.0) is True
-    state.record_attempt(20.0)
     assert dry_run.should_retry_k_price(state, age_sec=24.9) is False
     assert dry_run.should_retry_k_price(state, age_sec=25.0) is True
     state.record_attempt(25.0)
@@ -187,7 +218,9 @@ def test_k_retry_schedule_starts_at_20s_then_every_5s_until_35s() -> None:
     state.record_attempt(30.0)
     assert dry_run.should_retry_k_price(state, age_sec=35.0) is True
     state.record_attempt(35.0)
-    assert dry_run.should_retry_k_price(state, age_sec=40.0) is False
+    assert dry_run.should_retry_k_price(state, age_sec=40.0) is True
+    state.record_attempt(40.0)
+    assert dry_run.should_retry_k_price(state, age_sec=45.0) is False
     assert state.timed_out is True
 
 
@@ -213,11 +246,11 @@ def test_missing_window_k_retries_and_preserves_binance_open(monkeypatch) -> Non
             market,
             state,
             retry_state=dry_run.KRetryState(),
-            age_sec=20.0,
+            age_sec=25.0,
         )
     )
 
     assert updated.k_price == 100_000.0
     assert updated.k_source == "polymarket_html_crypto_prices"
     assert updated.binance_open_price == 100_050.0
-    assert last_attempt.last_attempt_age == 20.0
+    assert last_attempt.last_attempt_age == 25.0

@@ -27,12 +27,13 @@ BINANCE_BTC_TRADE_WS = "wss://stream.binance.com:9443/ws/btcusdt@trade"
 BTC_5M_PREFIX = "btc-updown-5m"
 BTC_5M_STEP = 300
 SECONDS_PER_YEAR = 31_536_000
-K_RETRY_AGES_SEC = (20.0, 25.0, 30.0, 35.0)
-K_RETRY_TIMEOUT_SEC = 35.0
+K_RETRY_AGES_SEC = (25.0, 30.0, 35.0, 40.0)
+K_RETRY_TIMEOUT_SEC = 40.0
 POLYMARKET_EVENT_PREFIXES = (
     "https://polymarket.com/zh/event/",
     "https://polymarket.com/event/",
 )
+NEXT_MARKET_PREFETCH_SEC = 30.0
 
 SKIP_REASONS = {
     "warmup",
@@ -296,7 +297,7 @@ def binary_probs(
 def phase_for_window(age_sec: float, remaining_sec: float) -> str:
     if remaining_sec <= 0:
         return "closed"
-    if age_sec < 20:
+    if age_sec < 25:
         return "warmup"
     if age_sec < 120:
         return "early"
@@ -698,11 +699,23 @@ def fetch_binance_open_price(start: dt.datetime) -> float | None:
         return None
 
 
-async def discover_btc_5m(max_windows: int = 8) -> dict[str, Any]:
-    now = dt.datetime.now(dt.timezone.utc)
+def candidate_btc_5m_epochs(
+    now: dt.datetime,
+    *,
+    max_windows: int = 8,
+    min_start: dt.datetime | None = None,
+) -> list[int]:
     base = int(now.timestamp()) // BTC_5M_STEP * BTC_5M_STEP
-    for offset in range(-1, max_windows):
-        epoch = base + offset * BTC_5M_STEP
+    epochs = [base + offset * BTC_5M_STEP for offset in range(max_windows)]
+    if min_start is not None:
+        min_epoch = int(min_start.timestamp())
+        epochs = [epoch for epoch in epochs if epoch > min_epoch]
+    return epochs
+
+
+async def discover_btc_5m(max_windows: int = 8, min_start: dt.datetime | None = None) -> dict[str, Any]:
+    now = dt.datetime.now(dt.timezone.utc)
+    for epoch in candidate_btc_5m_epochs(now, max_windows=max_windows, min_start=min_start):
         slug = f"{BTC_5M_PREFIX}-{epoch}"
         rows = await asyncio.to_thread(fetch_gamma_markets, slug)
         if not isinstance(rows, list):
@@ -726,6 +739,22 @@ async def discover_btc_5m(max_windows: int = 8) -> dict[str, Any]:
                     "down_token": tokens[1],
                 }
     raise RuntimeError("no live/future BTC 5m market found")
+
+
+def sanitize_next_market(current: dict[str, Any], candidate: dict[str, Any] | None) -> dict[str, Any] | None:
+    if candidate is None:
+        return None
+    current_start = current.get("start")
+    candidate_start = candidate.get("start")
+    if not isinstance(current_start, dt.datetime) or not isinstance(candidate_start, dt.datetime):
+        return None
+    if candidate_start <= current_start:
+        return None
+    return candidate
+
+
+def should_prefetch_next_market(remaining_sec: float, has_task: bool) -> bool:
+    return not has_task and 0.0 < remaining_sec <= NEXT_MARKET_PREFETCH_SEC
 
 
 async def binance_trade_task(price_state: PriceState, stop: asyncio.Event) -> None:
@@ -925,6 +954,7 @@ async def run(args: argparse.Namespace) -> int:
     writer = JsonlWriter(args.jsonl)
     stop = asyncio.Event()
     tasks: list[asyncio.Task[Any]] = []
+    next_market_task: asyncio.Task[dict[str, Any]] | None = None
     try:
         window_tracker = WindowLimitTracker(args.windows)
         market = await discover_btc_5m()
@@ -992,12 +1022,28 @@ async def run(args: argparse.Namespace) -> int:
             if args.verbose:
                 row["tokens"] = {"up": market["up_token"], "down": market["down_token"]}
             writer.write(row)
+            if should_prefetch_next_market(row["remaining_sec"], next_market_task is not None):
+                next_market_task = asyncio.create_task(discover_btc_5m(min_start=market["start"]))
             if args.once:
                 return 0
             await asyncio.sleep(args.interval_sec)
             now_utc = dt.datetime.now(dt.timezone.utc)
             if now_utc >= market["end"]:
-                market = await discover_btc_5m()
+                next_market = None
+                if next_market_task is not None:
+                    try:
+                        next_market = sanitize_next_market(market, await next_market_task)
+                    except Exception:
+                        next_market = None
+                if next_market is None:
+                    next_market = sanitize_next_market(
+                        market,
+                        await discover_btc_5m(min_start=market["start"]),
+                    )
+                if next_market is None:
+                    raise RuntimeError("no advancing BTC 5m market found")
+                market = next_market
+                next_market_task = None
                 window_prices = WindowPriceState()
                 window_prices.binance_open_price = await asyncio.to_thread(fetch_binance_open_price, market["start"])
                 k_retry_state = KRetryState()
@@ -1029,6 +1075,8 @@ async def run(args: argparse.Namespace) -> int:
         writer.write(error_row(str(exc)))
         return 1
     finally:
+        if next_market_task is not None:
+            next_market_task.cancel()
         stop.set()
         for task in tasks:
             task.cancel()
