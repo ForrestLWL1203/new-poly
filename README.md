@@ -15,8 +15,10 @@ Old strategy knowledge has not been copied into this README.
   future agents and strategy clean-room rules.
 - [docs/polymarket_api.md](/Users/forrestliao/workspace/new-poly/docs/polymarket_api.md):
   Polymarket and Binance API notes distilled from the old project.
-- [docs/prob_edge_dry_run.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_dry_run.md):
-  current probability-edge dry-run logger usage and JSONL schema notes.
+- [docs/reusable_infrastructure.md](/Users/forrestliao/workspace/new-poly/docs/reusable_infrastructure.md):
+  reusable strategy-neutral modules migrated from the old project.
+- [docs/prob_edge_data_collector.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_data_collector.md):
+  probability-edge data collector usage and JSONL schema notes.
 
 ## Core Infrastructure Notes
 
@@ -83,22 +85,24 @@ This discovers the current BTC 5m market, authenticates to CLOB, reads token
 metadata/balances, and creates a signed order locally. It does not submit the
 order unless `--post-intentional-fail` is explicitly provided.
 
-### Probability Edge Dry-Run
+### Probability Edge Data Collector
 
-The current strategy-observation script is:
+The current live observation script is:
 
 ```text
-scripts/prob_edge_dry_run.py
+scripts/collect_prob_edge_data.py
 ```
 
-It is dry-run only: no CLOB auth, no private keys, no order posting.
+It is a data collector only: no CLOB auth, no private keys, no order posting,
+and no strategy entry/exit decisions. The old `scripts/prob_edge_dry_run.py`
+entry point is only a compatibility wrapper.
 
 Run locally:
 
 ```bash
-python3 scripts/prob_edge_dry_run.py \
+python3 scripts/collect_prob_edge_data.py \
   --interval-sec 1 \
-  --jsonl data/prob-edge-dry-run.jsonl \
+  --jsonl data/prob-edge-collector.jsonl \
   --sigma-eff 0.6 \
   --sigma-source manual \
   --windows 12
@@ -106,9 +110,28 @@ python3 scripts/prob_edge_dry_run.py \
 
 The script extracts the Polymarket UI Price to Beat from event-page HTML as
 `k_price`, then uses a Binance open-basis-adjusted proxy for current `s_price`.
-It intentionally reports `live_ready=false` until a true settlement-aligned
-realtime price source is available. See
-[docs/prob_edge_dry_run.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_dry_run.md).
+It intentionally keeps `settlement_aligned=false` until a true
+settlement-aligned realtime price source is available. It also fetches Deribit
+BTC DVOL once at startup by default and records it under `volatility`. See
+[docs/prob_edge_data_collector.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_data_collector.md).
+
+### Reusable Modules
+
+Strategy-neutral infrastructure migrated from the old project now lives under
+`new_poly/`:
+
+```text
+new_poly/market/binance.py
+new_poly/market/market.py
+new_poly/market/series.py
+new_poly/market/stream.py
+new_poly/market/deribit.py
+new_poly/trading/fak_quotes.py
+```
+
+Future strategy dry-run, backtest, and live execution scripts should reuse
+these modules instead of reimplementing Binance feeds, Polymarket window
+discovery, CLOB WebSocket parsing, or depth quote selection.
 
 ### Binance BTC Source
 

@@ -153,38 +153,41 @@ The script also has `--post-intentional-fail`, which really calls
 `POST /order` with an intentionally non-marketable FAK limit order. Use that
 flag only when the user explicitly asks for an order-posting probe.
 
-### Probability Edge Dry-Run Logger
+### Probability Edge Data Collector
 
-Current strategy-observation script:
+Current live data collection script:
 
 ```text
-local: /Users/forrestliao/workspace/new-poly/scripts/prob_edge_dry_run.py
-VPS:   /opt/new-poly/app/prob_edge_dry_run.py
+local: /Users/forrestliao/workspace/new-poly/scripts/collect_prob_edge_data.py
+VPS:   /opt/new-poly/app/collect_prob_edge_data.py
 ```
 
-This script is dry-run only. It does not authenticate to CLOB, does not read
-private keys or API credentials, and does not submit orders.
+`scripts/prob_edge_dry_run.py` is only a compatibility wrapper for the collector.
 
-It emits compact JSONL, one row per evaluation tick, with enough fields for
-later strategy analysis:
+The collector does not authenticate to CLOB, does not read private keys or API
+credentials, does not submit orders, and does not evaluate strategy entry/exit
+rules. It emits compact JSONL, one row per data tick, with enough fields for
+later strategy dry-run and backtest code:
 
-- market slug, start/end time, phase, remaining seconds,
+- market slug, start/end time, `window_bucket`, remaining seconds,
 - Polymarket resolution source,
 - Polymarket HTML-derived `k_price` / Price to Beat,
 - Binance basis-adjusted proxy `s_price`,
 - `basis_bps`,
-- UP/DOWN model probabilities when `sigma_eff` is supplied,
 - compact UP/DOWN book summaries,
-- size-aware edge fields,
 - YES+NO sum monitoring,
-- `decision`, `candidate_side`, and stable `skip_reason`.
+- data-quality `warnings`.
+
+Do not add strategy fields such as `decision`, `candidate_side`, `skip_reason`,
+`edge`, `required_edge`, or PnL to the collector. Those belong in future
+strategy dry-run/backtest scripts.
 
 Safe local command:
 
 ```bash
-python3 /Users/forrestliao/workspace/new-poly/scripts/prob_edge_dry_run.py \
+python3 /Users/forrestliao/workspace/new-poly/scripts/collect_prob_edge_data.py \
   --interval-sec 1 \
-  --jsonl /Users/forrestliao/workspace/new-poly/data/prob-edge-dry-run.jsonl \
+  --jsonl /Users/forrestliao/workspace/new-poly/data/prob-edge-collector.jsonl \
   --sigma-eff 0.6 \
   --sigma-source manual \
   --windows 12
@@ -193,23 +196,23 @@ python3 /Users/forrestliao/workspace/new-poly/scripts/prob_edge_dry_run.py \
 Safe VPS command after copying the script:
 
 ```bash
-/opt/new-poly/venv/bin/python /opt/new-poly/app/prob_edge_dry_run.py \
+/opt/new-poly/venv/bin/python /opt/new-poly/app/collect_prob_edge_data.py \
   --interval-sec 1 \
-  --jsonl /opt/new-poly/data/prob-edge-dry-run.jsonl \
+  --jsonl /opt/new-poly/data/prob-edge-collector.jsonl \
   --sigma-eff 0.6 \
   --sigma-source manual \
   --windows 12
 ```
 
-By default the logger runs until interrupted. Use `--windows N` to stop after
-observing `N` distinct five-minute market slugs.
+By default the collector runs until interrupted. Use `--windows N` to stop after
+observing `N` windows that successfully obtained `k_price`.
 
 Copy to VPS:
 
 ```bash
 scp -i /Users/forrestliao/workspace/new-poly/docs/LightsailDefaultKey-eu-west-1.pem \
-  /Users/forrestliao/workspace/new-poly/scripts/prob_edge_dry_run.py \
-  ubuntu@176.34.134.21:/opt/new-poly/app/prob_edge_dry_run.py
+  /Users/forrestliao/workspace/new-poly/scripts/collect_prob_edge_data.py \
+  ubuntu@176.34.134.21:/opt/new-poly/app/collect_prob_edge_data.py
 ```
 
 Current status:
@@ -217,11 +220,33 @@ Current status:
 - `k_price` is extracted from Polymarket event-page HTML hydration data:
   `["crypto-prices", "price", "BTC", <start>, "fiveminute", <end>]`.
 - `k_source` is `polymarket_html_crypto_prices`.
-- `S` is currently a Binance proxy adjusted by the window-start basis:
+- `S` is currently a Binance proxy adjusted by the window-start basis.
+
+### Reusable Infrastructure Modules
+
+Strategy-neutral modules migrated from the old project live under:
+
+```text
+new_poly/market/binance.py
+new_poly/market/market.py
+new_poly/market/series.py
+new_poly/market/stream.py
+new_poly/market/deribit.py
+new_poly/trading/fak_quotes.py
+```
+
+Future strategy scripts should reuse these for Binance feeds, Polymarket window
+discovery, CLOB WebSocket book handling, Deribit DVOL snapshots, and FAK
+quote/depth selection. Do not reuse old `poly-bot` strategy modules or old
+thresholds.
+
+- Basis-adjusted proxy formula:
   `s_price = latest_binance_price - (binance_open_at_start - k_price)`.
 - `price_source` is `proxy_binance_basis_adjusted`.
-- `settlement_aligned` and `live_ready` intentionally remain `false`, because
-  this is not direct Chainlink Data Streams realtime access.
+- Deribit BTC DVOL is collected once at startup by default and written as
+  `volatility`; use `--dvol-refresh-sec N` only when a run should refresh it.
+- `settlement_aligned` intentionally remains `false`, because this is not direct
+  Chainlink Data Streams realtime access.
 - The script should be used for data collection and paper analysis, not live
   order decisions.
 
@@ -337,7 +362,7 @@ the page HTML hydration data as `openPrice` under a query shaped like:
 ["crypto-prices", "price", "BTC", "<eventStartTime>", "fiveminute", "<endDate>"]
 ```
 
-Use that `openPrice` as the dry-run `K` value. Do not extract `K` from
+Use that `openPrice` as the collector `K` value. Do not extract `K` from
 `question` or `description`; current BTC 5m descriptions describe the rule but
 do not include the numeric target price.
 
