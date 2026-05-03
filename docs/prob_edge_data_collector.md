@@ -30,6 +30,10 @@ The collector records:
 - Polymarket CLOB WebSocket top/depth summaries for UP and DOWN tokens.
 - Deribit BTC DVOL snapshot as 30-day implied-volatility reference.
 
+For `k_price`, the collector starts checking shortly after a new window opens
+and retries at approximately 5, 8, 12, 20, 30, and 40 seconds until the
+Polymarket HTML hydration data exposes `openPrice`.
+
 Direct realtime Chainlink Data Streams access is not integrated yet, so:
 
 ```text

@@ -95,7 +95,7 @@ class BinancePriceFeed:
             if data:
                 return float(data[0][1])
         except Exception as e:
-            log.warning("BinancePriceFeed REST klines failed: %s", e)
+            log.debug("BinancePriceFeed REST klines failed: %s", e)
         return None
 
     def _inject(self, ts: float, price: float) -> None:

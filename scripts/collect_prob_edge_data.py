@@ -27,7 +27,7 @@ POLYMARKET_EVENT_PREFIXES = (
     "https://polymarket.com/zh/event/",
     "https://polymarket.com/event/",
 )
-K_RETRY_AGES_SEC = (25.0, 30.0, 35.0, 40.0)
+K_RETRY_AGES_SEC = (5.0, 8.0, 12.0, 20.0, 30.0, 40.0)
 K_RETRY_TIMEOUT_SEC = 40.0
 BTC_OPEN_LOOKAROUND_SEC = 5.0
 
