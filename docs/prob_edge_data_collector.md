@@ -74,6 +74,7 @@ Useful options:
 --collect-dvol / --no-collect-dvol
 --dvol-refresh-sec 0
 --warmup-timeout-sec 8
+--include-current-window
 --windows 12
 --verbose
 ```
@@ -85,6 +86,10 @@ usually enough for a collection run.
 
 `--windows N` stops after observing `N` windows that successfully obtained
 `k_price`. Windows skipped before `k_price` is available do not count.
+
+By default, startup ignores the already-running five-minute window and begins
+from the next full window. Use `--include-current-window` only for ad-hoc
+debugging when a partial first window is acceptable.
 
 ## JSONL Schema
 

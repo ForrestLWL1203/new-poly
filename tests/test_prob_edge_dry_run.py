@@ -57,6 +57,36 @@ def test_window_tracker_counts_only_valid_windows() -> None:
     assert tracker.observe("w3", count=True) is True
 
 
+def test_initial_window_defaults_to_next_full_window(monkeypatch) -> None:
+    current = collector.MarketWindow(
+        question="current",
+        up_token="up1",
+        down_token="down1",
+        start_time=collector.dt.datetime(2026, 5, 3, 0, 0, tzinfo=collector.dt.timezone.utc),
+        end_time=collector.dt.datetime(2026, 5, 3, 0, 5, tzinfo=collector.dt.timezone.utc),
+        slug="btc-updown-5m-1",
+    )
+    following = collector.MarketWindow(
+        question="following",
+        up_token="up2",
+        down_token="down2",
+        start_time=collector.dt.datetime(2026, 5, 3, 0, 5, tzinfo=collector.dt.timezone.utc),
+        end_time=collector.dt.datetime(2026, 5, 3, 0, 10, tzinfo=collector.dt.timezone.utc),
+        slug="btc-updown-5m-2",
+    )
+
+    monkeypatch.setattr(collector, "find_next_window", lambda series: current)
+    monkeypatch.setattr(collector, "find_following_window", lambda window, series: following)
+
+    selected = collector.find_initial_window(
+        collector.MarketSeries.from_known("btc-updown-5m"),
+        include_current=False,
+        now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
+    )
+
+    assert selected is following
+
+
 def test_collector_row_is_strategy_neutral() -> None:
     class FakeFeed:
         latest_price = 100_120.0

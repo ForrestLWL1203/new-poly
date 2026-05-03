@@ -333,10 +333,18 @@ def build_row(
     return row
 
 
-def find_initial_window(series: MarketSeries) -> MarketWindow:
+def find_initial_window(
+    series: MarketSeries,
+    *,
+    include_current: bool = False,
+    now: dt.datetime | None = None,
+) -> MarketWindow:
     window = find_next_window(series)
     if window is None:
         raise RuntimeError("no live/future BTC 5m market found")
+    current_time = now or dt.datetime.now(dt.timezone.utc)
+    if not include_current and window.start_time <= current_time < window.end_time:
+        return find_following_window(window, series)
     return window
 
 
@@ -363,6 +371,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dvol-refresh-sec", type=float, default=0.0, help="Refresh Deribit DVOL every N seconds. Default 0 means fetch once at startup.")
     parser.add_argument("--warmup-timeout-sec", type=float, default=8.0)
     parser.add_argument("--windows", type=int, default=None)
+    parser.add_argument("--include-current-window", action="store_true", help="Start from the in-progress window instead of waiting for the next full one.")
     return parser
 
 
@@ -375,7 +384,7 @@ async def run(args: argparse.Namespace) -> int:
     volatility = await asyncio.to_thread(fetch_dvol_snapshot) if args.collect_dvol else None
     next_dvol_refresh = time.monotonic() + args.dvol_refresh_sec if args.collect_dvol and args.dvol_refresh_sec > 0 else None
     try:
-        window = find_initial_window(series)
+        window = find_initial_window(series, include_current=args.include_current_window)
         prices = WindowPrices()
         await feed.start()
         await stream.connect([window.up_token, window.down_token])
