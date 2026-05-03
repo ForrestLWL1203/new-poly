@@ -14,21 +14,39 @@ sys.modules[spec.name] = collector
 spec.loader.exec_module(collector)
 
 
-def test_extract_crypto_prices_from_hydration_html() -> None:
-    html = """
-    <script>
-    {"dehydratedAt":1,"state":{"data":{"openPrice":78417.388005,"closePrice":78461.2}},
-    "queryKey":["crypto-prices","price","BTC","2026-05-02T17:45:00Z","fiveminute","2026-05-02T17:50:00Z"]}
-    </script>
-    """
+def test_extract_crypto_prices_from_api_response() -> None:
+    data = collector.extract_crypto_prices_from_api_response({
+        "openPrice": "78409.37",
+        "closePrice": 78379.9,
+        "completed": True,
+        "incomplete": False,
+        "cached": True,
+    })
 
-    result = collector.extract_crypto_prices_from_html(
-        html,
-        start_iso="2026-05-02T17:45:00Z",
-        end_iso="2026-05-02T17:50:00Z",
+    assert data == {
+        "openPrice": 78409.37,
+        "completed": True,
+        "incomplete": False,
+        "cached": True,
+    }
+
+
+def test_api_url_uses_exact_window_iso() -> None:
+    window = collector.MarketWindow(
+        question="Bitcoin Up or Down",
+        up_token="up",
+        down_token="down",
+        start_time=collector.dt.datetime(2026, 5, 3, 8, 55, tzinfo=collector.dt.timezone.utc),
+        end_time=collector.dt.datetime(2026, 5, 3, 9, 0, tzinfo=collector.dt.timezone.utc),
+        slug="btc-updown-5m-1777798500",
     )
 
-    assert result == {"openPrice": 78417.388005, "closePrice": 78461.2}
+    url = collector.crypto_price_api_url(window)
+
+    assert "symbol=BTC" in url
+    assert "eventStartTime=2026-05-03T08%3A55%3A00Z" in url
+    assert "endDate=2026-05-03T09%3A00%3A00Z" in url
+    assert "variant=fiveminute" in url
 
 
 def test_window_bucket() -> None:
@@ -41,19 +59,23 @@ def test_window_bucket() -> None:
 
 
 def test_avg_price_for_notional() -> None:
-    avg, ok, notional = collector.avg_price_for_notional([(0.4, 10), (0.42, 20)], 8.0)
+    avg, ok, notional, limit_price = collector.avg_price_for_notional([(0.4, 10), (0.42, 20)], 8.0)
 
     assert ok is True
     assert avg == 0.409756
     assert notional == 8.0
+    assert limit_price == 0.42
 
 
 def test_window_tracker_counts_only_valid_windows() -> None:
     tracker = collector.WindowLimitTracker(limit=2)
 
     assert tracker.observe("late-window", count=False) is False
+    assert tracker.reached() is False
     assert tracker.observe("w1", count=True) is False
+    assert tracker.reached() is False
     assert tracker.observe("w2", count=True) is False
+    assert tracker.reached() is True
     assert tracker.observe("w3", count=True) is True
 
 
@@ -146,7 +168,7 @@ def test_collector_row_is_strategy_neutral() -> None:
         slug="btc-updown-5m-1",
         resolution_source="https://data.chain.link/streams/btc-usd",
     )
-    prices = collector.WindowPrices(k_price=100_000.0, binance_open_price=100_050.0, k_source="polymarket_html_crypto_prices")
+    prices = collector.WindowPrices(k_price=100_000.0, binance_open_price=100_050.0, k_source="polymarket_crypto_price_api")
 
     row = collector.build_row(
         window=window,
@@ -173,6 +195,8 @@ def test_collector_row_is_strategy_neutral() -> None:
     assert row["s_price"] == 100070.0
     assert row["basis_bps"] == 5.0
     assert row["volatility"]["sigma"] == 0.4
+    assert row["up"]["ask_limit"] == 0.51
+    assert "close_price" not in row
     for forbidden in ("decision", "candidate_side", "skip_reason", "required_edge", "edge_components", "up_prob", "down_prob"):
         assert forbidden not in row
     assert "edge" not in row["up"]

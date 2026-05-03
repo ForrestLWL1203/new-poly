@@ -22,7 +22,7 @@ collector name.
 The collector records:
 
 - Polymarket Gamma market slug/token metadata.
-- Polymarket event-page hydration data for the UI Price to Beat:
+- Polymarket crypto price API for the UI Price to Beat:
   `k_price = openPrice`.
 - Binance BTC/USDT trade WebSocket as the current proxy BTC price.
 - Binance open price inside the window boundary lookaround
@@ -32,7 +32,9 @@ The collector records:
 
 For `k_price`, the collector starts checking shortly after a new window opens
 and retries at approximately 5, 8, 12, 20, 30, and 40 seconds until the
-Polymarket HTML hydration data exposes `openPrice`.
+Polymarket crypto price API exposes `openPrice`. The collector does not fetch
+or log `closePrice`; simple post-run direction checks can compare Binance
+window open/close prices instead.
 
 Direct realtime Chainlink Data Streams access is not integrated yet, so:
 
@@ -112,7 +114,6 @@ price_source
 s_price
 k_price
 k_source
-close_price
 binance_open_price
 binance_open_source
 binance_open_delta_ms

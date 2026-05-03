@@ -1,0 +1,64 @@
+"""State containers for the probability-edge strategy."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass
+class PositionSnapshot:
+    market_slug: str
+    token_side: str
+    token_id: str
+    entry_time: float
+    entry_avg_price: float
+    filled_shares: float
+    entry_model_prob: float
+    entry_edge: float
+    last_model_prob: float | None = None
+    last_executable_bid: float | None = None
+    exit_status: str = "open"
+
+
+@dataclass
+class StrategyState:
+    current_market_slug: str | None = None
+    open_position: PositionSnapshot | None = None
+    entry_count: int = 0
+    realized_pnl: float = 0.0
+    last_exit_reason: str | None = None
+
+    @property
+    def has_position(self) -> bool:
+        return self.open_position is not None and self.open_position.exit_status == "open"
+
+    def reset_for_market(self, market_slug: str) -> None:
+        self.current_market_slug = market_slug
+        self.open_position = None
+        self.entry_count = 0
+        self.last_exit_reason = None
+
+    def record_entry(self, position: PositionSnapshot) -> None:
+        self.open_position = position
+        self.entry_count += 1
+
+    def record_exit(self, exit_price: float, reason: str) -> float:
+        if self.open_position is None:
+            return 0.0
+        pnl = (exit_price - self.open_position.entry_avg_price) * self.open_position.filled_shares
+        self.realized_pnl += pnl
+        self.open_position.exit_status = reason
+        self.open_position = None
+        self.last_exit_reason = reason
+        return pnl
+
+    def record_settlement(self, winning_side: str) -> float:
+        if self.open_position is None:
+            return 0.0
+        settlement_value = 1.0 if self.open_position.token_side == winning_side else 0.0
+        pnl = (settlement_value - self.open_position.entry_avg_price) * self.open_position.filled_shares
+        self.realized_pnl += pnl
+        self.open_position.exit_status = "settled"
+        self.open_position = None
+        self.last_exit_reason = "settled"
+        return pnl

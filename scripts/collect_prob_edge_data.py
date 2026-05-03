@@ -10,6 +10,7 @@ import json
 import math
 import sys
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,10 +24,7 @@ from new_poly.market.market import MarketWindow, find_next_window, find_window_a
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
 
-POLYMARKET_EVENT_PREFIXES = (
-    "https://polymarket.com/zh/event/",
-    "https://polymarket.com/event/",
-)
+POLYMARKET_CRYPTO_PRICE_API = "https://polymarket.com/api/crypto/crypto-price"
 K_RETRY_AGES_SEC = (5.0, 8.0, 12.0, 20.0, 30.0, 40.0)
 K_RETRY_TIMEOUT_SEC = 40.0
 BTC_OPEN_LOOKAROUND_SEC = 5.0
@@ -35,7 +33,6 @@ BTC_OPEN_LOOKAROUND_SEC = 5.0
 @dataclass
 class WindowPrices:
     k_price: float | None = None
-    close_price: float | None = None
     k_source: str = "missing"
     k_timed_out: bool = False
     attempted_slots: set[float] | None = None
@@ -80,6 +77,9 @@ class WindowLimitTracker:
             self.seen.append(slug)
         return len(self.seen) > self.limit
 
+    def reached(self) -> bool:
+        return self.limit is not None and len(self.seen) >= self.limit
+
 
 def iso_z(value: dt.datetime) -> str:
     return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -110,66 +110,40 @@ def is_chainlink_btc_resolution(*values: str | None) -> bool:
     return ("chainlink" in text or "chain.link" in text) and ("btc" in text or "bitcoin" in text) and "usd" in text
 
 
-def balanced_json_object_before_marker(text: str, marker_index: int) -> dict[str, Any] | None:
-    start = text.rfind('{"dehydratedAt"', 0, marker_index)
-    if start < 0:
-        start = text.rfind("{", 0, marker_index)
-    if start < 0:
-        return None
-    in_str = False
-    esc = False
-    depth = 0
-    for idx, ch in enumerate(text[start:], start):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-        else:
-            if ch == '"':
-                in_str = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(text[start:idx + 1])
-                    except json.JSONDecodeError:
-                        return None
-    return None
-
-
-def extract_crypto_prices_from_html(html: str, *, start_iso: str, end_iso: str) -> dict[str, float | None] | None:
-    marker = f'"queryKey":["crypto-prices","price","BTC","{start_iso}","fiveminute","{end_iso}"]'
-    marker_index = html.find(marker)
-    if marker_index < 0:
-        return None
-    obj = balanced_json_object_before_marker(html, marker_index)
-    data = obj.get("state", {}).get("data") if isinstance(obj, dict) else None
+def extract_crypto_prices_from_api_response(data: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(data, dict) or data.get("openPrice") is None:
         return None
     try:
         return {
             "openPrice": float(data["openPrice"]),
-            "closePrice": float(data["closePrice"]) if data.get("closePrice") is not None else None,
+            "completed": bool(data.get("completed")),
+            "incomplete": bool(data.get("incomplete")),
+            "cached": bool(data.get("cached")),
         }
     except (TypeError, ValueError):
         return None
 
 
-def fetch_polymarket_htmls(slug: str) -> list[str]:
-    htmls: list[str] = []
-    for prefix in POLYMARKET_EVENT_PREFIXES:
-        try:
-            req = urllib.request.Request(prefix + slug, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=15.0) as resp:
-                htmls.append(resp.read().decode("utf-8", "ignore"))
-        except Exception:
-            continue
-    return htmls
+def crypto_price_api_url(window: MarketWindow) -> str:
+    return POLYMARKET_CRYPTO_PRICE_API + "?" + urllib.parse.urlencode({
+        "symbol": "BTC",
+        "eventStartTime": iso_z(window.start_time),
+        "variant": "fiveminute",
+        "endDate": iso_z(window.end_time),
+    })
+
+
+def fetch_crypto_price_api(window: MarketWindow) -> dict[str, Any] | None:
+    try:
+        req = urllib.request.Request(
+            crypto_price_api_url(window),
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    return extract_crypto_prices_from_api_response(raw)
 
 
 async def refresh_k_price(window: MarketWindow, prices: WindowPrices, age_sec: float) -> None:
@@ -182,14 +156,11 @@ async def refresh_k_price(window: MarketWindow, prices: WindowPrices, age_sec: f
             prices.k_timed_out = True
         return
     prices.attempted_slots.add(max(eligible))
-    htmls = await asyncio.to_thread(fetch_polymarket_htmls, window.slug)
-    for html in htmls:
-        data = extract_crypto_prices_from_html(html, start_iso=iso_z(window.start_time), end_iso=iso_z(window.end_time))
-        if data is not None:
-            prices.k_price = data["openPrice"]
-            prices.close_price = data["closePrice"]
-            prices.k_source = "polymarket_html_crypto_prices"
-            return
+    api_data = await asyncio.to_thread(fetch_crypto_price_api, window)
+    if api_data is not None:
+        prices.k_price = api_data["openPrice"]
+        prices.k_source = "polymarket_crypto_price_api"
+        return
 
 
 async def refresh_binance_open(feed: BinancePriceFeed, window: MarketWindow, prices: WindowPrices, age_sec: float) -> None:
@@ -228,32 +199,37 @@ def effective_price(feed: BinancePriceFeed, prices: WindowPrices) -> tuple[str, 
     return "proxy_binance", latest, None
 
 
-def avg_price_for_notional(levels: list[tuple[float, float]], target_notional: float) -> tuple[float | None, bool, float]:
+def avg_price_for_notional(levels: list[tuple[float, float]], target_notional: float) -> tuple[float | None, bool, float, float | None]:
     shares = 0.0
     notional = 0.0
+    limit_price = None
     for price, size in levels:
         if price <= 0 or size <= 0:
             continue
         take_shares = min(size, max(0.0, target_notional - notional) / price)
         shares += take_shares
         notional += take_shares * price
+        if take_shares > 0:
+            limit_price = price
         if notional >= target_notional - 1e-9:
             break
     avg = notional / shares if shares > 0 else None
-    return compact_float(avg), notional >= target_notional - 1e-9, notional
+    return compact_float(avg), notional >= target_notional - 1e-9, notional, compact_float(limit_price)
 
 
 def token_state(stream: PriceStream, token_id: str, depth_notional: float) -> dict[str, Any]:
     asks = stream.get_latest_ask_levels_with_size(token_id)
     bids = stream.get_latest_bid_levels_with_size(token_id)
-    ask_avg, ask_ok, _ = avg_price_for_notional(asks, depth_notional)
-    bid_avg, bid_ok, _ = avg_price_for_notional(bids, depth_notional)
+    ask_avg, ask_ok, _, ask_limit = avg_price_for_notional(asks, depth_notional)
+    bid_avg, bid_ok, _, bid_limit = avg_price_for_notional(bids, depth_notional)
     return {
         "bid": compact_float(stream.get_latest_best_bid(token_id)),
         "ask": compact_float(stream.get_latest_best_ask(token_id)),
         "book_age_ms": compact_float((stream.get_latest_best_ask_age(token_id) or 0) * 1000, 0) if asks or bids else None,
         "ask_avg": ask_avg,
         "bid_avg": bid_avg,
+        "ask_limit": ask_limit,
+        "bid_limit": bid_limit,
         "stable_depth_usd": compact_float(sum(price * size for price, size in asks), 4),
         "ask_depth_ok": ask_ok,
         "bid_depth_ok": bid_ok,
@@ -315,7 +291,6 @@ def build_row(
         "s_price": compact_float(s_price, 2),
         "k_price": compact_float(prices.k_price, 2),
         "k_source": prices.k_source,
-        "close_price": compact_float(prices.close_price, 2),
         "binance_open_price": compact_float(prices.binance_open_price, 2),
         "binance_open_source": prices.binance_open_source,
         "binance_open_delta_ms": prices.binance_open_delta_ms,
@@ -427,6 +402,8 @@ async def run(args: argparse.Namespace) -> int:
                 return 0
             await asyncio.sleep(args.interval_sec)
             if dt.datetime.now(dt.timezone.utc) >= window.end_time:
+                if tracker.reached():
+                    return 0
                 window = find_following_window(window, series)
                 prices = WindowPrices()
                 await asyncio.wait_for(stream.switch_tokens([window.up_token, window.down_token]), timeout=8.0)

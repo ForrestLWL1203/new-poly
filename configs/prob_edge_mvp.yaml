@@ -1,0 +1,23 @@
+strategy:
+  required_edge: 0.05
+  model_decay_buffer: 0.02
+  overprice_buffer: 0.02
+  entry_start_age_sec: 40
+  entry_end_age_sec: 270
+  final_no_entry_remaining_sec: 30
+  max_entries_per_market: 2
+  max_book_age_ms: 1000
+
+execution:
+  amount_usd: 5.0
+  depth_notional: 5.0
+  paper_latency_sec: 0.4
+  max_book_age_sec: 1.0
+
+runtime:
+  interval_sec: 1.0
+  warmup_timeout_sec: 8.0
+  paired_buffer: 0.01
+  dvol_refresh_sec: 300
+  max_dvol_age_sec: 900
+  settlement_boundary_usd: 5

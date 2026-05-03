@@ -19,6 +19,8 @@ Old strategy knowledge has not been copied into this README.
   reusable strategy-neutral modules migrated from the old project.
 - [docs/prob_edge_data_collector.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_data_collector.md):
   probability-edge data collector usage and JSONL schema notes.
+- [docs/prob_edge_strategy_bot.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_strategy_bot.md):
+  first probability-edge strategy bot usage and paper/live mode notes.
 
 ## Core Infrastructure Notes
 
@@ -108,12 +110,34 @@ python3 scripts/collect_prob_edge_data.py \
   --windows 12
 ```
 
-The script extracts the Polymarket UI Price to Beat from event-page HTML as
-`k_price`, then uses a Binance open-basis-adjusted proxy for current `s_price`.
+The script extracts the Polymarket UI Price to Beat from Polymarket's crypto
+price API as `k_price`, then uses a Binance open-basis-adjusted proxy for
+current `s_price`. It does not fetch or log Polymarket `closePrice`; simple
+post-run direction checks should compare Binance window open/close prices.
 It intentionally keeps `settlement_aligned=false` until a true
 settlement-aligned realtime price source is available. It also fetches Deribit
 BTC DVOL once at startup by default and records it under `volatility`. See
 [docs/prob_edge_data_collector.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_data_collector.md).
+
+### Probability Edge Strategy Bot
+
+The first strategy robot entry point is:
+
+```text
+scripts/run_prob_edge_bot.py
+```
+
+It defaults to `paper` mode and uses one shared strategy state machine for both
+paper and live runs. Live mode will not post orders unless both `--mode live`
+and `--i-understand-live-risk` are provided.
+
+Paper smoke test:
+
+```bash
+python3 scripts/run_prob_edge_bot.py --once
+```
+
+See [docs/prob_edge_strategy_bot.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_strategy_bot.md).
 
 ### Reusable Modules
 
