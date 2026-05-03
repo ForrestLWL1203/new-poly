@@ -58,14 +58,17 @@ class BinancePriceFeed:
                 pass
             self._ws = None
 
-    def price_at_or_before(self, ts: float) -> Optional[float]:
+    def price_at_or_before(self, ts: float, max_backward_sec: Optional[float] = None) -> Optional[float]:
         if not self._history:
             return None
         ts_values = [t for t, _ in self._history]
         idx = bisect_right(ts_values, ts) - 1
         if idx < 0:
             return None
-        return self._history[idx][1]
+        price_ts, price = self._history[idx]
+        if max_backward_sec is not None and ts - price_ts > max_backward_sec:
+            return None
+        return price
 
     async def fetch_open_at(self, epoch: float) -> Optional[float]:
         """Fetch BTC open price at epoch via Binance 1m klines REST API.

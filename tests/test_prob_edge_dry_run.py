@@ -87,6 +87,36 @@ def test_initial_window_defaults_to_next_full_window(monkeypatch) -> None:
     assert selected is following
 
 
+def test_binance_open_waits_until_lookaround_window() -> None:
+    class FakeFeed:
+        latest_price = 100.0
+        calls = 0
+
+        def first_price_at_or_after(self, *args, **kwargs):
+            self.calls += 1
+            return 100.0
+
+        def price_at_or_before(self, *args, **kwargs):
+            self.calls += 1
+            return 99.0
+
+    window = collector.MarketWindow(
+        question="future",
+        up_token="up",
+        down_token="down",
+        start_time=collector.dt.datetime(2026, 5, 3, 0, 5, tzinfo=collector.dt.timezone.utc),
+        end_time=collector.dt.datetime(2026, 5, 3, 0, 10, tzinfo=collector.dt.timezone.utc),
+        slug="btc-updown-5m-2",
+    )
+    prices = collector.WindowPrices()
+    feed = FakeFeed()
+
+    collector.asyncio.run(collector.refresh_binance_open(feed, window, prices, age_sec=-6.0))
+
+    assert prices.binance_open_price is None
+    assert feed.calls == 0
+
+
 def test_collector_row_is_strategy_neutral() -> None:
     class FakeFeed:
         latest_price = 100_120.0

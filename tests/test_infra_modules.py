@@ -26,6 +26,7 @@ def test_binance_price_feed_history_lookup_helpers() -> None:
 
     assert feed.latest_price == 10.5
     assert feed.price_at_or_before(102.0) == 10.0
+    assert feed.price_at_or_before(104.0, max_backward_sec=3.0) is None
     assert feed.first_price_at_or_after(101.0, max_forward_sec=10.0) == 10.5
     assert feed.first_price_at_or_after(101.0, max_forward_sec=1.0) is None
 

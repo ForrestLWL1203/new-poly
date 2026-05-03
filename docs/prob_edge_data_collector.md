@@ -25,8 +25,8 @@ The collector records:
 - Polymarket event-page hydration data for the UI Price to Beat:
   `k_price = openPrice`.
 - Binance BTC/USDT trade WebSocket as the current proxy BTC price.
-- Binance open price around the window boundary, used to compute
-  `basis_bps`.
+- Binance open price inside the window boundary lookaround
+  `(window_start - 5s, window_start + 5s)`, used to compute `basis_bps`.
 - Polymarket CLOB WebSocket top/depth summaries for UP and DOWN tokens.
 - Deribit BTC DVOL snapshot as 30-day implied-volatility reference.
 

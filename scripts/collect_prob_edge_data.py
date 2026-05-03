@@ -195,6 +195,8 @@ async def refresh_k_price(window: MarketWindow, prices: WindowPrices, age_sec: f
 async def refresh_binance_open(feed: BinancePriceFeed, window: MarketWindow, prices: WindowPrices, age_sec: float) -> None:
     if prices.binance_open_price is not None:
         return
+    if age_sec < -BTC_OPEN_LOOKAROUND_SEC:
+        return
     start = float(window.start_epoch)
     first_after = feed.first_price_at_or_after(start, max_forward_sec=BTC_OPEN_LOOKAROUND_SEC)
     if first_after is not None:
@@ -202,7 +204,7 @@ async def refresh_binance_open(feed: BinancePriceFeed, window: MarketWindow, pri
         prices.binance_open_source = "ws_first_after"
         prices.binance_open_delta_ms = None
         return
-    last_before = feed.price_at_or_before(start)
+    last_before = feed.price_at_or_before(start, max_backward_sec=BTC_OPEN_LOOKAROUND_SEC)
     if last_before is not None:
         prices.binance_open_price = last_before
         prices.binance_open_source = "ws_last_before"
