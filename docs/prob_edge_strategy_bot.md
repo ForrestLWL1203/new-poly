@@ -200,27 +200,29 @@ attempt 1: min(ask_limit + 2 ticks, fair_cap)
 attempt 2: min(ask_limit + 4 ticks, fair_cap)
 ```
 
-SELL also gets one retry, but the sell floor depends on exit urgency. In CLOB
-FAK semantics any visible bid at or above the sell floor can fill, while bids
-below the floor are rejected.
+SELL also gets one retry. In CLOB FAK semantics any visible bid at or above the
+sell floor can fill, while bids below the floor are rejected. Normal
+profit-taking and stop-loss exits use the same configurable aggressive floor:
 
 ```text
-market_overprice_exit / defensive_take_profit / profit_protection_exit:
-  attempt 1: bid_limit
-  attempt 2: bid_limit - 1 tick
-
-logic_decay_exit / risk_exit:
-  attempt 1: bid_limit - 2 ticks
-  attempt 2: bid_limit - 3 ticks
+normal exits:
+  market_overprice_exit / defensive_take_profit / profit_protection_exit
+  logic_decay_exit / risk_exit
+  attempt 1: bid_limit - 3 ticks
+  attempt 2: bid_limit - 5 ticks
 
 final_force_exit:
   attempt 1: bid_limit - 5 ticks
   attempt 2: bid_limit - 10 ticks
 ```
 
-Sell floors are clamped at one tick. The purpose is asymmetric: profit exits try
-to preserve price, while stop/risk exits prefer reducing exposure over waiting
-for a perfect bid.
+Earlier versions used separate profit/stop floors. Live testing showed that even
+profit exits can hit FAK no-match when the local book moves between WS snapshot
+and POST, so normal exits now share a `3/5 tick` ladder. `final_force_exit`
+keeps its hardcoded `5/10 tick` emergency ladder because the final seconds
+prioritize reducing expiry exposure over profile-level tuning. Sell floors are
+clamped at one tick; for very low-priced tokens, attempt 1 and attempt 2 may
+therefore collapse to the same one-tick floor.
 
 Live CLOB can return a `400` response such as `no orders found to match with FAK
 order`. That is normal FAK behavior when the local WS book has moved before the
@@ -228,10 +230,11 @@ POST reaches the matching engine. The live executor records it as
 `order_no_fill` with `latency_ms` / `total_latency_ms` and keeps the bot running;
 it does not create a position and does not terminate the process.
 
-Paper mode mirrors the same retry count and interval against the latest local
-book after the simulated latency. Paper applies `paper_latency_sec` once for the
-initial order signal, then only `retry_interval_sec` before the retry so retry
-simulation does not drift by an extra full tick.
+Paper mode mirrors the same retry count, interval, and BUY/SELL price floors
+against the latest local book after the simulated latency. Paper applies
+`paper_latency_sec` once for the initial order signal, then only
+`retry_interval_sec` before the retry so retry simulation does not drift by an
+extra full tick.
 
 ## Exit Logic
 

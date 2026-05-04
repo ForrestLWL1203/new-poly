@@ -243,6 +243,8 @@ def load_bot_config(path: Path) -> BotConfig:
         retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.2)),
         buy_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_price_buffer_ticks"), 2.0)),
         buy_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_retry_price_buffer_ticks"), 4.0)),
+        sell_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_price_buffer_ticks"), 3.0)),
+        sell_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_retry_price_buffer_ticks"), 5.0)),
     )
     amount_usd = float(_deep_get(raw, ("execution", "amount_usd"), 5.0))
     return BotConfig(
@@ -289,6 +291,8 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
             retry_interval_sec=cfg.execution.retry_interval_sec,
             buy_price_buffer_ticks=cfg.execution.buy_price_buffer_ticks,
             buy_retry_price_buffer_ticks=cfg.execution.buy_retry_price_buffer_ticks,
+            sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
+            sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
         )
         cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
     if args.interval_sec is not None:
@@ -468,6 +472,8 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         late_entry_enabled=cfg.edge.late_entry_enabled,
         buy_slippage_ticks=0.0,
         sell_slippage_ticks=0.0,
+        sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
+        sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
         settlement_boundary_usd=cfg.settlement_boundary_usd,
     )
 
@@ -589,6 +595,8 @@ async def run(options: RuntimeOptions) -> int:
             retry_interval_sec=cfg.execution.retry_interval_sec,
             buy_price_buffer_ticks=cfg.execution.buy_price_buffer_ticks,
             buy_retry_price_buffer_ticks=cfg.execution.buy_retry_price_buffer_ticks,
+            sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
+            sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
         )
         if options.mode == "live"
         else PaperExecutionGateway(stream=stream, config=cfg.execution)

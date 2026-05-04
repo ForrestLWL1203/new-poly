@@ -44,10 +44,20 @@ python3 scripts/backtest_prob_edge.py \
 `--slippage-ticks N` applies both:
 
 - BUY fill = executable ask limit + `N * tick_size`
-- SELL fill = executable bid limit - `N * tick_size`
+- SELL fill = executable bid limit - `max(strategy_sell_floor, N) * tick_size`
 
 Use `--buy-slippage-ticks` and `--sell-slippage-ticks` when the two sides need
 different assumptions. The default `tick_size` is `0.01`.
+
+Replay mirrors the live/paper first-attempt SELL floor:
+
+```text
+normal exits:      bid_limit - max(3, sell_slippage_ticks) ticks
+final_force_exit:  bid_limit - max(5, sell_slippage_ticks) ticks
+```
+
+The retry ladder is not simulated in replay; use paper mode when you need to
+observe retry behavior against the latest local book.
 
 To replay the current live/dry-run entry guard, pass the fair-cap margin used by
 the bot:
@@ -95,6 +105,11 @@ The replay uses:
 Entry decisions still use size-aware `ask_avg` for edge screening, but simulated
 fills use the worse executable depth limit. If slippage pushes BUY above the
 fair cap (`model_prob - required_edge`), the fill is skipped.
+
+SELL replay uses the same strategy floor as paper/live. Normal profit and stop
+exits default to a `3 tick` first floor, while final-force exits use `5 ticks`.
+The floor is clamped at one tick, matching the live executor behavior on very
+low-priced tokens.
 
 When collector rows include `ask_safety_limit`, replay also enforces the current
 depth safety check: the safety-depth limit must remain inside the same fair cap.

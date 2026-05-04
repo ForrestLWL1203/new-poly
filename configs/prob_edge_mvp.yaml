@@ -31,6 +31,8 @@ execution:
   retry_interval_sec: 0.2
   buy_price_buffer_ticks: 2
   buy_retry_price_buffer_ticks: 4
+  sell_price_buffer_ticks: 3
+  sell_retry_price_buffer_ticks: 5
 
 runtime:
   interval_sec: 1.0

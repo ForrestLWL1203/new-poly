@@ -98,6 +98,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.depth_safety_multiplier == 1.5
     assert opts.config.execution.buy_price_buffer_ticks == 2.0
     assert opts.config.execution.buy_retry_price_buffer_ticks == 4.0
+    assert opts.config.execution.sell_price_buffer_ticks == 3.0
+    assert opts.config.execution.sell_retry_price_buffer_ticks == 5.0
     assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
 
 

@@ -50,6 +50,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
     parser.add_argument("--buy-slippage-ticks", type=float)
     parser.add_argument("--sell-slippage-ticks", type=float)
+    parser.add_argument("--sell-price-buffer-ticks", type=float, default=3.0)
+    parser.add_argument("--sell-retry-price-buffer-ticks", type=float, default=5.0)
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
     parser.add_argument("--early-grid", default="0.08,0.10,0.12")
@@ -77,6 +79,8 @@ def main() -> int:
         tick_size=args.tick_size,
         buy_slippage_ticks=buy_slippage_ticks,
         sell_slippage_ticks=sell_slippage_ticks,
+        sell_price_buffer_ticks=args.sell_price_buffer_ticks,
+        sell_retry_price_buffer_ticks=args.sell_retry_price_buffer_ticks,
         settlement_boundary_usd=args.settlement_boundary_usd,
         min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,
         entry_tick_size=args.entry_tick_size,

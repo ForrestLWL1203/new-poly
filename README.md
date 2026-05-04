@@ -148,9 +148,10 @@ Current default strategy behavior:
 - FAK BUY gets one capped retry. The default live BUY hint ladder is
   `+2 ticks` then `+4 ticks`, always capped by formula fair cap. FAK SELL also
   retries once, but the sell floor
-  depends on exit urgency: profit exits only loosen by one tick on retry,
-  `logic_decay_exit` / `risk_exit` start two ticks below `bid_limit`, and
-  `final_force_exit` uses a wider emergency ladder.
+  depends on exit urgency: normal profit/stop exits use `-3 ticks` then
+  `-5 ticks`, and `final_force_exit` uses a fixed `-5/-10 tick` emergency
+  ladder. Paper mode uses the same SELL floors, clamped at one tick for very
+  low-priced tokens.
 - A live CLOB `FAK no match` response is treated as `order_no_fill`, not a
   fatal bot error, and records the failed POST latency for later diagnostics.
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.

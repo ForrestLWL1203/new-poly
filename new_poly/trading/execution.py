@@ -27,6 +27,8 @@ class ExecutionConfig:
     retry_interval_sec: float = 0.2
     buy_price_buffer_ticks: float = 2.0
     buy_retry_price_buffer_ticks: float = 4.0
+    sell_price_buffer_ticks: float = 3.0
+    sell_retry_price_buffer_ticks: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -84,23 +86,48 @@ def _avg_sell_fill(levels: list[tuple[float, float]], shares: float, min_price: 
     return None
 
 
-def _sell_aggression_ticks(exit_reason: str | None, attempt: int) -> float:
+def _sell_aggression_ticks(
+    exit_reason: str | None,
+    attempt: int,
+    *,
+    sell_price_buffer_ticks: float,
+    sell_retry_price_buffer_ticks: float,
+) -> float:
     if exit_reason == "final_force_exit":
+        # Keep this emergency ladder fixed: the final seconds prioritize
+        # reducing expiry exposure over profile-level price preservation.
         return 5.0 if attempt == 0 else 10.0
-    if exit_reason in {"logic_decay_exit", "risk_exit"}:
-        return 2.0 if attempt == 0 else 3.0
-    if exit_reason in {"market_overprice_exit", "defensive_take_profit", "profit_protection_exit"}:
-        return 0.0 if attempt == 0 else 1.0
+    if exit_reason in {
+        "logic_decay_exit",
+        "risk_exit",
+        "market_overprice_exit",
+        "defensive_take_profit",
+        "profit_protection_exit",
+    }:
+        return sell_price_buffer_ticks if attempt == 0 else sell_retry_price_buffer_ticks
     return 0.0
 
 
-def _sell_price_hint(token_id: str, min_price: float | None, exit_reason: str | None, attempt: int) -> float | None:
+def _sell_price_hint(
+    token_id: str,
+    min_price: float | None,
+    exit_reason: str | None,
+    attempt: int,
+    *,
+    sell_price_buffer_ticks: float = 3.0,
+    sell_retry_price_buffer_ticks: float = 5.0,
+) -> float | None:
     if min_price is None:
         return None
     tick = get_tick_size(token_id)
     if tick <= 0:
         tick = 0.01
-    buffered = min_price - _sell_aggression_ticks(exit_reason, attempt) * tick
+    buffered = min_price - _sell_aggression_ticks(
+        exit_reason,
+        attempt,
+        sell_price_buffer_ticks=sell_price_buffer_ticks,
+        sell_retry_price_buffer_ticks=sell_retry_price_buffer_ticks,
+    ) * tick
     floor = tick
     rounded = round(max(floor, buffered), 6)
     return min(1.0, rounded)
@@ -158,7 +185,15 @@ class PaperExecutionGateway:
             if attempt > 0:
                 await self._retry_wait()
             levels = self.stream.get_latest_bid_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
-            fill = _avg_sell_fill(levels, shares, min_price)
+            effective_min = _sell_price_hint(
+                token_id,
+                min_price,
+                exit_reason,
+                attempt,
+                sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
+                sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
+            )
+            fill = _avg_sell_fill(levels, shares, effective_min)
             total_latency_ms = round((time.monotonic() - start) * 1000)
             if fill is not None:
                 sold, avg_price = fill
@@ -209,6 +244,8 @@ class LiveFakExecutionGateway:
         retry_interval_sec: float = 0.2,
         buy_price_buffer_ticks: float = 2.0,
         buy_retry_price_buffer_ticks: float = 4.0,
+        sell_price_buffer_ticks: float = 3.0,
+        sell_retry_price_buffer_ticks: float = 5.0,
     ) -> None:
         if not live_risk_ack:
             raise ValueError("live mode requires --i-understand-live-risk")
@@ -216,6 +253,8 @@ class LiveFakExecutionGateway:
         self.retry_interval_sec = max(0.0, float(retry_interval_sec))
         self.buy_price_buffer_ticks = max(0.0, float(buy_price_buffer_ticks))
         self.buy_retry_price_buffer_ticks = max(self.buy_price_buffer_ticks, float(buy_retry_price_buffer_ticks))
+        self.sell_price_buffer_ticks = max(0.0, float(sell_price_buffer_ticks))
+        self.sell_retry_price_buffer_ticks = max(self.sell_price_buffer_ticks, float(sell_retry_price_buffer_ticks))
 
     async def buy(
         self,
@@ -251,7 +290,14 @@ class LiveFakExecutionGateway:
         last = ExecutionResult(False, message="live sell not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
-            price_hint = _sell_price_hint(token_id, min_price, exit_reason, attempt)
+            price_hint = _sell_price_hint(
+                token_id,
+                min_price,
+                exit_reason,
+                attempt,
+                sell_price_buffer_ticks=self.sell_price_buffer_ticks,
+                sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+            )
             last = await asyncio.to_thread(self._post, token_id, amount, SELL, price_hint or min_price)
             if last.success or attempt >= self.retry_count:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))

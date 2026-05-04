@@ -12,6 +12,16 @@ from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, evaluate_ent
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 
 
+NORMAL_SELL_EXIT_REASONS = {
+    "logic_decay_exit",
+    "risk_exit",
+    "market_overprice_exit",
+    "defensive_take_profit",
+    "profit_protection_exit",
+}
+FINAL_FORCE_SELL_BUFFER_TICKS = 5.0
+
+
 @dataclass(frozen=True)
 class BacktestConfig:
     amount_usd: float = 5.0
@@ -25,6 +35,8 @@ class BacktestConfig:
     tick_size: float = 0.01
     buy_slippage_ticks: float = 0.0
     sell_slippage_ticks: float = 0.0
+    sell_price_buffer_ticks: float = 3.0
+    sell_retry_price_buffer_ticks: float = 5.0
     settlement_boundary_usd: float = 5.0
     min_fair_cap_margin_ticks: float = 0.0
     entry_tick_size: float = 0.01
@@ -145,7 +157,16 @@ def _exit_fill_price(decision, cfg: BacktestConfig) -> float | None:
     base = decision.limit_price if decision.limit_price is not None else decision.price
     if base is None:
         return None
-    return round(max(0.0, base - cfg.sell_slippage_ticks * cfg.tick_size), 6)
+    if decision.reason == "final_force_exit":
+        # Mirror the first live emergency floor. Replay does not simulate the
+        # retry ladder, so it uses attempt 1 for deterministic comparison.
+        strategy_floor_ticks = FINAL_FORCE_SELL_BUFFER_TICKS
+    elif decision.reason in NORMAL_SELL_EXIT_REASONS:
+        strategy_floor_ticks = cfg.sell_price_buffer_ticks
+    else:
+        strategy_floor_ticks = 0.0
+    ticks = max(strategy_floor_ticks, cfg.sell_slippage_ticks)
+    return round(min(1.0, max(cfg.tick_size, base - ticks * cfg.tick_size)), 6)
 
 
 def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None = None) -> BacktestResult:
@@ -309,6 +330,8 @@ def scan_configs(
             tick_size=base.tick_size,
             buy_slippage_ticks=base.buy_slippage_ticks,
             sell_slippage_ticks=base.sell_slippage_ticks,
+            sell_price_buffer_ticks=base.sell_price_buffer_ticks,
+            sell_retry_price_buffer_ticks=base.sell_retry_price_buffer_ticks,
             settlement_boundary_usd=base.settlement_boundary_usd,
             min_fair_cap_margin_ticks=base.min_fair_cap_margin_ticks,
             entry_tick_size=base.entry_tick_size,

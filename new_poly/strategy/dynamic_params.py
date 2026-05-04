@@ -517,6 +517,8 @@ def candidate_results_from_rows(rows: Iterable[dict[str, Any]], cfg: DynamicConf
                 tick_size=base.tick_size,
                 buy_slippage_ticks=cfg.slippage_ticks,
                 sell_slippage_ticks=cfg.slippage_ticks,
+                sell_price_buffer_ticks=base.sell_price_buffer_ticks,
+                sell_retry_price_buffer_ticks=base.sell_retry_price_buffer_ticks,
                 settlement_boundary_usd=base.settlement_boundary_usd,
             ),
         )
