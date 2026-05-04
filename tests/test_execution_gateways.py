@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from new_poly.trading import fak_quotes
 from new_poly.trading.execution import (
     ExecutionConfig,
+    ExecutionResult,
     LiveFakExecutionGateway,
     PaperExecutionGateway,
 )
@@ -40,6 +41,17 @@ class FakeStream:
 
     def get_latest_best_bid_age(self, token_id, level=1):
         return 0.01
+
+
+class SequencedLiveGateway(LiveFakExecutionGateway):
+    def __init__(self, responses, *, retry_interval_sec=0.0):
+        super().__init__(live_risk_ack=True, retry_interval_sec=retry_interval_sec)
+        self.responses = list(responses)
+        self.calls = []
+
+    def _post(self, token_id, amount, side, price_hint):
+        self.calls.append((token_id, amount, side, price_hint))
+        return self.responses.pop(0)
 
 
 def test_paper_buy_and_sell_use_depth_after_delay() -> None:
@@ -104,12 +116,12 @@ def test_live_buy_hint_buffers_best_ask_but_caps_at_depth_limit(monkeypatch) -> 
     class Gateway(LiveFakExecutionGateway):
         def _post(self, token_id, amount, side, price_hint):
             captured["price_hint"] = price_hint
-            return "posted"
+            return ExecutionResult(True, filled_size=10.0, avg_price=price_hint, message="posted", mode="live")
 
     gateway = Gateway(live_risk_ack=True)
     result = asyncio.run(gateway.buy("up", amount_usd=5.0, max_price=0.55, best_ask=0.50))
 
-    assert result == "posted"
+    assert result.success is True
     assert captured["price_hint"] == 0.51
 
 
@@ -120,14 +132,14 @@ def test_live_buy_hint_buffers_depth_limit_when_provided(monkeypatch) -> None:
     class Gateway(LiveFakExecutionGateway):
         def _post(self, token_id, amount, side, price_hint):
             captured["price_hint"] = price_hint
-            return "posted"
+            return ExecutionResult(True, filled_size=10.0, avg_price=price_hint, message="posted", mode="live")
 
     gateway = Gateway(live_risk_ack=True)
     result = asyncio.run(
         gateway.buy("up", amount_usd=5.0, max_price=0.56, best_ask=0.50, price_hint_base=0.54)
     )
 
-    assert result == "posted"
+    assert result.success is True
     assert captured["price_hint"] == 0.55
 
 
@@ -138,13 +150,62 @@ def test_live_buy_hint_never_exceeds_depth_limit(monkeypatch) -> None:
     class Gateway(LiveFakExecutionGateway):
         def _post(self, token_id, amount, side, price_hint):
             captured["price_hint"] = price_hint
-            return "posted"
+            return ExecutionResult(True, filled_size=10.0, avg_price=price_hint, message="posted", mode="live")
 
     gateway = Gateway(live_risk_ack=True)
     result = asyncio.run(gateway.buy("up", amount_usd=5.0, max_price=0.55, best_ask=0.55))
 
-    assert result == "posted"
+    assert result.success is True
     assert captured["price_hint"] == 0.55
+
+
+def test_live_buy_retries_once_with_same_formula_cap(monkeypatch) -> None:
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.55, message="MATCHED", mode="live"),
+    ])
+
+    result = asyncio.run(
+        gateway.buy("up", amount_usd=5.0, max_price=0.56, best_ask=0.50, price_hint_base=0.54)
+    )
+
+    assert result.success is True
+    assert len(gateway.calls) == 2
+    assert gateway.calls[0][3] == 0.55
+    assert gateway.calls[1][3] == 0.56
+    assert result.attempt == 2
+    assert result.total_latency_ms is not None
+
+
+def test_live_sell_retry_reposts_same_floor_price(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 10.0)
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.40, message="MATCHED", mode="live"),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40))
+
+    assert result.success is True
+    assert len(gateway.calls) == 2
+    assert gateway.calls[0][3] == 0.40
+    assert gateway.calls[1][3] == 0.40
+    assert result.attempt == 2
+    assert result.total_latency_ms is not None
+
+
+def test_live_sell_no_balance_is_not_an_order_attempt(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
+    gateway = SequencedLiveGateway([])
+
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40))
+
+    assert result.success is False
+    assert result.attempt == 0
+    assert result.total_latency_ms == 0
+    assert gateway.calls == []
 
 
 def test_paper_buy_uses_depth_limit_not_average() -> None:
@@ -159,5 +220,37 @@ def test_paper_buy_uses_depth_limit_not_average() -> None:
         result = await gateway.buy("up", amount_usd=5.0, max_price=0.55)
         assert result.success is True
         assert round(result.avg_price, 6) == 0.52381
+
+    asyncio.run(scenario())
+
+
+def test_paper_retry_uses_one_latency_plus_retry_interval() -> None:
+    async def scenario() -> None:
+        stream = FakeStream()
+        stream.asks["up"] = [(0.70, 10.0)]
+        calls = 0
+
+        async def mutate_after_signal():
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                stream.asks["up"] = [(0.55, 10.0)]
+
+        gateway = PaperExecutionGateway(
+            stream=stream,
+            config=ExecutionConfig(
+                paper_latency_sec=0.01,
+                retry_interval_sec=0.01,
+                retry_count=1,
+                depth_notional=5.0,
+            ),
+            before_fill=mutate_after_signal,
+        )
+
+        result = await gateway.buy("up", amount_usd=5.0, max_price=0.60)
+        assert result.success is True
+        assert result.attempt == 2
+        assert result.total_latency_ms is not None
+        assert result.total_latency_ms < 35
 
     asyncio.run(scenario())

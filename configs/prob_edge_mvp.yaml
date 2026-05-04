@@ -24,6 +24,8 @@ execution:
   depth_notional: 5.0
   paper_latency_sec: 0.4
   max_book_age_sec: 1.0
+  retry_count: 1
+  retry_interval_sec: 0.2
 
 runtime:
   interval_sec: 1.0

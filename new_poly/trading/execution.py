@@ -10,7 +10,7 @@ from typing import Awaitable, Callable
 from new_poly import config
 from new_poly.market.stream import PriceStream
 from .clob_client import get_client, get_order_options, get_token_balance
-from .fak_quotes import buffer_buy_price_hint, buffer_sell_price_hint
+from .fak_quotes import buffer_buy_price_hint
 
 BUY = "BUY"
 SELL = "SELL"
@@ -34,6 +34,22 @@ class ExecutionResult:
     message: str = ""
     mode: str = "paper"
     latency_ms: int | None = None
+    attempt: int = 1
+    total_latency_ms: int | None = None
+
+
+def _with_attempt(result: ExecutionResult, *, attempt: int, total_latency_ms: int) -> ExecutionResult:
+    return ExecutionResult(
+        success=result.success,
+        order_id=result.order_id,
+        filled_size=result.filled_size,
+        avg_price=result.avg_price,
+        message=result.message,
+        mode=result.mode,
+        latency_ms=result.latency_ms,
+        attempt=attempt,
+        total_latency_ms=total_latency_ms,
+    )
 
 
 def _avg_buy_fill(levels: list[tuple[float, float]], amount_usd: float, max_price: float | None) -> tuple[float, float] | None:
@@ -82,6 +98,12 @@ class PaperExecutionGateway:
         if self.config.paper_latency_sec > 0:
             await asyncio.sleep(self.config.paper_latency_sec)
 
+    async def _retry_wait(self) -> None:
+        if self.before_fill is not None:
+            await self.before_fill()
+        if self.config.retry_interval_sec > 0:
+            await asyncio.sleep(self.config.retry_interval_sec)
+
     async def buy(
         self,
         token_id: str,
@@ -92,24 +114,30 @@ class PaperExecutionGateway:
     ) -> ExecutionResult:
         start = time.monotonic()
         await self._delay()
-        levels = self.stream.get_latest_ask_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
-        fill = _avg_buy_fill(levels, amount_usd, max_price)
-        latency_ms = round((time.monotonic() - start) * 1000)
-        if fill is None:
-            return ExecutionResult(False, message="paper no fill: insufficient ask depth", latency_ms=latency_ms)
-        shares, avg_price = fill
-        return ExecutionResult(True, order_id="paper-buy", filled_size=shares, avg_price=avg_price, message="paper buy filled", latency_ms=latency_ms)
+        for attempt in range(self.config.retry_count + 1):
+            if attempt > 0:
+                await self._retry_wait()
+            levels = self.stream.get_latest_ask_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
+            fill = _avg_buy_fill(levels, amount_usd, max_price)
+            total_latency_ms = round((time.monotonic() - start) * 1000)
+            if fill is not None:
+                shares, avg_price = fill
+                return ExecutionResult(True, order_id="paper-buy", filled_size=shares, avg_price=avg_price, message="paper buy filled", latency_ms=total_latency_ms, attempt=attempt + 1, total_latency_ms=total_latency_ms)
+        return ExecutionResult(False, message="paper no fill: insufficient ask depth", latency_ms=total_latency_ms, attempt=self.config.retry_count + 1, total_latency_ms=total_latency_ms)
 
     async def sell(self, token_id: str, shares: float, min_price: float | None = None) -> ExecutionResult:
         start = time.monotonic()
         await self._delay()
-        levels = self.stream.get_latest_bid_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
-        fill = _avg_sell_fill(levels, shares, min_price)
-        latency_ms = round((time.monotonic() - start) * 1000)
-        if fill is None:
-            return ExecutionResult(False, message="paper no fill: insufficient bid depth", latency_ms=latency_ms)
-        sold, avg_price = fill
-        return ExecutionResult(True, order_id="paper-sell", filled_size=sold, avg_price=avg_price, message="paper sell filled", latency_ms=latency_ms)
+        for attempt in range(self.config.retry_count + 1):
+            if attempt > 0:
+                await self._retry_wait()
+            levels = self.stream.get_latest_bid_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
+            fill = _avg_sell_fill(levels, shares, min_price)
+            total_latency_ms = round((time.monotonic() - start) * 1000)
+            if fill is not None:
+                sold, avg_price = fill
+                return ExecutionResult(True, order_id="paper-sell", filled_size=sold, avg_price=avg_price, message="paper sell filled", latency_ms=total_latency_ms, attempt=attempt + 1, total_latency_ms=total_latency_ms)
+        return ExecutionResult(False, message="paper no fill: insufficient bid depth", latency_ms=total_latency_ms, attempt=self.config.retry_count + 1, total_latency_ms=total_latency_ms)
 
 
 def _safe_float(value) -> float:
@@ -132,9 +160,11 @@ def _derive_fill(side: str, amount: float, taking: float, making: float, fallbac
 
 
 class LiveFakExecutionGateway:
-    def __init__(self, *, live_risk_ack: bool) -> None:
+    def __init__(self, *, live_risk_ack: bool, retry_count: int = 1, retry_interval_sec: float = 0.2) -> None:
         if not live_risk_ack:
             raise ValueError("live mode requires --i-understand-live-risk")
+        self.retry_count = max(0, int(retry_count))
+        self.retry_interval_sec = max(0.0, float(retry_interval_sec))
 
     async def buy(
         self,
@@ -145,21 +175,41 @@ class LiveFakExecutionGateway:
         price_hint_base: float | None = None,
     ) -> ExecutionResult:
         base_price = price_hint_base if price_hint_base is not None else best_ask
-        price_hint = buffer_buy_price_hint(
-            token_id,
-            base_price,
-            buffer_ticks=config.PRICE_HINT_BUFFER_TICKS,
-            max_price=max_price,
-        )
-        return await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)
+        last = ExecutionResult(False, message="live buy not attempted", mode="live")
+        start = time.monotonic()
+        for attempt in range(self.retry_count + 1):
+            price_hint = buffer_buy_price_hint(
+                token_id,
+                base_price,
+                buffer_ticks=config.PRICE_HINT_BUFFER_TICKS + attempt,
+                max_price=max_price,
+            )
+            last = await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)
+            if last.success or attempt >= self.retry_count:
+                return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
+            if self.retry_interval_sec > 0:
+                await asyncio.sleep(self.retry_interval_sec)
+        return last
 
     async def sell(self, token_id: str, shares: float, min_price: float | None = None) -> ExecutionResult:
         balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
         amount = min(shares, balance or 0.0)
         if amount <= 0:
-            return ExecutionResult(False, message="live no sellable balance", mode="live")
-        price_hint = buffer_sell_price_hint(token_id, min_price, min_price=min_price)
-        return await asyncio.to_thread(self._post, token_id, amount, SELL, price_hint or min_price)
+            return ExecutionResult(False, message="live no sellable balance", mode="live", attempt=0, total_latency_ms=0)
+        last = ExecutionResult(False, message="live sell not attempted", mode="live")
+        start = time.monotonic()
+        for attempt in range(self.retry_count + 1):
+            price_hint = min_price
+            last = await asyncio.to_thread(self._post, token_id, amount, SELL, price_hint or min_price)
+            if last.success or attempt >= self.retry_count:
+                return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
+            if self.retry_interval_sec > 0:
+                await asyncio.sleep(self.retry_interval_sec)
+            balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
+            amount = min(shares, balance or 0.0)
+            if amount <= 0:
+                return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
+        return last
 
     def _post(self, token_id: str, amount: float, side: str, price_hint: float | None) -> ExecutionResult:
         from py_clob_client_v2 import MarketOrderArgs, OrderType
@@ -185,4 +235,5 @@ class LiveFakExecutionGateway:
             message=str(resp.get("status", "")),
             mode="live",
             latency_ms=latency_ms,
+            total_latency_ms=latency_ms,
         )

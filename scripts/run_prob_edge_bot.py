@@ -166,6 +166,8 @@ def load_bot_config(path: Path) -> BotConfig:
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.4)),
         depth_notional=float(_deep_get(raw, ("execution", "depth_notional"), 5.0)),
         max_book_age_sec=float(_deep_get(raw, ("execution", "max_book_age_sec"), 1.0)),
+        retry_count=int(_deep_get(raw, ("execution", "retry_count"), 1)),
+        retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.2)),
     )
     amount_usd = float(_deep_get(raw, ("execution", "amount_usd"), 5.0))
     return BotConfig(
@@ -311,7 +313,11 @@ async def run(options: RuntimeOptions) -> int:
     completed_windows = 0
 
     gateway = (
-        LiveFakExecutionGateway(live_risk_ack=options.live_risk_ack)
+        LiveFakExecutionGateway(
+            live_risk_ack=options.live_risk_ack,
+            retry_count=cfg.execution.retry_count,
+            retry_interval_sec=cfg.execution.retry_interval_sec,
+        )
         if options.mode == "live"
         else PaperExecutionGateway(stream=stream, config=cfg.execution)
     )

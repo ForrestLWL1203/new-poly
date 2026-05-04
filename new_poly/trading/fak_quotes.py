@@ -81,7 +81,10 @@ def buffer_buy_price_hint(
     buffered = best_ask + tick * ticks
     if max_price is not None:
         buffered = min(buffered, max_price)
-    return max(0.0, min(1.0, math.ceil(buffered / tick) * tick))
+    rounded = math.ceil((buffered - 1e-12) / tick) * tick
+    if max_price is not None:
+        rounded = min(rounded, max_price)
+    return round(max(0.0, min(1.0, rounded)), 6)
 
 
 def buffer_sell_price_hint(
@@ -91,7 +94,11 @@ def buffer_sell_price_hint(
     buffer_ticks: Optional[float] = None,
     min_price: Optional[float] = None,
 ) -> Optional[float]:
-    """Move a SELL hint below the selected bid to improve FAK fill odds."""
+    """Move a selected bid down to a floor for reusable depth-quote helpers.
+
+    Live floor-based FAK exits do not use this helper; they post at ``min_price``
+    directly because that is already the most aggressive allowed sell limit.
+    """
     if bid_price is None:
         return None
     tick = get_tick_size(token_id)
@@ -101,7 +108,10 @@ def buffer_sell_price_hint(
     buffered = bid_price - tick * ticks
     if min_price is not None:
         buffered = max(buffered, min_price)
-    return max(0.0, min(1.0, math.floor(buffered / tick) * tick))
+    rounded = math.floor((buffered + 1e-12) / tick) * tick
+    if min_price is not None:
+        rounded = max(rounded, min_price)
+    return round(max(0.0, min(1.0, rounded)), 6)
 
 
 def _best_ask_level_1(ws: PriceStream, token_id: str) -> Optional[float]:

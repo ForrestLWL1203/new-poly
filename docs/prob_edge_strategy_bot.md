@@ -71,6 +71,8 @@ final_hold_min_bid_avg
 final_hold_min_bid_limit
 prob_stagnation_window_sec
 prob_stagnation_epsilon
+retry_count
+retry_interval_sec
 ```
 
 ## FAK Price Logic
@@ -130,6 +132,35 @@ the live order uses `depth_limit_price` as the buffer base.
 
 For SELL, the bot uses `bid_limit`, the lowest bid level needed to sell the
 position size, rather than `bid_avg`.
+
+## FAK Retry
+
+Execution retry is intentionally small:
+
+```text
+retry_count = 1
+retry_interval_sec = 0.2
+```
+
+BUY gets at most one retry. The retry still uses the same formula cap
+`fair_cap`, so it cannot chase beyond `model_prob - required_edge`. The retry
+only widens the hint by one extra tick:
+
+```text
+attempt 1: min(ask_limit + 1 tick, fair_cap)
+attempt 2: min(ask_limit + 2 ticks, fair_cap)
+```
+
+SELL also gets one retry. The sell hint is the configured `min_price` floor on
+both attempts. In CLOB FAK semantics this is already the most aggressive
+allowed sell limit: any visible bid at or above `min_price` can fill, while bids
+below the floor are rejected. The retry is a second chance against a changed
+book, not a price-escalation ladder.
+
+Paper mode mirrors the same retry count and interval against the latest local
+book after the simulated latency. Paper applies `paper_latency_sec` once for the
+initial order signal, then only `retry_interval_sec` before the retry so retry
+simulation does not drift by an extra full tick.
 
 ## Exit Logic
 

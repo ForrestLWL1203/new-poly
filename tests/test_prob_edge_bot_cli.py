@@ -38,6 +38,8 @@ def test_amount_override_keeps_depth_check_same_notional() -> None:
 
     assert opts.config.amount_usd == 12.5
     assert opts.config.execution.depth_notional == 12.5
+    assert opts.config.execution.retry_count == 1
+    assert opts.config.execution.retry_interval_sec == 0.2
 
 
 def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:

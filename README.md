@@ -138,6 +138,8 @@ Current default strategy behavior:
 - FAK entry decisions use size-aware `ask_avg` for edge, require
   `ask_limit <= model_prob - required_edge`, and send BUY hints as
   `min(ask_limit + tick_buffer, model_prob - required_edge)`.
+- FAK BUY gets one capped retry; FAK SELL reposts once at the same
+  `min_price` floor to catch changed book state without crossing lower.
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
 - Exits include logic decay, market-overprice exits, final-60s defensive
   take-profit, final-30s profit protection, and final-15s forced risk exit.
