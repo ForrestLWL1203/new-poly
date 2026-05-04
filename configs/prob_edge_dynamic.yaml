@@ -1,0 +1,54 @@
+active_profile: aggressive
+
+health:
+  lookback_windows: 50
+  check_every_windows: 5
+  min_trades: 20
+  min_win_rate: 0.55
+  min_pnl: 0.0
+  failure_streak_required: 2
+
+runtime:
+  analysis_timeout_sec: 60
+  slippage_ticks: 3
+
+scoring:
+  win_rate_score_weight: 1.0
+  drawdown_score_weight: 0.1
+
+live_safety:
+  min_seconds_between_switches: 7200
+  pause_dynamic_after_drawdown_usd: -50.0
+
+profiles:
+  aggressive:
+    entry_start_age_sec: 100
+    entry_end_age_sec: 240
+    early_required_edge: 0.14
+    core_required_edge: 0.12
+    max_entries_per_market: 4
+    min_candidate_trades: 12
+
+  balanced:
+    entry_start_age_sec: 105
+    entry_end_age_sec: 240
+    early_required_edge: 0.18
+    core_required_edge: 0.16
+    max_entries_per_market: 3
+    min_candidate_trades: 8
+
+  conservative:
+    entry_start_age_sec: 135
+    entry_end_age_sec: 240
+    early_required_edge: 0.22
+    core_required_edge: 0.20
+    max_entries_per_market: 2
+    min_candidate_trades: 4
+
+  strict:
+    entry_start_age_sec: 150
+    entry_end_age_sec: 210
+    early_required_edge: 0.22
+    core_required_edge: 0.20
+    max_entries_per_market: 2
+    min_candidate_trades: 3

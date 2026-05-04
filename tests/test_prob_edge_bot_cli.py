@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import datetime as dt
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from scripts.run_prob_edge_bot import (
     build_runtime_options,
     choose_settlement,
     is_dvol_stale,
+    prune_jsonl_by_retention,
 )
 from new_poly.strategy.prob_edge import StrategyDecision
 from new_poly.trading.execution import ExecutionResult
@@ -38,6 +40,7 @@ def test_live_mode_defaults_analysis_logs_off() -> None:
 
     assert opts.mode == "live"
     assert opts.analysis_logs is False
+    assert opts.dynamic_params is False
 
 
 def test_analysis_log_flags_override_mode_defaults() -> None:
@@ -46,6 +49,51 @@ def test_analysis_log_flags_override_mode_defaults() -> None:
 
     assert build_runtime_options(paper_args).analysis_logs is False
     assert build_runtime_options(live_args).analysis_logs is True
+
+
+def test_dynamic_params_cli_options_are_explicit() -> None:
+    args = build_arg_parser().parse_args([
+        "--once",
+        "--dynamic-params",
+        "--dynamic-config",
+        "configs/prob_edge_dynamic.yaml",
+        "--dynamic-state",
+        "data/custom-dynamic-state.json",
+    ])
+    opts = build_runtime_options(args)
+
+    assert opts.dynamic_params is True
+    assert str(opts.dynamic_config).endswith("configs/prob_edge_dynamic.yaml")
+    assert str(opts.dynamic_state).endswith("data/custom-dynamic-state.json")
+
+
+def test_log_retention_defaults_to_24_hours() -> None:
+    args = build_arg_parser().parse_args(["--once"])
+    opts = build_runtime_options(args)
+
+    assert opts.log_retention_hours == 24.0
+
+
+def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Path) -> None:
+    path = tmp_path / "run.jsonl"
+    path.write_text(
+        "\n".join([
+            '{"ts":"2026-05-03T00:00:00+00:00","event":"old"}',
+            '{"ts":"2026-05-04T01:00:00+00:00","event":"recent"}',
+            '{"event":"no_ts"}',
+            "not-json",
+        ])
+        + "\n",
+    )
+
+    removed = prune_jsonl_by_retention(path, retention_hours=24.0, now=dt.datetime(2026, 5, 4, 2, 0, tzinfo=dt.timezone.utc))
+
+    assert removed == 1
+    text = path.read_text()
+    assert '"event":"old"' not in text
+    assert '"event":"recent"' in text
+    assert '{"event":"no_ts"}' in text
+    assert "not-json" in text
 
 
 def test_live_mode_requires_second_guard() -> None:

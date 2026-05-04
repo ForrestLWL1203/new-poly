@@ -88,6 +88,8 @@ Config files:
   candidate from the first 96-window replay. It uses `100-240s` entry timing,
   `0.14/0.12` early/core edge thresholds, `max_entries_per_market=4`, and
   `$1` notional/depth.
+- `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
+  profile set. It is disabled unless `--dynamic-params` is passed.
 
 Config knobs include:
 
@@ -268,3 +270,112 @@ long-running live mode to keep debug-style fields disabled.
 
 The bot does not log private keys, API secrets, signed order payloads, or full
 order books.
+
+By default, strategy JSONL files are pruned by row timestamp:
+
+- `--log-retention-hours 24` is the default.
+- Pruning runs when the logger opens and after each completed window.
+- Rows without a parseable `ts` are kept to avoid accidental data loss.
+- Use `--log-retention-hours 0` to disable pruning for archival runs.
+
+## Dynamic Signal Parameters
+
+The bot can optionally run a window-bound dynamic parameter governor:
+
+```bash
+python3 scripts/run_prob_edge_bot.py \
+  --config configs/prob_edge_aggressive.yaml \
+  --mode paper \
+  --dynamic-params \
+  --dynamic-config configs/prob_edge_dynamic.yaml \
+  --dynamic-state data/prob-edge-dynamic-state.json \
+  --windows 96 \
+  --jsonl data/prob-edge-bot-paper-aggressive-dynamic-96w.jsonl
+```
+
+This feature is a risk governor, not a profit maximizer. It only changes:
+
+```text
+entry_start_age_sec
+entry_end_age_sec
+early_required_edge
+core_required_edge
+max_entries_per_market
+```
+
+It never changes notional size, depth notional, exit thresholds, FAK retry
+settings, or volatility settings.
+
+Default behavior:
+
+- Every 5 completed windows, it launches a background analysis task.
+- The analysis uses the last 50 completed windows from the strategy JSONL.
+- Health requires at least 20 closed trades, win rate at least 55%, and
+  non-negative total PnL.
+- Two consecutive failed health checks are required before a profile switch can
+  be scheduled.
+- Candidate profiles are replayed with 3-tick BUY/SELL slippage. This is an
+  intentional robustness bias, not a claim that live FAK normally slips 3 ticks.
+- Profile changes are applied only at the next window boundary.
+- MVP recovery is disabled: the governor can move to a more conservative
+  profile, but it does not automatically move back to aggressive.
+
+Dynamic logs:
+
+- `dynamic_check`: health metrics, failed streak, action, and candidate results.
+- `config_update`: old/new profile, applied window, health snapshot, and changed
+  signal parameters.
+- `dynamic_error`: fail-closed error path. The bot keeps the current profile.
+
+Dynamic state:
+
+`--dynamic-state` points at a small JSON file that survives restarts:
+
+```json
+{
+  "active_profile": "aggressive",
+  "pending_profile": null,
+  "switched_at_window_id": null,
+  "switched_at_ts": null,
+  "failed_health_checks": 0,
+  "last_check_window_id": null,
+  "last_check_result": {},
+  "switch_history": []
+}
+```
+
+The state file is intentionally separate from the main strategy config. The
+strategy config remains the startup baseline; the dynamic state records which
+profile is currently active, whether a switch is pending for the next window,
+and why previous switches happened.
+
+How to read dynamic output:
+
+- `dynamic_check` with `action=no_change`: current profile is healthy.
+- `dynamic_check` with `action=wait_for_confirmation`: one health check failed,
+  but no switch is allowed yet.
+- `dynamic_check` with `action=switch_pending`: a safer profile has been chosen
+  and will apply at the next window boundary.
+- `config_update`: the pending profile actually became active.
+- `dynamic_error`: analysis failed closed; current parameters remain active.
+
+Live mode keeps dynamic parameters off unless `--dynamic-params` is explicitly
+provided. Live dynamic switching also enforces a 2-hour switch cooldown and a
+drawdown pause threshold from `configs/prob_edge_dynamic.yaml`.
+
+Recommended first test:
+
+```bash
+python3 scripts/run_prob_edge_bot.py \
+  --config configs/prob_edge_aggressive.yaml \
+  --mode paper \
+  --dynamic-params \
+  --dynamic-config configs/prob_edge_dynamic.yaml \
+  --dynamic-state data/prob-edge-dynamic-state.json \
+  --windows 120 \
+  --jsonl data/prob-edge-bot-paper-aggressive-dynamic-120w.jsonl
+```
+
+This is long enough for the first 50-window lookback plus multiple 5-window
+health checks. Do not enable dynamic parameters in live mode until this paper
+run has been reviewed.

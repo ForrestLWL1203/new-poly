@@ -9,7 +9,7 @@ import datetime as dt
 import json
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,16 @@ from new_poly.market.deribit import fetch_dvol_snapshot
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
+from new_poly.backtest.prob_edge_replay import BacktestConfig
+from new_poly.strategy.dynamic_params import (
+    DynamicConfig,
+    DynamicDecision,
+    DynamicState,
+    analyze_dynamic_params,
+    load_dynamic_config,
+    load_dynamic_state,
+    save_dynamic_state,
+)
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.clob_client import prefetch_order_params
@@ -42,6 +52,8 @@ from scripts.collect_prob_edge_data import (
 )
 
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "prob_edge_mvp.yaml"
+DEFAULT_DYNAMIC_CONFIG = REPO_ROOT / "configs" / "prob_edge_dynamic.yaml"
+DEFAULT_DYNAMIC_STATE = REPO_ROOT / "data" / "prob-edge-dynamic-state.json"
 
 
 @dataclass(frozen=True)
@@ -65,13 +77,20 @@ class RuntimeOptions:
     config: BotConfig
     live_risk_ack: bool = False
     analysis_logs: bool = False
+    dynamic_params: bool = False
+    dynamic_config: Path = DEFAULT_DYNAMIC_CONFIG
+    dynamic_state: Path = DEFAULT_DYNAMIC_STATE
+    log_retention_hours: float | None = 24.0
 
 
 class JsonlLogger:
-    def __init__(self, path: Path | None) -> None:
+    def __init__(self, path: Path | None, *, retention_hours: float | None = 24.0) -> None:
         self.handle = None
+        self.path = path
+        self.retention_hours = retention_hours
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
+            prune_jsonl_by_retention(path, retention_hours=retention_hours)
             self.handle = path.open("a", encoding="utf-8")
 
     def write(self, row: dict[str, Any]) -> None:
@@ -84,6 +103,56 @@ class JsonlLogger:
     def close(self) -> None:
         if self.handle is not None:
             self.handle.close()
+
+    def prune(self) -> int:
+        if self.path is None:
+            return 0
+        if self.handle is not None:
+            self.handle.flush()
+            self.handle.close()
+            self.handle = None
+        removed = prune_jsonl_by_retention(self.path, retention_hours=self.retention_hours)
+        self.handle = self.path.open("a", encoding="utf-8")
+        return removed
+
+
+def _parse_row_ts(value: Any) -> dt.datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def prune_jsonl_by_retention(path: Path, *, retention_hours: float | None, now: dt.datetime | None = None) -> int:
+    if retention_hours is None or retention_hours <= 0 or not path.exists():
+        return 0
+    now_utc = now or dt.datetime.now(dt.timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=dt.timezone.utc)
+    cutoff = now_utc.astimezone(dt.timezone.utc) - dt.timedelta(hours=float(retention_hours))
+    kept: list[str] = []
+    removed = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            kept.append(line)
+            continue
+        row_ts = _parse_row_ts(row.get("ts")) if isinstance(row, dict) else None
+        if row_ts is not None and row_ts < cutoff:
+            removed += 1
+            continue
+        kept.append(line)
+    if removed:
+        path.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+    return removed
 
 
 def _deep_get(data: dict[str, Any], path: tuple[str, ...], default: Any) -> Any:
@@ -194,6 +263,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval-sec", type=float)
     parser.add_argument("--analysis-logs", dest="analysis_logs", action="store_true", default=None)
     parser.add_argument("--no-analysis-logs", dest="analysis_logs", action="store_false")
+    parser.add_argument("--dynamic-params", action="store_true", help="Enable window-bound dynamic signal parameter updates")
+    parser.add_argument("--dynamic-config", type=Path, default=DEFAULT_DYNAMIC_CONFIG)
+    parser.add_argument("--dynamic-state", type=Path, default=DEFAULT_DYNAMIC_STATE)
+    parser.add_argument("--log-retention-hours", type=float, default=24.0, help="Prune JSONL rows older than this many hours; <=0 disables pruning")
     return parser
 
 
@@ -220,6 +293,10 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         config=cfg,
         live_risk_ack=args.i_understand_live_risk,
         analysis_logs=(args.analysis_logs if args.analysis_logs is not None else args.mode == "paper"),
+        dynamic_params=bool(args.dynamic_params),
+        dynamic_config=args.dynamic_config,
+        dynamic_state=args.dynamic_state,
+        log_retention_hours=(float(args.log_retention_hours) if args.log_retention_hours and args.log_retention_hours > 0 else None),
     )
 
 
@@ -248,6 +325,12 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
             "max_dvol_age_sec": cfg.max_dvol_age_sec,
             "settlement_boundary_usd": cfg.settlement_boundary_usd,
         },
+        "dynamic_params": {
+            "enabled": options.dynamic_params,
+            "config": str(options.dynamic_config) if options.dynamic_params else None,
+            "state": str(options.dynamic_state) if options.dynamic_params else None,
+        },
+        "log_retention_hours": options.log_retention_hours,
     }
 
 
@@ -334,6 +417,60 @@ def choose_settlement(
     }
 
 
+def _bot_config_with_edge(cfg: BotConfig, edge: EdgeConfig) -> BotConfig:
+    return BotConfig(
+        edge=edge,
+        execution=cfg.execution,
+        amount_usd=cfg.amount_usd,
+        interval_sec=cfg.interval_sec,
+        warmup_timeout_sec=cfg.warmup_timeout_sec,
+        dvol_refresh_sec=cfg.dvol_refresh_sec,
+        max_dvol_age_sec=cfg.max_dvol_age_sec,
+        settlement_boundary_usd=cfg.settlement_boundary_usd,
+    )
+
+
+def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
+    return BacktestConfig(
+        amount_usd=cfg.amount_usd,
+        early_required_edge=cfg.edge.early_required_edge,
+        core_required_edge=cfg.edge.core_required_edge,
+        entry_start_age_sec=cfg.edge.entry_start_age_sec,
+        entry_end_age_sec=cfg.edge.entry_end_age_sec,
+        max_book_age_ms=cfg.edge.max_book_age_ms,
+        max_entries_per_market=cfg.edge.max_entries_per_market,
+        late_entry_enabled=cfg.edge.late_entry_enabled,
+        buy_slippage_ticks=0.0,
+        sell_slippage_ticks=0.0,
+        settlement_boundary_usd=cfg.settlement_boundary_usd,
+    )
+
+
+async def _run_dynamic_analysis_task(
+    *,
+    jsonl_path: Path,
+    dynamic_cfg: DynamicConfig,
+    dynamic_state: DynamicState,
+    base_config: BacktestConfig,
+    mode: str,
+    current_window_id: str,
+    realized_drawdown: float | None,
+) -> tuple[DynamicDecision, DynamicState]:
+    return await asyncio.wait_for(
+        asyncio.to_thread(
+            analyze_dynamic_params,
+            jsonl_path,
+            dynamic_cfg,
+            dynamic_state,
+            base_config,
+            mode=mode,
+            current_window_id=current_window_id,
+            realized_drawdown=realized_drawdown,
+        ),
+        timeout=dynamic_cfg.analysis_timeout_sec,
+    )
+
+
 def _snapshot(window, prices: WindowPrices, feed: BinancePriceFeed, stream: PriceStream, cfg: BotConfig, sigma_eff: float | None) -> tuple[MarketSnapshot, dict[str, Any]]:
     now = dt.datetime.now(dt.timezone.utc)
     age_sec = (now - window.start_time).total_seconds()
@@ -386,7 +523,24 @@ def _snapshot(window, prices: WindowPrices, feed: BinancePriceFeed, stream: Pric
 
 async def run(options: RuntimeOptions) -> int:
     cfg = options.config
-    logger = JsonlLogger(options.jsonl)
+    logger = JsonlLogger(options.jsonl, retention_hours=options.log_retention_hours)
+    dynamic_cfg: DynamicConfig | None = None
+    dynamic_state: DynamicState | None = None
+    dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None = None
+    dynamic_start_error: str | None = None
+    if options.dynamic_params:
+        try:
+            dynamic_cfg = load_dynamic_config(options.dynamic_config)
+            dynamic_state = load_dynamic_state(options.dynamic_state, default_profile=dynamic_cfg.active_profile)
+            if dynamic_state.active_profile not in dynamic_cfg.profile_names():
+                dynamic_state = replace(dynamic_state, active_profile=dynamic_cfg.active_profile, pending_profile=None)
+            cfg = _bot_config_with_edge(cfg, dynamic_cfg.profile(dynamic_state.active_profile).apply_to(cfg.edge))
+            options = replace(options, config=cfg)
+            save_dynamic_state(options.dynamic_state, dynamic_state)
+        except Exception as exc:
+            dynamic_cfg = None
+            dynamic_state = None
+            dynamic_start_error = str(exc)
     feed = BinancePriceFeed("btcusdt")
     series = MarketSeries.from_known("btc-updown-5m")
     stream = PriceStream(on_price=_noop_price_update)
@@ -413,6 +567,15 @@ async def run(options: RuntimeOptions) -> int:
     try:
         if options.analysis_logs:
             logger.write(_config_log_row(options))
+        if dynamic_start_error is not None:
+            logger.write({
+                "ts": dt.datetime.now().astimezone().isoformat(),
+                "event": "dynamic_error",
+                "mode": options.mode,
+                "error_type": "startup",
+                "message": dynamic_start_error,
+                "action": "keep_current",
+            })
         window = find_initial_window(series)
         prices = WindowPrices()
         state.reset_for_market(window.slug)
@@ -426,6 +589,28 @@ async def run(options: RuntimeOptions) -> int:
             await asyncio.sleep(0.1)
 
         while True:
+            if dynamic_task is not None and dynamic_task.done():
+                try:
+                    decision, dynamic_state = dynamic_task.result()
+                    if dynamic_state is not None:
+                        save_dynamic_state(options.dynamic_state, dynamic_state)
+                    logger.write(decision.to_log_row(
+                        mode=options.mode,
+                        window_id=window.slug,
+                        failed_health_checks=dynamic_state.failed_health_checks if dynamic_state is not None else 0,
+                    ))
+                except Exception as exc:
+                    logger.write({
+                        "ts": dt.datetime.now().astimezone().isoformat(),
+                        "event": "dynamic_error",
+                        "mode": options.mode,
+                        "market_slug": window.slug,
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                        "action": "keep_current",
+                    })
+                finally:
+                    dynamic_task = None
             now = dt.datetime.now(dt.timezone.utc)
             age_sec = (now - window.start_time).total_seconds()
             await refresh_k_price(window, prices, age_sec)
@@ -539,9 +724,99 @@ async def run(options: RuntimeOptions) -> int:
                     })
                 if prices.k_price is not None:
                     completed_windows += 1
+                removed_log_rows = logger.prune()
+                if removed_log_rows:
+                    logger.write({
+                        "ts": dt.datetime.now().astimezone().isoformat(),
+                        "event": "log_retention",
+                        "mode": options.mode,
+                        "retention_hours": options.log_retention_hours,
+                        "removed_rows": removed_log_rows,
+                    })
+                if (
+                    dynamic_cfg is not None
+                    and dynamic_state is not None
+                    and options.jsonl is not None
+                    and completed_windows > 0
+                    and completed_windows % dynamic_cfg.check_every_windows == 0
+                    and dynamic_task is None
+                ):
+                    dynamic_task = asyncio.create_task(_run_dynamic_analysis_task(
+                        jsonl_path=options.jsonl,
+                        dynamic_cfg=dynamic_cfg,
+                        dynamic_state=dynamic_state,
+                        base_config=_backtest_base_config(cfg),
+                        mode=options.mode,
+                        current_window_id=window.slug,
+                        realized_drawdown=state.realized_pnl,
+                    ))
+                elif dynamic_cfg is not None and dynamic_state is not None and options.jsonl is None and completed_windows > 0 and completed_windows % dynamic_cfg.check_every_windows == 0:
+                    logger.write({
+                        "ts": dt.datetime.now().astimezone().isoformat(),
+                        "event": "dynamic_error",
+                        "mode": options.mode,
+                        "market_slug": window.slug,
+                        "error_type": "missing_jsonl",
+                        "message": "--dynamic-params requires --jsonl for analysis",
+                        "action": "keep_current",
+                    })
                 if options.windows is not None and completed_windows >= options.windows:
                     return 0
-                window = find_following_window(window, series)
+                next_window = find_following_window(window, series)
+                if dynamic_cfg is not None and dynamic_state is not None and dynamic_state.pending_profile is not None:
+                    try:
+                        old_profile = dynamic_state.active_profile
+                        old_edge = cfg.edge
+                        profile = dynamic_cfg.profile(dynamic_state.pending_profile)
+                        cfg = _bot_config_with_edge(cfg, profile.apply_to(cfg.edge))
+                        now_ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat()
+                        history = list(dynamic_state.switch_history)
+                        history.append({
+                            "from_profile": old_profile,
+                            "to_profile": profile.name,
+                            "applied_at_window": next_window.slug,
+                            "switched_at_ts": now_ts,
+                            "health_check": dynamic_state.last_check_result,
+                        })
+                        dynamic_state = replace(
+                            dynamic_state,
+                            active_profile=profile.name,
+                            pending_profile=None,
+                            switched_at_window_id=next_window.slug,
+                            switched_at_ts=now_ts,
+                            switch_history=history,
+                        )
+                        save_dynamic_state(options.dynamic_state, dynamic_state)
+                        logger.write({
+                            "ts": now_ts,
+                            "event": "config_update",
+                            "mode": options.mode,
+                            "from_profile": old_profile,
+                            "to_profile": profile.name,
+                            "applied_at_window": next_window.slug,
+                            "reason": "dynamic_params",
+                            "health_check": dynamic_state.last_check_result.get("health", dynamic_state.last_check_result),
+                            "candidate_results": dynamic_state.last_check_result.get("candidate_results", []),
+                            "old_signal_params": {
+                                "entry_start_age_sec": old_edge.entry_start_age_sec,
+                                "entry_end_age_sec": old_edge.entry_end_age_sec,
+                                "early_required_edge": old_edge.early_required_edge,
+                                "core_required_edge": old_edge.core_required_edge,
+                                "max_entries_per_market": old_edge.max_entries_per_market,
+                            },
+                            "new_signal_params": profile.signal_params(),
+                        })
+                    except Exception as exc:
+                        logger.write({
+                            "ts": dt.datetime.now().astimezone().isoformat(),
+                            "event": "dynamic_error",
+                            "mode": options.mode,
+                            "market_slug": next_window.slug,
+                            "error_type": type(exc).__name__,
+                            "message": str(exc),
+                            "action": "keep_current",
+                        })
+                window = next_window
                 prices = WindowPrices()
                 state.reset_for_market(window.slug)
                 await asyncio.wait_for(stream.switch_tokens([window.up_token, window.down_token]), timeout=8.0)

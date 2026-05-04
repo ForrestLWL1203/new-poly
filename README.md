@@ -164,6 +164,9 @@ Current parameter files:
   candidate from the first 96-window replay. It uses `100-240s` entry timing,
   `0.14/0.12` early/core edge thresholds, `max_entries_per_market=4`, and
   `$1` paper notional/depth.
+- `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
+  profiles and health thresholds. It only changes entry timing/edge/max-entry
+  settings, and only at window boundaries.
 
 Longer aggressive paper run:
 
@@ -174,6 +177,31 @@ python3 scripts/run_prob_edge_bot.py \
   --windows 48 \
   --jsonl data/prob-edge-bot-paper-aggressive-48w.jsonl
 ```
+
+Longer aggressive paper run with dynamic risk governor:
+
+```bash
+python3 scripts/run_prob_edge_bot.py \
+  --config configs/prob_edge_aggressive.yaml \
+  --mode paper \
+  --dynamic-params \
+  --dynamic-config configs/prob_edge_dynamic.yaml \
+  --dynamic-state data/prob-edge-dynamic-state.json \
+  --windows 96 \
+  --jsonl data/prob-edge-bot-paper-aggressive-dynamic-96w.jsonl
+```
+
+For the first dynamic-parameter test, prefer `--windows 120`: the governor uses
+the last 50 complete windows and checks every 5 windows, so 120 windows gives
+enough room to observe multiple health checks and any `config_update` events.
+Review `dynamic_check`, `config_update`, and `dynamic_error` rows before trying
+dynamic parameters in live mode.
+
+Strategy JSONL logs are pruned by timestamp by default:
+
+- Default retention: 24 hours.
+- Pruning runs at startup and after each completed window.
+- Disable pruning with `--log-retention-hours 0`.
 
 See [docs/prob_edge_strategy_bot.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_strategy_bot.md).
 
