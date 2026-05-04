@@ -43,8 +43,8 @@ python3 scripts/run_prob_edge_bot.py \
 ## Default Rules
 
 - New entries use phase-specific edge thresholds:
-  `40 <= age < 120` requires `early_required_edge = 0.10`;
-  `120 <= age < 240` requires `core_required_edge = 0.06`;
+  `90 <= age < 120` requires `early_required_edge = 0.12`;
+  `120 <= age < 240` requires `core_required_edge = 0.08`;
   `240 <= age <= 270` is disabled by default with `late_entry_enabled = false`.
 - No new entries in the final 30 seconds.
 - Default notional is `$5`.

@@ -21,6 +21,8 @@ Old strategy knowledge has not been copied into this README.
   probability-edge data collector usage and JSONL schema notes.
 - [docs/prob_edge_strategy_bot.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_strategy_bot.md):
   first probability-edge strategy bot usage and paper/live mode notes.
+- [docs/prob_edge_backtest.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_backtest.md):
+  offline replay backtest usage and interpretation limits.
 
 ## Core Infrastructure Notes
 
@@ -133,7 +135,7 @@ and `--i-understand-live-risk` are provided.
 
 Current default strategy behavior:
 
-- Entry thresholds are time phased: `0.10` for `40 <= age < 120`, `0.06` for
+- Entry thresholds are time phased: `0.12` for `90 <= age < 120`, `0.08` for
   `120 <= age < 240`, and late entry is disabled from `240s` onward.
 - FAK entry decisions use size-aware `ask_avg` for edge, require
   `ask_limit <= model_prob - required_edge`, and send BUY hints as
@@ -151,6 +153,21 @@ python3 scripts/run_prob_edge_bot.py --once
 ```
 
 See [docs/prob_edge_strategy_bot.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_strategy_bot.md).
+
+### Probability Edge Backtest
+
+Replay collector JSONL through the current strategy state machine:
+
+```bash
+python3 scripts/backtest_prob_edge.py \
+  --jsonl data/prob-edge-collector-96-20260503T162542Z.kprice-ok.jsonl
+```
+
+The backtest uses collector summary fields (`ask_avg`, `ask_limit`, `bid_avg`,
+`bid_limit`) rather than full order-book replay, so it is suitable for
+parameter screening and strategy-shape validation, not exact fill simulation.
+Add `--slippage-ticks N` to simulate FAK fills moving by `N` price ticks
+(`0.01` per tick by default) against both BUY and SELL.
 
 ### Reusable Modules
 

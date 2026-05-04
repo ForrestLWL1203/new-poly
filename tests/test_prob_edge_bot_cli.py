@@ -47,8 +47,9 @@ def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
     opts = build_runtime_options(args)
 
     assert not hasattr(opts.config.edge, "required_edge")
-    assert opts.config.edge.early_required_edge == 0.10
-    assert opts.config.edge.core_required_edge == 0.06
+    assert opts.config.edge.early_required_edge == 0.12
+    assert opts.config.edge.core_required_edge == 0.08
+    assert opts.config.edge.entry_start_age_sec == 90.0
     assert opts.config.edge.late_entry_enabled is False
     assert opts.config.edge.defensive_profit_min == 0.03
     assert opts.config.edge.protection_profit_min == 0.01

@@ -10,11 +10,11 @@ from .state import PositionSnapshot, StrategyState
 
 @dataclass(frozen=True)
 class EdgeConfig:
-    early_required_edge: float = 0.10
-    core_required_edge: float = 0.06
+    early_required_edge: float = 0.12
+    core_required_edge: float = 0.08
     model_decay_buffer: float = 0.02
     overprice_buffer: float = 0.02
-    entry_start_age_sec: float = 40.0
+    entry_start_age_sec: float = 90.0
     entry_end_age_sec: float = 270.0
     final_no_entry_remaining_sec: float = 30.0
     max_entries_per_market: int = 2

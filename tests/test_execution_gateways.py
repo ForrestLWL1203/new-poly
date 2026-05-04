@@ -208,6 +208,56 @@ def test_live_sell_no_balance_is_not_an_order_attempt(monkeypatch) -> None:
     assert gateway.calls == []
 
 
+def test_live_post_matched_without_fill_fields_is_success(monkeypatch) -> None:
+    class Client:
+        def create_market_order(self, args, options=None):
+            return {"signed": True}
+
+        def post_order(self, signed, order_type):
+            return {
+                "orderID": "ord-matched",
+                "success": True,
+                "status": "MATCHED",
+                "takingAmount": "1.6667",
+                "makingAmount": "1.0",
+            }
+
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: Client())
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True)
+
+    result = gateway._post("up", 1.0, "BUY", 0.60)
+
+    assert result.success is True
+    assert result.order_id == "ord-matched"
+    assert result.filled_size == pytest.approx(1.6667)
+    assert result.avg_price == pytest.approx(1.0 / 1.6667)
+
+
+def test_live_post_success_status_without_fill_fields_is_success(monkeypatch) -> None:
+    class Client:
+        def create_market_order(self, args, options=None):
+            return {"signed": True}
+
+        def post_order(self, signed, order_type):
+            return {
+                "orderID": "ord-success",
+                "success": True,
+                "status": "SUCCESS",
+            }
+
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: Client())
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True)
+
+    result = gateway._post("up", 1.0, "BUY", 0.50)
+
+    assert result.success is True
+    assert result.order_id == "ord-success"
+    assert result.filled_size == pytest.approx(2.0)
+    assert result.avg_price == pytest.approx(0.50)
+
+
 def test_paper_buy_uses_depth_limit_not_average() -> None:
     async def scenario() -> None:
         stream = FakeStream()

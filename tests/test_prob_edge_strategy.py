@@ -138,7 +138,7 @@ def test_entry_rejects_depth_limit_above_formula_cap() -> None:
 
 
 def test_entry_uses_phase_edges_and_disables_late() -> None:
-    cfg = EdgeConfig(early_required_edge=0.10, core_required_edge=0.06)
+    cfg = EdgeConfig(early_required_edge=0.10, core_required_edge=0.06, entry_start_age_sec=40.0)
     state = StrategyState(current_market_slug="m1")
     base = dict(
         market_slug="m1",
