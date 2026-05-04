@@ -81,6 +81,7 @@ class RuntimeOptions:
     dynamic_config: Path = DEFAULT_DYNAMIC_CONFIG
     dynamic_state: Path = DEFAULT_DYNAMIC_STATE
     log_retention_hours: float | None = 24.0
+    log_prune_every_windows: int = 5
 
 
 class JsonlLogger:
@@ -105,7 +106,7 @@ class JsonlLogger:
             self.handle.close()
 
     def prune(self) -> int:
-        if self.path is None:
+        if self.path is None or self.retention_hours is None or self.retention_hours <= 0:
             return 0
         if self.handle is not None:
             self.handle.flush()
@@ -267,6 +268,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dynamic-config", type=Path, default=DEFAULT_DYNAMIC_CONFIG)
     parser.add_argument("--dynamic-state", type=Path, default=DEFAULT_DYNAMIC_STATE)
     parser.add_argument("--log-retention-hours", type=float, default=24.0, help="Prune JSONL rows older than this many hours; <=0 disables pruning")
+    parser.add_argument("--log-prune-every-windows", type=int, default=5, help="Run JSONL retention pruning every N completed windows")
     return parser
 
 
@@ -285,6 +287,8 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
+    if args.dynamic_params and args.jsonl is None:
+        raise ValueError("--dynamic-params requires --jsonl for analysis input")
     return RuntimeOptions(
         mode=args.mode,
         windows=args.windows,
@@ -297,6 +301,7 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         dynamic_config=args.dynamic_config,
         dynamic_state=args.dynamic_state,
         log_retention_hours=(float(args.log_retention_hours) if args.log_retention_hours and args.log_retention_hours > 0 else None),
+        log_prune_every_windows=max(1, int(args.log_prune_every_windows)),
     )
 
 
@@ -331,7 +336,18 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
             "state": str(options.dynamic_state) if options.dynamic_params else None,
         },
         "log_retention_hours": options.log_retention_hours,
+        "log_prune_every_windows": options.log_prune_every_windows,
     }
+
+
+def _dynamic_health_payload(last_check_result: dict[str, Any]) -> dict[str, Any] | None:
+    value = last_check_result.get("health")
+    return value if isinstance(value, dict) else None
+
+
+def _dynamic_candidate_payload(last_check_result: dict[str, Any]) -> list[Any]:
+    value = last_check_result.get("candidate_results")
+    return value if isinstance(value, list) else []
 
 
 def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
@@ -381,10 +397,12 @@ def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str,
     if row.get("event") != "tick":
         return True
     reason = decision.get("reason")
-    one_per_window_reasons = {"outside_entry_time", "max_entries"}
-    if decision.get("action") != "skip" or reason not in one_per_window_reasons:
+    one_per_window_reasons = {"outside_entry_time", "max_entries", "final_no_entry"}
+    one_per_window_phase_reasons = {"edge_too_small"}
+    if decision.get("action") != "skip" or (reason not in one_per_window_reasons and reason not in one_per_window_phase_reasons):
         return True
-    key = (str(row.get("market_slug") or ""), str(reason))
+    phase_suffix = f":{decision.get('phase')}" if reason in one_per_window_phase_reasons else ""
+    key = (str(row.get("market_slug") or ""), f"{reason}{phase_suffix}")
     if key in seen_repetitive_skips:
         return False
     seen_repetitive_skips.add(key)
@@ -724,15 +742,17 @@ async def run(options: RuntimeOptions) -> int:
                     })
                 if prices.k_price is not None:
                     completed_windows += 1
-                removed_log_rows = logger.prune()
-                if removed_log_rows:
-                    logger.write({
-                        "ts": dt.datetime.now().astimezone().isoformat(),
-                        "event": "log_retention",
-                        "mode": options.mode,
-                        "retention_hours": options.log_retention_hours,
-                        "removed_rows": removed_log_rows,
-                    })
+                if completed_windows > 0 and completed_windows % options.log_prune_every_windows == 0:
+                    removed_log_rows = logger.prune()
+                    if removed_log_rows:
+                        logger.write({
+                            "ts": dt.datetime.now().astimezone().isoformat(),
+                            "event": "log_retention",
+                            "mode": options.mode,
+                            "retention_hours": options.log_retention_hours,
+                            "prune_every_windows": options.log_prune_every_windows,
+                            "removed_rows": removed_log_rows,
+                        })
                 if (
                     dynamic_cfg is not None
                     and dynamic_state is not None
@@ -748,7 +768,7 @@ async def run(options: RuntimeOptions) -> int:
                         base_config=_backtest_base_config(cfg),
                         mode=options.mode,
                         current_window_id=window.slug,
-                        realized_drawdown=state.realized_pnl,
+                        realized_drawdown=state.drawdown,
                     ))
                 elif dynamic_cfg is not None and dynamic_state is not None and options.jsonl is None and completed_windows > 0 and completed_windows % dynamic_cfg.check_every_windows == 0:
                     logger.write({
@@ -795,8 +815,8 @@ async def run(options: RuntimeOptions) -> int:
                             "to_profile": profile.name,
                             "applied_at_window": next_window.slug,
                             "reason": "dynamic_params",
-                            "health_check": dynamic_state.last_check_result.get("health", dynamic_state.last_check_result),
-                            "candidate_results": dynamic_state.last_check_result.get("candidate_results", []),
+                            "health_check": _dynamic_health_payload(dynamic_state.last_check_result),
+                            "candidate_results": _dynamic_candidate_payload(dynamic_state.last_check_result),
                             "old_signal_params": {
                                 "entry_start_age_sec": old_edge.entry_start_age_sec,
                                 "entry_end_age_sec": old_edge.entry_end_age_sec,

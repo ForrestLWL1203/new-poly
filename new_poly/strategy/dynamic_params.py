@@ -75,7 +75,7 @@ class DynamicConfig:
         return [profile.name for profile in self.profiles]
 
 
-@dataclass
+@dataclass(frozen=True)
 class DynamicState:
     active_profile: str
     pending_profile: str | None = None
@@ -397,6 +397,7 @@ def _score_candidates(candidates: Iterable[CandidateResult], cfg: DynamicConfig,
         except ValueError:
             continue
         if _profile_index(cfg, candidate.profile) < active_index:
+            scored.append(replace(candidate.with_score(cfg, profile), safe=False, rejection_reason="more_aggressive_than_active"))
             continue
         scored.append(candidate.with_score(cfg, profile))
     return scored
@@ -589,6 +590,8 @@ def analyze_dynamic_params(
         health = replace(health, healthy=False, reasons=sorted(set([*health.reasons, "insufficient_windows"])))
         return DynamicDecision("insufficient_data", "insufficient_windows", state.active_profile, None, health, []), replace(state, last_check_window_id=current_window_id, last_check_result=_check_result_payload(health, [], action="insufficient_data", reason="insufficient_windows"))
     if health.healthy:
+        return decide_dynamic_update(health, [], cfg, state, mode=mode, current_window_id=current_window_id, realized_drawdown=realized_drawdown)
+    if state.failed_health_checks + 1 < cfg.failure_streak_required:
         return decide_dynamic_update(health, [], cfg, state, mode=mode, current_window_id=current_window_id, realized_drawdown=realized_drawdown)
     candidates = candidate_results_from_rows(recent, cfg, base)
     return decide_dynamic_update(health, candidates, cfg, state, mode=mode, current_window_id=current_window_id, realized_drawdown=realized_drawdown)

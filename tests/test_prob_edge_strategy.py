@@ -35,6 +35,18 @@ def test_binary_probabilities_sum_to_one() -> None:
     assert math.isclose(probs.up + probs.down, 1.0, abs_tol=1e-12)
 
 
+def test_strategy_state_tracks_peak_pnl_and_drawdown() -> None:
+    state = StrategyState()
+    state.record_entry(PositionSnapshot("m1", "up", "up-token", 1.0, 0.20, 10.0, 0.5, 0.3))
+    state.record_exit(0.70, "take_profit")
+    state.record_entry(PositionSnapshot("m1", "up", "up-token", 2.0, 0.50, 10.0, 0.5, 0.0))
+    state.record_exit(0.20, "loss")
+
+    assert math.isclose(state.realized_pnl, 2.0)
+    assert math.isclose(state.peak_pnl, 5.0)
+    assert math.isclose(state.drawdown, -3.0)
+
+
 def test_entry_rejects_warmup_and_existing_position() -> None:
     cfg = EdgeConfig()
     state = StrategyState(current_market_slug="m1")

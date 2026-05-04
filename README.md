@@ -196,12 +196,18 @@ the last 50 complete windows and checks every 5 windows, so 120 windows gives
 enough room to observe multiple health checks and any `config_update` events.
 Review `dynamic_check`, `config_update`, and `dynamic_error` rows before trying
 dynamic parameters in live mode.
+Dynamic mode requires `--jsonl` because the strategy log is used as the replay
+input. It only moves toward equal-or-more-conservative profiles; returning to a
+more aggressive profile requires resetting or editing the dynamic state file.
 
 Strategy JSONL logs are pruned by timestamp by default:
 
 - Default retention: 24 hours.
-- Pruning runs at startup and after each completed window.
+- Pruning runs at startup and every 5 completed windows by default.
 - Disable pruning with `--log-retention-hours 0`.
+- Dynamic parameter analysis needs retention to cover its lookback. The default
+  `24h` retention covers about 288 BTC 5m windows, above the default 50-window
+  dynamic lookback.
 
 See [docs/prob_edge_strategy_bot.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_strategy_bot.md).
 

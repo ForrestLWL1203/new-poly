@@ -26,12 +26,17 @@ class StrategyState:
     open_position: PositionSnapshot | None = None
     entry_count: int = 0
     realized_pnl: float = 0.0
+    peak_pnl: float = 0.0
     last_exit_reason: str | None = None
     prob_history: list[tuple[float, float]] | None = None
 
     @property
     def has_position(self) -> bool:
         return self.open_position is not None and self.open_position.exit_status == "open"
+
+    @property
+    def drawdown(self) -> float:
+        return self.realized_pnl - self.peak_pnl
 
     def reset_for_market(self, market_slug: str) -> None:
         self.current_market_slug = market_slug
@@ -50,6 +55,7 @@ class StrategyState:
             return 0.0
         pnl = (exit_price - self.open_position.entry_avg_price) * self.open_position.filled_shares
         self.realized_pnl += pnl
+        self.peak_pnl = max(self.peak_pnl, self.realized_pnl)
         self.open_position.exit_status = reason
         self.open_position = None
         self.last_exit_reason = reason
@@ -62,6 +68,7 @@ class StrategyState:
         settlement_value = 1.0 if self.open_position.token_side == winning_side else 0.0
         pnl = (settlement_value - self.open_position.entry_avg_price) * self.open_position.filled_shares
         self.realized_pnl += pnl
+        self.peak_pnl = max(self.peak_pnl, self.realized_pnl)
         self.open_position.exit_status = "settled"
         self.open_position = None
         self.last_exit_reason = "settled"

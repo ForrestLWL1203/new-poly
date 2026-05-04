@@ -121,8 +121,72 @@ def test_live_cooldown_blocks_switch() -> None:
     assert new_state.pending_profile is None
 
 
+def test_drawdown_pause_uses_actual_drawdown_not_cumulative_pnl() -> None:
+    state = DynamicState(active_profile="aggressive", failed_health_checks=1)
+    health = HealthCheck(windows=30, closed_trades=20, win_rate=0.40, total_pnl=-1.0, max_drawdown=-2.0, healthy=False, reasons=["pnl_negative"])
+    candidates = [CandidateResult("balanced", closed_trades=9, win_rate=0.60, total_pnl=1.2, avg_pnl_per_trade=0.133, max_drawdown=-1.0)]
+
+    decision, new_state = decide_dynamic_update(
+        health,
+        candidates,
+        _config(),
+        state,
+        mode="paper",
+        current_window_id="m45",
+        realized_drawdown=-60.0,
+    )
+
+    assert decision.action == "dynamic_paused"
+    assert new_state.pending_profile is None
+
+
+def test_no_safe_candidate_keeps_current_profile() -> None:
+    state = DynamicState(active_profile="aggressive", failed_health_checks=1)
+    health = HealthCheck(windows=30, closed_trades=20, win_rate=0.40, total_pnl=-1.0, max_drawdown=-2.0, healthy=False, reasons=["pnl_negative"])
+    candidates = [
+        CandidateResult("balanced", closed_trades=3, win_rate=1.0, total_pnl=1.0, avg_pnl_per_trade=0.333, max_drawdown=0.0),
+        CandidateResult("conservative", closed_trades=4, win_rate=0.25, total_pnl=1.0, avg_pnl_per_trade=0.25, max_drawdown=0.0),
+    ]
+
+    decision, new_state = decide_dynamic_update(health, candidates, _config(), state, mode="paper", current_window_id="m50")
+
+    assert decision.action == "no_safe_candidate"
+    assert new_state.pending_profile is None
+    assert {candidate.rejection_reason for candidate in decision.candidate_results} == {"insufficient_candidate_trades", "candidate_win_rate_low"}
+
+
+def test_current_profile_best_does_not_switch() -> None:
+    state = DynamicState(active_profile="aggressive", failed_health_checks=1)
+    health = HealthCheck(windows=30, closed_trades=20, win_rate=0.40, total_pnl=-1.0, max_drawdown=-2.0, healthy=False, reasons=["pnl_negative"])
+    candidates = [
+        CandidateResult("aggressive", closed_trades=30, win_rate=0.80, total_pnl=5.0, avg_pnl_per_trade=0.166, max_drawdown=-1.0),
+        CandidateResult("balanced", closed_trades=9, win_rate=0.60, total_pnl=1.2, avg_pnl_per_trade=0.133, max_drawdown=-1.0),
+    ]
+
+    decision, new_state = decide_dynamic_update(health, candidates, _config(), state, mode="paper", current_window_id="m55")
+
+    assert decision.action == "keep_current"
+    assert decision.selected_profile is None
+    assert new_state.pending_profile is None
+
+
+def test_more_aggressive_candidates_are_logged_but_rejected() -> None:
+    state = DynamicState(active_profile="balanced", failed_health_checks=1)
+    health = HealthCheck(windows=30, closed_trades=20, win_rate=0.40, total_pnl=-1.0, max_drawdown=-2.0, healthy=False, reasons=["pnl_negative"])
+    candidates = [
+        CandidateResult("aggressive", closed_trades=30, win_rate=0.80, total_pnl=5.0, avg_pnl_per_trade=0.166, max_drawdown=-1.0),
+        CandidateResult("conservative", closed_trades=4, win_rate=0.75, total_pnl=0.8, avg_pnl_per_trade=0.2, max_drawdown=-0.5),
+    ]
+
+    decision, _new_state = decide_dynamic_update(health, candidates, _config(), state, mode="paper", current_window_id="m60")
+
+    rejected = {candidate.profile: candidate.rejection_reason for candidate in decision.candidate_results}
+    assert rejected["aggressive"] == "more_aggressive_than_active"
+    assert decision.selected_profile == "conservative"
+
+
 def test_default_dynamic_config_file_loads_profiles() -> None:
-    cfg = load_dynamic_config(Path("configs/prob_edge_dynamic.yaml"))
+    cfg = load_dynamic_config(Path(__file__).resolve().parents[1] / "configs/prob_edge_dynamic.yaml")
 
     assert cfg.active_profile == "aggressive"
     assert cfg.lookback_windows == 50

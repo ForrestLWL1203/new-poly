@@ -275,8 +275,12 @@ By default, strategy JSONL files are pruned by row timestamp:
 
 - `--log-retention-hours 24` is the default.
 - Pruning runs when the logger opens and after each completed window.
+- Runtime pruning cadence is `--log-prune-every-windows 5` by default.
 - Rows without a parseable `ts` are kept to avoid accidental data loss.
 - Use `--log-retention-hours 0` to disable pruning for archival runs.
+- If dynamic parameters are enabled, keep retention long enough to cover the
+  dynamic lookback. Default `24h` retention covers about `288` BTC 5m windows,
+  comfortably above the default `50`-window lookback.
 
 ## Dynamic Signal Parameters
 
@@ -292,6 +296,8 @@ python3 scripts/run_prob_edge_bot.py \
   --windows 96 \
   --jsonl data/prob-edge-bot-paper-aggressive-dynamic-96w.jsonl
 ```
+
+`--dynamic-params` requires `--jsonl`; the strategy log is the analysis input.
 
 This feature is a risk governor, not a profit maximizer. It only changes:
 
@@ -319,6 +325,9 @@ Default behavior:
 - Profile changes are applied only at the next window boundary.
 - MVP recovery is disabled: the governor can move to a more conservative
   profile, but it does not automatically move back to aggressive.
+- Dynamic adjustment is monotonically de-risking. Once the active profile moves
+  to a more conservative tier, returning to a more aggressive tier requires a
+  manual reset or edit of `data/prob-edge-dynamic-state.json`.
 
 Dynamic logs:
 
