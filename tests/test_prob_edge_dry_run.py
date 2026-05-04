@@ -179,6 +179,7 @@ def test_collector_row_is_strategy_neutral() -> None:
         depth_notional=5.0,
         sigma_eff=0.6,
         sigma_source="manual",
+        volatility_stale=False,
         paired_buffer=0.01,
         volatility=collector.DvolSnapshot(
             source="deribit_dvol",
@@ -195,9 +196,58 @@ def test_collector_row_is_strategy_neutral() -> None:
     assert row["s_price"] == 100070.0
     assert row["basis_bps"] == 5.0
     assert row["volatility"]["sigma"] == 0.4
+    assert row["volatility_stale"] is False
     assert row["up"]["ask_limit"] == 0.51
     assert "close_price" not in row
     for forbidden in ("decision", "candidate_side", "skip_reason", "required_edge", "edge_components", "up_prob", "down_prob"):
         assert forbidden not in row
     assert "edge" not in row["up"]
     assert "private" not in json.dumps(row).lower()
+
+
+def test_collector_row_marks_stale_volatility() -> None:
+    class FakeFeed:
+        latest_price = 100_120.0
+
+    class FakeStream:
+        def get_latest_ask_levels_with_size(self, token_id):
+            return [(0.51, 100.0)]
+
+        def get_latest_bid_levels_with_size(self, token_id):
+            return [(0.50, 100.0)]
+
+        def get_latest_best_bid(self, token_id):
+            return 0.50
+
+        def get_latest_best_ask(self, token_id):
+            return 0.51
+
+        def get_latest_best_ask_age(self, token_id):
+            return 0.25
+
+    window = collector.MarketWindow(
+        question="Bitcoin Up or Down",
+        up_token="up",
+        down_token="down",
+        start_time=collector.dt.datetime(2026, 5, 3, 0, 0, tzinfo=collector.dt.timezone.utc),
+        end_time=collector.dt.datetime(2026, 5, 3, 0, 5, tzinfo=collector.dt.timezone.utc),
+        slug="btc-updown-5m-1",
+    )
+
+    row = collector.build_row(
+        window=window,
+        prices=collector.WindowPrices(k_price=100_000.0),
+        feed=FakeFeed(),
+        stream=FakeStream(),
+        now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
+        depth_notional=5.0,
+        sigma_eff=None,
+        sigma_source="missing",
+        volatility_stale=True,
+        paired_buffer=0.01,
+        volatility=None,
+    )
+
+    assert row["sigma_source"] == "missing"
+    assert row["sigma_eff"] is None
+    assert row["volatility_stale"] is True

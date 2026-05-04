@@ -28,6 +28,7 @@ POLYMARKET_CRYPTO_PRICE_API = "https://polymarket.com/api/crypto/crypto-price"
 K_RETRY_AGES_SEC = (5.0, 8.0, 12.0, 20.0, 30.0, 40.0)
 K_RETRY_TIMEOUT_SEC = 40.0
 BTC_OPEN_LOOKAROUND_SEC = 5.0
+DEFAULT_MAX_DVOL_AGE_SEC = 900.0
 
 
 @dataclass
@@ -246,6 +247,7 @@ def build_row(
     depth_notional: float,
     sigma_eff: float | None,
     sigma_source: str,
+    volatility_stale: bool,
     paired_buffer: float,
     volatility: DvolSnapshot | None,
 ) -> dict[str, Any]:
@@ -286,6 +288,7 @@ def build_row(
         "settlement_aligned": False,
         "sigma_source": sigma_source if sigma_eff is not None else "missing",
         "sigma_eff": compact_float(sigma_eff),
+        "volatility_stale": volatility_stale,
         "volatility": volatility.to_json() if volatility is not None else None,
         "price_source": price_source,
         "s_price": compact_float(s_price, 2),
@@ -346,17 +349,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sigma-source", default="missing")
     parser.add_argument("--collect-dvol", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dvol-refresh-sec", type=float, default=0.0, help="Refresh Deribit DVOL every N seconds. Default 0 means fetch once at startup.")
+    parser.add_argument("--max-dvol-age-sec", type=float, default=DEFAULT_MAX_DVOL_AGE_SEC)
     parser.add_argument("--warmup-timeout-sec", type=float, default=8.0)
     parser.add_argument("--windows", type=int, default=None)
     parser.add_argument("--include-current-window", action="store_true", help="Start from the in-progress window instead of waiting for the next full one.")
     return parser
 
 
+async def _noop_price_update(_update) -> None:
+    return None
+
+
 async def run(args: argparse.Namespace) -> int:
     writer = JsonlWriter(args.jsonl)
     feed = BinancePriceFeed("btcusdt")
     series = MarketSeries.from_known("btc-updown-5m")
-    stream = PriceStream(on_price=lambda _update: asyncio.sleep(0))
+    stream = PriceStream(on_price=_noop_price_update)
     tracker = WindowLimitTracker(args.windows)
     volatility = await asyncio.to_thread(fetch_dvol_snapshot) if args.collect_dvol else None
     next_dvol_refresh = time.monotonic() + args.dvol_refresh_sec if args.collect_dvol and args.dvol_refresh_sec > 0 else None
@@ -381,6 +389,16 @@ async def run(args: argparse.Namespace) -> int:
             if next_dvol_refresh is not None and time.monotonic() >= next_dvol_refresh:
                 volatility = await asyncio.to_thread(fetch_dvol_snapshot)
                 next_dvol_refresh = time.monotonic() + args.dvol_refresh_sec
+            volatility_stale = (
+                args.collect_dvol
+                and volatility is not None
+                and time.monotonic() - volatility.fetched_at > args.max_dvol_age_sec
+            )
+            sigma_eff = None if volatility_stale else args.sigma_eff
+            sigma_source = args.sigma_source
+            if args.collect_dvol and volatility is not None and sigma_eff is None and not volatility_stale:
+                sigma_eff = volatility.sigma
+                sigma_source = volatility.source
             if tracker.observe(window.slug, count=prices.k_price is not None):
                 return 0
             row = build_row(
@@ -390,8 +408,9 @@ async def run(args: argparse.Namespace) -> int:
                 stream=stream,
                 now=now,
                 depth_notional=args.depth_notional,
-                sigma_eff=args.sigma_eff,
-                sigma_source=args.sigma_source,
+                sigma_eff=sigma_eff,
+                sigma_source=sigma_source,
+                volatility_stale=volatility_stale,
                 paired_buffer=args.paired_buffer,
                 volatility=volatility,
             )

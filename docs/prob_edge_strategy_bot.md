@@ -31,6 +31,20 @@ python3 scripts/run_prob_edge_bot.py \
   --jsonl data/prob-edge-bot-paper.jsonl
 ```
 
+Paper mode enables analysis logs by default. Live mode keeps them off unless
+explicitly requested:
+
+```bash
+python3 scripts/run_prob_edge_bot.py \
+  --mode live \
+  --i-understand-live-risk \
+  --analysis-logs \
+  --windows 1
+```
+
+Use `--no-analysis-logs` to keep only compact operational rows during long
+paper runs.
+
 Live mode requires the explicit second guard:
 
 ```bash
@@ -209,6 +223,29 @@ decision.profit_now
 decision.prob_stagnant
 decision.prob_delta_3s
 ```
+
+When analysis logs are enabled, the bot first writes a `config` row containing
+the non-secret strategy, execution, and runtime parameters used for the run.
+Entry/exit/order-no-fill rows also include an `analysis` object:
+
+```text
+order_intent
+entry/exit side
+entry/exit model probability
+entry signal price
+entry fair cap
+entry depth limit price
+entry signal edge
+entry edge at fill
+exit min price
+exit profit per share
+paper/live fill price and shares
+order attempt
+order total latency
+```
+
+This makes paper runs directly usable for parameter analysis while allowing
+long-running live mode to keep debug-style fields disabled.
 
 The bot does not log private keys, API secrets, signed order payloads, or full
 order books.

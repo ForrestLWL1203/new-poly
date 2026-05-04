@@ -9,11 +9,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.run_prob_edge_bot import (
     WindowPrices,
+    _config_log_row,
+    _entry_analysis,
+    _exit_analysis,
+    _should_write_row,
     build_arg_parser,
     build_runtime_options,
     choose_settlement,
     is_dvol_stale,
 )
+from new_poly.strategy.prob_edge import StrategyDecision
+from new_poly.trading.execution import ExecutionResult
 
 
 def test_default_mode_is_paper() -> None:
@@ -21,8 +27,25 @@ def test_default_mode_is_paper() -> None:
     opts = build_runtime_options(args)
 
     assert opts.mode == "paper"
+    assert opts.analysis_logs is True
     assert opts.windows is None
     assert opts.config.amount_usd > 0
+
+
+def test_live_mode_defaults_analysis_logs_off() -> None:
+    args = build_arg_parser().parse_args(["--mode", "live", "--i-understand-live-risk", "--once"])
+    opts = build_runtime_options(args)
+
+    assert opts.mode == "live"
+    assert opts.analysis_logs is False
+
+
+def test_analysis_log_flags_override_mode_defaults() -> None:
+    paper_args = build_arg_parser().parse_args(["--once", "--no-analysis-logs"])
+    live_args = build_arg_parser().parse_args(["--mode", "live", "--i-understand-live-risk", "--once", "--analysis-logs"])
+
+    assert build_runtime_options(paper_args).analysis_logs is False
+    assert build_runtime_options(live_args).analysis_logs is True
 
 
 def test_live_mode_requires_second_guard() -> None:
@@ -67,3 +90,92 @@ def test_proxy_settlement_flags_boundary_uncertain() -> None:
     assert result["winning_side"] == "up"
     assert result["settlement_source"] == "binance_proxy"
     assert result["settlement_uncertain"] is True
+
+
+def test_config_log_row_contains_non_secret_runtime_shape() -> None:
+    args = build_arg_parser().parse_args(["--once"])
+    opts = build_runtime_options(args)
+
+    row = _config_log_row(opts)
+
+    assert row["event"] == "config"
+    assert row["mode"] == "paper"
+    assert row["analysis_logs"] is True
+    assert row["strategy"]["core_required_edge"] == opts.config.edge.core_required_edge
+    assert row["execution"]["amount_usd"] == opts.config.amount_usd
+    assert "private_key" not in str(row).lower()
+
+
+def test_entry_analysis_records_signal_and_fill_edges() -> None:
+    decision = StrategyDecision(
+        action="enter",
+        reason="edge",
+        side="up",
+        model_prob=0.70,
+        price=0.40,
+        limit_price=0.58,
+        depth_limit_price=0.55,
+        best_ask=0.39,
+        edge=0.30,
+        phase="core",
+        required_edge=0.08,
+    )
+    result = ExecutionResult(True, filled_size=10.0, avg_price=0.56, attempt=2, total_latency_ms=620)
+
+    analysis = _entry_analysis(decision, result)
+
+    assert analysis["order_intent"] == "entry"
+    assert analysis["entry_edge_signal"] == 0.30
+    assert analysis["entry_edge_at_fill"] == 0.14
+    assert analysis["entry_depth_limit_price"] == 0.55
+    assert analysis["order_attempt"] == 2
+
+
+def test_exit_analysis_records_exit_floor_and_profit() -> None:
+    decision = StrategyDecision(
+        action="exit",
+        reason="logic_decay_exit",
+        side="down",
+        model_prob=0.30,
+        price=0.42,
+        limit_price=0.40,
+        profit_now=-0.03,
+        prob_stagnant=True,
+        prob_delta_3s=-0.01,
+    )
+    result = ExecutionResult(True, filled_size=7.0, avg_price=0.41, attempt=1, total_latency_ms=410)
+
+    analysis = _exit_analysis(decision, result)
+
+    assert analysis["order_intent"] == "exit"
+    assert analysis["exit_reason"] == "logic_decay_exit"
+    assert analysis["exit_min_price"] == 0.40
+    assert analysis["exit_profit_per_share"] == -0.03
+    assert analysis["exit_price"] == 0.41
+
+
+def test_outside_entry_time_skip_logs_once_per_window() -> None:
+    seen: set[tuple[str, str]] = set()
+    row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {"action": "skip", "reason": "outside_entry_time"},
+    }
+
+    assert _should_write_row(row, seen) is True
+    assert _should_write_row(row, seen) is False
+    assert _should_write_row({**row, "market_slug": "m2"}, seen) is True
+    assert _should_write_row({**row, "decision": {"action": "skip", "reason": "edge_too_small"}}, seen) is True
+
+
+def test_max_entries_skip_logs_once_per_window() -> None:
+    seen: set[tuple[str, str]] = set()
+    row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {"action": "skip", "reason": "max_entries"},
+    }
+
+    assert _should_write_row(row, seen) is True
+    assert _should_write_row(row, seen) is False
+    assert _should_write_row({**row, "market_slug": "m2"}, seen) is True

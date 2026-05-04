@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import itertools
 import math
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, evaluate_entry, evaluate_exit
+from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, evaluate_entry, evaluate_exit, required_edge_for_entry
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 
 
@@ -19,10 +20,12 @@ class BacktestConfig:
     entry_start_age_sec: float = 90.0
     entry_end_age_sec: float = 270.0
     max_book_age_ms: float = 1000.0
+    max_entries_per_market: int = 2
     late_entry_enabled: bool = False
     tick_size: float = 0.01
     buy_slippage_ticks: float = 0.0
     sell_slippage_ticks: float = 0.0
+    settlement_boundary_usd: float = 5.0
 
     def edge_config(self) -> EdgeConfig:
         return EdgeConfig(
@@ -31,6 +34,7 @@ class BacktestConfig:
             entry_start_age_sec=self.entry_start_age_sec,
             entry_end_age_sec=self.entry_end_age_sec,
             max_book_age_ms=self.max_book_age_ms,
+            max_entries_per_market=self.max_entries_per_market,
             late_entry_enabled=self.late_entry_enabled,
         )
 
@@ -50,6 +54,8 @@ def _float(value: Any) -> float | None:
 
 
 def _sigma(row: dict[str, Any]) -> float | None:
+    if row.get("volatility_stale") is True:
+        return None
     return _float(row.get("sigma_eff")) or _float((row.get("volatility") or {}).get("sigma"))
 
 
@@ -87,12 +93,20 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
     )
 
 
-def _settlement_side(rows: list[dict[str, Any]]) -> str | None:
-    with_k = [row for row in rows if row.get("k_price") is not None and row.get("s_price") is not None]
-    if not with_k:
-        return None
-    last = with_k[-1]
-    return "up" if float(last["s_price"]) > float(last["k_price"]) else "down"
+def _settlement(rows: list[dict[str, Any]], *, boundary_usd: float) -> dict[str, Any]:
+    if not rows:
+        return {"winning_side": None, "settlement_uncertain": True}
+    last = rows[-1]
+    s_price = _float(last.get("s_price"))
+    k_price = _float(last.get("k_price"))
+    if s_price is None or k_price is None:
+        return {"winning_side": None, "settlement_uncertain": True}
+    return {
+        "winning_side": "up" if s_price > k_price else "down",
+        "settlement_uncertain": abs(s_price - k_price) < boundary_usd,
+        "settlement_price": s_price,
+        "settlement_k_price": k_price,
+    }
 
 
 def _group_rows(rows: Iterable[dict[str, Any]]) -> Iterable[tuple[str, list[dict[str, Any]]]]:
@@ -109,16 +123,6 @@ def _max_drawdown(equity_points: list[float]) -> float:
         peak = max(peak, value)
         worst = min(worst, value - peak)
     return round(worst, 6)
-
-
-def _phase(age_sec: float) -> str:
-    if age_sec < 120:
-        return "early"
-    if age_sec < 240:
-        return "core"
-    if age_sec < 270:
-        return "late"
-    return "no_entry"
 
 
 def _entry_fill_price(decision, cfg: BacktestConfig) -> float | None:
@@ -148,6 +152,9 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
     entries = 0
     exits = 0
     settlements = 0
+    unsettled = 0
+    settlement_uncertain = 0
+    skip_reasons: Counter[str] = Counter()
 
     for slug, group in _group_rows(rows):
         windows += 1
@@ -156,8 +163,6 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
         active_trade: dict[str, Any] | None = None
         for row in group:
             snap = snapshot_from_row(row)
-            if snap.k_price is None or snap.s_price is None or snap.sigma_eff is None:
-                continue
             if state.has_position and state.open_position is not None:
                 decision = evaluate_exit(snap, state.open_position, edge_cfg, state)
                 if decision.model_prob is not None:
@@ -181,9 +186,12 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     exits += 1
             else:
                 decision = evaluate_entry(snap, state, edge_cfg)
+                if decision.action == "skip":
+                    skip_reasons[decision.reason] += 1
                 if decision.action == "enter" and decision.side is not None and decision.price is not None and decision.model_prob is not None and decision.edge is not None:
                     fill_price = _entry_fill_price(decision, cfg)
                     if fill_price is None:
+                        skip_reasons["fill_price_over_cap"] += 1
                         continue
                     shares = cfg.amount_usd / fill_price
                     state.record_entry(PositionSnapshot(
@@ -194,24 +202,28 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         entry_avg_price=fill_price,
                         filled_shares=shares,
                         entry_model_prob=decision.model_prob,
-                        entry_edge=decision.model_prob - fill_price,
+                        entry_edge=decision.edge,
                     ))
+                    entry_phase = decision.phase or required_edge_for_entry(snap, edge_cfg).phase
                     active_trade = {
                         "market_slug": slug,
                         "entry_side": decision.side,
-                        "entry_phase": _phase(snap.age_sec),
+                        "entry_phase": entry_phase,
                         "entry_age_sec": snap.age_sec,
                         "entry_price": fill_price,
                         "entry_model_prob": decision.model_prob,
-                        "entry_edge": decision.model_prob - fill_price,
+                        "entry_edge": decision.edge,
+                        "entry_edge_at_fill": decision.model_prob - fill_price,
                         "shares": shares,
                     }
                     entries += 1
 
         if state.has_position and state.open_position is not None and active_trade is not None:
-            winning_side = _settlement_side(group)
+            settlement = _settlement(group, boundary_usd=cfg.settlement_boundary_usd)
+            winning_side = settlement.get("winning_side")
             if winning_side is not None:
                 pnl = state.record_settlement(winning_side)
+                is_uncertain = bool(settlement.get("settlement_uncertain"))
                 active_trade.update({
                     "exit_age_sec": 300.0,
                     "exit_reason": "settlement",
@@ -219,11 +231,30 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     "pnl": pnl,
                     "hold_sec": 300.0 - active_trade["entry_age_sec"],
                     "winning_side": winning_side,
+                    "settlement_uncertain": is_uncertain,
+                    "settlement_price": settlement.get("settlement_price"),
+                    "settlement_k_price": settlement.get("settlement_k_price"),
                 })
                 equity += pnl
                 equity_points.append(equity)
                 trades.append(active_trade)
                 settlements += 1
+                if is_uncertain:
+                    settlement_uncertain += 1
+            else:
+                pnl = state.record_exit(state.open_position.entry_avg_price, "unsettled_no_settlement_side")
+                active_trade.update({
+                    "exit_age_sec": 300.0,
+                    "exit_reason": "unsettled_no_settlement_side",
+                    "exit_price": active_trade["entry_price"],
+                    "pnl": pnl,
+                    "hold_sec": 300.0 - active_trade["entry_age_sec"],
+                    "settlement_uncertain": True,
+                })
+                equity += pnl
+                equity_points.append(equity)
+                trades.append(active_trade)
+                unsettled += 1
 
     wins = sum(1 for trade in trades if trade.get("pnl", 0.0) > 0)
     total_pnl = round(sum(float(trade.get("pnl") or 0.0) for trade in trades), 6)
@@ -233,11 +264,14 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
         "closed_trades": len(trades),
         "exits": exits,
         "settlements": settlements,
+        "unsettled": unsettled,
+        "settlement_uncertain": settlement_uncertain,
         "win_rate": round(wins / len(trades), 4) if trades else 0.0,
         "total_pnl": total_pnl,
         "avg_pnl_per_trade": round(total_pnl / len(trades), 6) if trades else 0.0,
         "max_drawdown": _max_drawdown(equity_points),
         "avg_hold_sec": round(sum(float(trade.get("hold_sec") or 0.0) for trade in trades) / len(trades), 2) if trades else 0.0,
+        "skip_reason_counts": dict(sorted(skip_reasons.items(), key=lambda pair: (-pair[1], pair[0]))),
     }
     return BacktestResult(summary=summary, trades=trades)
 
@@ -250,6 +284,8 @@ def scan_configs(
     entry_starts: Iterable[float],
     entry_ends: Iterable[float],
     base_config: BacktestConfig | None = None,
+    min_entries: int = 0,
+    sort_by: str = "pnl",
 ) -> list[dict[str, Any]]:
     materialized = list(rows)
     base = base_config or BacktestConfig()
@@ -262,12 +298,16 @@ def scan_configs(
             entry_start_age_sec=float(start),
             entry_end_age_sec=float(end),
             max_book_age_ms=base.max_book_age_ms,
+            max_entries_per_market=base.max_entries_per_market,
             late_entry_enabled=base.late_entry_enabled,
             tick_size=base.tick_size,
             buy_slippage_ticks=base.buy_slippage_ticks,
             sell_slippage_ticks=base.sell_slippage_ticks,
+            settlement_boundary_usd=base.settlement_boundary_usd,
         )
         result = run_backtest(materialized, cfg)
+        if result.summary["entries"] < min_entries:
+            continue
         results.append({
             "early_required_edge": early,
             "core_required_edge": core,
@@ -275,4 +315,10 @@ def scan_configs(
             "entry_end_age_sec": end,
             **result.summary,
         })
-    return sorted(results, key=lambda item: (item["total_pnl"], item["win_rate"], item["entries"]), reverse=True)
+    if sort_by == "win_rate":
+        key = lambda item: (item["win_rate"], item["entries"], item["total_pnl"])
+    elif sort_by == "avg_pnl":
+        key = lambda item: (item["avg_pnl_per_trade"], item["win_rate"], item["entries"])
+    else:
+        key = lambda item: (item["total_pnl"], item["win_rate"], item["entries"])
+    return sorted(results, key=key, reverse=True)

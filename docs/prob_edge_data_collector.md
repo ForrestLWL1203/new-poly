@@ -85,6 +85,9 @@ By default, the collector fetches Deribit BTC DVOL once at startup and writes
 that snapshot into every row. `--dvol-refresh-sec N` can refresh it every `N`
 seconds, but for 30-day implied volatility the default one-shot snapshot is
 usually enough for a collection run.
+Rows include `volatility_stale`; if the DVOL snapshot exceeds
+`--max-dvol-age-sec` (default `900`), the collector marks it stale and writes
+`sigma_eff=null` so replay can match live fail-closed behavior.
 
 `--windows N` stops after observing `N` windows that successfully obtained
 `k_price`. Windows skipped before `k_price` is available do not count.
@@ -109,6 +112,7 @@ resolution_source
 settlement_aligned
 sigma_source
 sigma_eff
+volatility_stale
 volatility
 price_source
 s_price

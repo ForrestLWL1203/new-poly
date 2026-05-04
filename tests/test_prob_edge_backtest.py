@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs
 
 
-def _row(slug: str, age: int, s_price: float, k_price: float = 100.0) -> dict:
+def _row(slug: str, age: int, s_price: float | None, k_price: float | None = 100.0) -> dict:
     return {
         "market_slug": slug,
         "age_sec": age,
@@ -37,6 +37,16 @@ def _row(slug: str, age: int, s_price: float, k_price: float = 100.0) -> dict:
             "book_age_ms": 20.0,
         },
     }
+
+
+def _hide_settlement_price(row: dict) -> None:
+    row["s_price"] = None
+    row["k_price"] = None
+
+
+def _disable_exit_depth(row: dict) -> None:
+    row["up"]["bid_depth_ok"] = False
+    row["down"]["bid_depth_ok"] = False
 
 
 def test_backtest_enters_and_settles_open_position() -> None:
@@ -82,3 +92,96 @@ def test_backtest_applies_execution_slippage_ticks() -> None:
 
     assert result.trades[0]["entry_price"] == 0.41
     assert result.trades[0]["exit_price"] == 0.67
+
+
+def test_backtest_entry_edge_matches_strategy_edge_and_records_fill_edge() -> None:
+    rows = [
+        _row("m1", 90, 100.10),
+        _row("m1", 120, 100.00),
+    ]
+    rows[0]["up"]["ask_avg"] = 0.39
+    rows[0]["up"]["ask_limit"] = 0.40
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=10.0))
+
+    trade = result.trades[0]
+    assert trade["entry_edge"] == trade["entry_model_prob"] - 0.39
+    assert trade["entry_edge_at_fill"] == trade["entry_model_prob"] - trade["entry_price"]
+
+
+def test_backtest_entry_phase_uses_strategy_entry_phase() -> None:
+    rows = [
+        _row("m1", 80, 100.10),
+        _row("m1", 120, 101.00),
+    ]
+
+    result = run_backtest(rows, BacktestConfig(entry_start_age_sec=90.0))
+
+    assert result.summary["entries"] == 1
+    assert result.trades[0]["entry_age_sec"] == 120
+    assert result.trades[0]["entry_phase"] == "core"
+    assert result.summary["skip_reason_counts"]["outside_entry_time"] == 1
+
+
+def test_backtest_records_unsettled_position_when_settlement_side_missing() -> None:
+    rows = [
+        _row("m1", 90, 100.10),
+        _row("m1", 240, None, None),
+    ]
+    _hide_settlement_price(rows[1])
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=10.0))
+
+    assert result.summary["entries"] == 1
+    assert result.summary["unsettled"] == 1
+    assert result.trades[0]["exit_reason"] == "unsettled_no_settlement_side"
+    assert result.trades[0]["pnl"] == 0.0
+
+
+def test_backtest_marks_boundary_uncertain_settlement() -> None:
+    rows = [
+        _row("m1", 90, 100.10),
+        _row("m1", 299, 103.00),
+    ]
+    _disable_exit_depth(rows[1])
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=10.0, settlement_boundary_usd=5.0))
+
+    assert result.summary["settlement_uncertain"] == 1
+    assert result.trades[0]["settlement_uncertain"] is True
+
+
+def test_backtest_treats_stale_volatility_as_missing_model_input() -> None:
+    rows = [_row("m1", 90, 100.10)]
+    rows[0]["volatility_stale"] = True
+
+    result = run_backtest(rows, BacktestConfig())
+
+    assert result.summary["entries"] == 0
+    assert result.summary["skip_reason_counts"]["missing_model_inputs"] == 1
+
+
+def test_scan_configs_filters_min_entries_and_can_sort_by_win_rate() -> None:
+    rows = [
+        _row("m1", 90, 100.10),
+        _row("m1", 299, 101.00),
+    ]
+
+    results = scan_configs(
+        rows,
+        early_edges=[0.08, 0.50],
+        core_edges=[0.06],
+        entry_starts=[40],
+        entry_ends=[240],
+        min_entries=1,
+        sort_by="win_rate",
+    )
+
+    assert len(results) == 1
+    assert results[0]["entries"] >= 1
+
+
+def test_backtest_config_passes_max_entries_to_strategy() -> None:
+    cfg = BacktestConfig(max_entries_per_market=4)
+
+    assert cfg.edge_config().max_entries_per_market == 4

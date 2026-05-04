@@ -234,7 +234,7 @@ def test_live_post_matched_without_fill_fields_is_success(monkeypatch) -> None:
     assert result.avg_price == pytest.approx(1.0 / 1.6667)
 
 
-def test_live_post_success_status_without_fill_fields_is_success(monkeypatch) -> None:
+def test_live_post_success_status_is_not_treated_as_matched(monkeypatch) -> None:
     class Client:
         def create_market_order(self, args, options=None):
             return {"signed": True}
@@ -252,9 +252,34 @@ def test_live_post_success_status_without_fill_fields_is_success(monkeypatch) ->
 
     result = gateway._post("up", 1.0, "BUY", 0.50)
 
-    assert result.success is True
+    assert result.success is False
     assert result.order_id == "ord-success"
-    assert result.filled_size == pytest.approx(2.0)
+    assert result.filled_size == 0.0
+    assert result.avg_price == 0.0
+
+
+def test_live_post_does_not_treat_fill_fields_as_success_without_matched_status(monkeypatch) -> None:
+    class Client:
+        def create_market_order(self, args, options=None):
+            return {"signed": True}
+
+        def post_order(self, signed, order_type):
+            return {
+                "orderID": "ord-unmatched",
+                "success": False,
+                "status": "UNMATCHED",
+                "sizeFilled": "1.0",
+                "avgPrice": "0.50",
+            }
+
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: Client())
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True)
+
+    result = gateway._post("up", 1.0, "BUY", 0.50)
+
+    assert result.success is False
+    assert result.filled_size == pytest.approx(1.0)
     assert result.avg_price == pytest.approx(0.50)
 
 

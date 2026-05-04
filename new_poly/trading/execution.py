@@ -161,7 +161,7 @@ def _derive_fill(side: str, amount: float, taking: float, making: float, fallbac
 
 def _is_matched_response(resp: dict) -> bool:
     status = str(resp.get("status", "")).upper()
-    return bool(resp.get("success")) and status in {"MATCHED", "SUCCESS"}
+    return bool(resp.get("success")) and status == "MATCHED"
 
 
 class LiveFakExecutionGateway:
@@ -234,7 +234,7 @@ class LiveFakExecutionGateway:
         if matched and (filled <= 0 or avg_price <= 0):
             filled, avg_price = _derive_fill(side, amount, _safe_float(resp.get("takingAmount")), _safe_float(resp.get("makingAmount")), price_hint or avg_price)
         return ExecutionResult(
-            success=matched or filled > 0,
+            success=matched,
             order_id=str(order_id) if order_id else None,
             filled_size=filled,
             avg_price=avg_price,

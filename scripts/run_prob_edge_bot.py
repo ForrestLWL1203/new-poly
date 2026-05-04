@@ -9,7 +9,7 @@ import datetime as dt
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,10 +26,10 @@ from new_poly.market.deribit import fetch_dvol_snapshot
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
-from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, evaluate_entry, evaluate_exit
+from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.clob_client import prefetch_order_params
-from new_poly.trading.execution import ExecutionConfig, LiveFakExecutionGateway, PaperExecutionGateway
+from new_poly.trading.execution import ExecutionConfig, ExecutionResult, LiveFakExecutionGateway, PaperExecutionGateway
 
 from scripts.collect_prob_edge_data import (
     WindowPrices,
@@ -51,7 +51,6 @@ class BotConfig:
     amount_usd: float
     interval_sec: float
     warmup_timeout_sec: float
-    paired_buffer: float
     dvol_refresh_sec: float
     max_dvol_age_sec: float
     settlement_boundary_usd: float
@@ -65,6 +64,7 @@ class RuntimeOptions:
     jsonl: Path | None
     config: BotConfig
     live_risk_ack: bool = False
+    analysis_logs: bool = False
 
 
 class JsonlLogger:
@@ -176,7 +176,6 @@ def load_bot_config(path: Path) -> BotConfig:
         amount_usd=amount_usd,
         interval_sec=float(_deep_get(raw, ("runtime", "interval_sec"), 1.0)),
         warmup_timeout_sec=float(_deep_get(raw, ("runtime", "warmup_timeout_sec"), 8.0)),
-        paired_buffer=float(_deep_get(raw, ("runtime", "paired_buffer"), 0.01)),
         dvol_refresh_sec=float(_deep_get(raw, ("runtime", "dvol_refresh_sec"), 300.0)),
         max_dvol_age_sec=float(_deep_get(raw, ("runtime", "max_dvol_age_sec"), 900.0)),
         settlement_boundary_usd=float(_deep_get(raw, ("runtime", "settlement_boundary_usd"), 5.0)),
@@ -193,6 +192,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jsonl", type=Path)
     parser.add_argument("--amount-usd", type=float)
     parser.add_argument("--interval-sec", type=float)
+    parser.add_argument("--analysis-logs", dest="analysis_logs", action="store_true", default=None)
+    parser.add_argument("--no-analysis-logs", dest="analysis_logs", action="store_false")
     return parser
 
 
@@ -206,9 +207,9 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
             retry_count=cfg.execution.retry_count,
             retry_interval_sec=cfg.execution.retry_interval_sec,
         )
-        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.paired_buffer, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
+        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
     if args.interval_sec is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.paired_buffer, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
     return RuntimeOptions(
@@ -218,11 +219,97 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         jsonl=args.jsonl,
         config=cfg,
         live_risk_ack=args.i_understand_live_risk,
+        analysis_logs=(args.analysis_logs if args.analysis_logs is not None else args.mode == "paper"),
     )
 
 
 def _compact(value: float | None, digits: int = 6) -> float | None:
     return round(float(value), digits) if value is not None else None
+
+
+def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
+    cfg = options.config
+    return {
+        "ts": dt.datetime.now().astimezone().isoformat(),
+        "event": "config",
+        "mode": options.mode,
+        "analysis_logs": options.analysis_logs,
+        "windows": options.windows,
+        "once": options.once,
+        "strategy": asdict(cfg.edge),
+        "execution": {
+            **asdict(cfg.execution),
+            "amount_usd": cfg.amount_usd,
+        },
+        "runtime": {
+            "interval_sec": cfg.interval_sec,
+            "warmup_timeout_sec": cfg.warmup_timeout_sec,
+            "dvol_refresh_sec": cfg.dvol_refresh_sec,
+            "max_dvol_age_sec": cfg.max_dvol_age_sec,
+            "settlement_boundary_usd": cfg.settlement_boundary_usd,
+        },
+    }
+
+
+def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
+    fill_price = result.avg_price if result is not None and result.success else None
+    return {
+        "order_intent": "entry",
+        "entry_side": decision.side,
+        "entry_phase": decision.phase,
+        "entry_required_edge": _compact(decision.required_edge),
+        "entry_model_prob": _compact(decision.model_prob),
+        "entry_signal_price": _compact(decision.price),
+        "entry_best_ask": _compact(decision.best_ask),
+        "entry_fair_cap": _compact(decision.limit_price),
+        "entry_depth_limit_price": _compact(decision.depth_limit_price),
+        "entry_edge_signal": _compact(decision.edge),
+        "entry_price": _compact(fill_price),
+        "entry_shares": _compact(result.filled_size if result is not None and result.success else None),
+        "entry_edge_at_fill": _compact(decision.model_prob - fill_price) if decision.model_prob is not None and fill_price is not None else None,
+        "order_attempt": result.attempt if result is not None else None,
+        "order_total_latency_ms": result.total_latency_ms if result is not None else None,
+    }
+
+
+def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
+    fill_price = result.avg_price if result is not None and result.success else None
+    return {
+        "order_intent": "exit",
+        "exit_side": decision.side,
+        "exit_reason": decision.reason,
+        "exit_model_prob": _compact(decision.model_prob),
+        "exit_signal_bid_avg": _compact(decision.price),
+        "exit_min_price": _compact(decision.limit_price),
+        "exit_profit_per_share": _compact(decision.profit_now),
+        "exit_prob_stagnant": decision.prob_stagnant,
+        "exit_prob_delta_3s": _compact(decision.prob_delta_3s),
+        "exit_price": _compact(fill_price),
+        "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
+        "order_attempt": result.attempt if result is not None else None,
+        "order_total_latency_ms": result.total_latency_ms if result is not None else None,
+    }
+
+
+def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str, str]]) -> bool:
+    decision = row.get("decision")
+    if not isinstance(decision, dict):
+        return True
+    if row.get("event") != "tick":
+        return True
+    reason = decision.get("reason")
+    one_per_window_reasons = {"outside_entry_time", "max_entries"}
+    if decision.get("action") != "skip" or reason not in one_per_window_reasons:
+        return True
+    key = (str(row.get("market_slug") or ""), str(reason))
+    if key in seen_repetitive_skips:
+        return False
+    seen_repetitive_skips.add(key)
+    return True
+
+
+async def _noop_price_update(_update) -> None:
+    return None
 
 
 def is_dvol_stale(volatility: DvolSnapshot | None, *, now_monotonic: float, max_age_sec: float) -> bool:
@@ -302,7 +389,7 @@ async def run(options: RuntimeOptions) -> int:
     logger = JsonlLogger(options.jsonl)
     feed = BinancePriceFeed("btcusdt")
     series = MarketSeries.from_known("btc-updown-5m")
-    stream = PriceStream(on_price=lambda _update: asyncio.sleep(0))
+    stream = PriceStream(on_price=_noop_price_update)
     volatility: DvolSnapshot | None = None
     try:
         volatility = await asyncio.to_thread(fetch_dvol_snapshot)
@@ -311,6 +398,7 @@ async def run(options: RuntimeOptions) -> int:
     next_dvol_refresh = time.monotonic() + cfg.dvol_refresh_sec
     state = StrategyState()
     completed_windows = 0
+    seen_repetitive_skips: set[tuple[str, str]] = set()
 
     gateway = (
         LiveFakExecutionGateway(
@@ -323,6 +411,8 @@ async def run(options: RuntimeOptions) -> int:
     )
 
     try:
+        if options.analysis_logs:
+            logger.write(_config_log_row(options))
         window = find_initial_window(series)
         prices = WindowPrices()
         state.reset_for_market(window.slug)
@@ -368,12 +458,23 @@ async def run(options: RuntimeOptions) -> int:
                 if decision.model_prob is not None:
                     state.record_model_prob(snap.age_sec, decision.model_prob)
                 if decision.action == "exit":
+                    exiting_position = state.open_position
                     result = await gateway.sell(state.open_position.token_id, state.open_position.filled_shares, min_price=decision.limit_price)
                     row["order"] = result.__dict__
+                    if options.analysis_logs:
+                        row["analysis"] = _exit_analysis(decision, result)
                     if result.success:
                         pnl = state.record_exit(result.avg_price, decision.reason)
                         row["event"] = "exit"
+                        row["exit_reason"] = decision.reason
+                        row["exit_price"] = _compact(result.avg_price)
+                        row["exit_shares"] = _compact(result.filled_size)
                         row["exit_pnl"] = _compact(pnl, 4)
+                        if options.analysis_logs:
+                            row["position_before_exit"] = exiting_position.__dict__
+                    else:
+                        row["event"] = "order_no_fill"
+                        row["order_intent"] = "exit"
             else:
                 decision = evaluate_entry(snap, state, cfg.edge)
                 row["decision"] = decision.__dict__
@@ -387,6 +488,8 @@ async def run(options: RuntimeOptions) -> int:
                         price_hint_base=decision.depth_limit_price,
                     )
                     row["order"] = result.__dict__
+                    if options.analysis_logs:
+                        row["analysis"] = _entry_analysis(decision, result)
                     if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
                         state.record_entry(PositionSnapshot(
                             market_slug=window.slug,
@@ -399,8 +502,17 @@ async def run(options: RuntimeOptions) -> int:
                             entry_edge=decision.edge,
                         ))
                         row["event"] = "entry"
+                        row["entry_side"] = decision.side
+                        row["entry_price"] = _compact(result.avg_price)
+                        row["entry_shares"] = _compact(result.filled_size)
+                        if options.analysis_logs and state.open_position is not None:
+                            row["position_after_entry"] = state.open_position.__dict__
+                    else:
+                        row["event"] = "order_no_fill"
+                        row["order_intent"] = "entry"
 
-            logger.write(row)
+            if _should_write_row(row, seen_repetitive_skips):
+                logger.write(row)
             if options.once:
                 return 0
             await asyncio.sleep(cfg.interval_sec)

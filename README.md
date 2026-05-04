@@ -118,7 +118,8 @@ current `s_price`. It does not fetch or log Polymarket `closePrice`; simple
 post-run direction checks should compare Binance window open/close prices.
 It intentionally keeps `settlement_aligned=false` until a true
 settlement-aligned realtime price source is available. It also fetches Deribit
-BTC DVOL once at startup by default and records it under `volatility`. See
+BTC DVOL once at startup by default and records it under `volatility`.
+`volatility_stale` is emitted so replay can ignore expired sigma snapshots. See
 [docs/prob_edge_data_collector.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_data_collector.md).
 
 ### Probability Edge Strategy Bot
@@ -152,6 +153,10 @@ Paper smoke test:
 python3 scripts/run_prob_edge_bot.py --once
 ```
 
+Paper strategy runs print analysis logs by default. Live mode defaults analysis
+logs off; add `--analysis-logs` during live debugging or `--no-analysis-logs`
+for compact long-running paper logs.
+
 See [docs/prob_edge_strategy_bot.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_strategy_bot.md).
 
 ### Probability Edge Backtest
@@ -168,6 +173,8 @@ The backtest uses collector summary fields (`ask_avg`, `ask_limit`, `bid_avg`,
 parameter screening and strategy-shape validation, not exact fill simulation.
 Add `--slippage-ticks N` to simulate FAK fills moving by `N` price ticks
 (`0.01` per tick by default) against both BUY and SELL.
+For win-rate-first scans, use `--grid-sort-by win_rate --grid-min-entries N`;
+the summary also reports skip reason counts and uncertain settlement counts.
 
 ### Reusable Modules
 

@@ -43,15 +43,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--core-required-edge", type=float, default=0.08)
     parser.add_argument("--entry-start-age-sec", type=float, default=90.0)
     parser.add_argument("--entry-end-age-sec", type=float, default=270.0)
+    parser.add_argument("--max-entries-per-market", type=int, default=2)
     parser.add_argument("--tick-size", type=float, default=0.01)
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
     parser.add_argument("--buy-slippage-ticks", type=float)
     parser.add_argument("--sell-slippage-ticks", type=float)
+    parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
     parser.add_argument("--early-grid", default="0.08,0.10,0.12")
     parser.add_argument("--core-grid", default="0.04,0.05,0.06,0.07,0.08")
     parser.add_argument("--entry-start-grid", default="25,40,60")
     parser.add_argument("--entry-end-grid", default="210,240,270")
+    parser.add_argument("--grid-min-entries", type=int, default=0)
+    parser.add_argument("--grid-sort-by", choices=("pnl", "win_rate", "avg_pnl"), default="pnl")
     parser.add_argument("--top-n", type=int, default=10)
     return parser
 
@@ -67,9 +71,11 @@ def main() -> int:
         core_required_edge=args.core_required_edge,
         entry_start_age_sec=args.entry_start_age_sec,
         entry_end_age_sec=args.entry_end_age_sec,
+        max_entries_per_market=args.max_entries_per_market,
         tick_size=args.tick_size,
         buy_slippage_ticks=buy_slippage_ticks,
         sell_slippage_ticks=sell_slippage_ticks,
+        settlement_boundary_usd=args.settlement_boundary_usd,
     )
     result = run_backtest(rows, cfg)
     payload: dict[str, Any] = {
@@ -89,6 +95,8 @@ def main() -> int:
             entry_starts=_float_list(args.entry_start_grid),
             entry_ends=_float_list(args.entry_end_grid),
             base_config=cfg,
+            min_entries=max(0, args.grid_min_entries),
+            sort_by=args.grid_sort_by,
         )[: max(0, args.top_n)]
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
