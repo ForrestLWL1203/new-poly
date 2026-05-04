@@ -192,12 +192,12 @@ retry_interval_sec = 0.2
 ```
 
 BUY gets at most one retry. The retry still uses the same formula cap
-`fair_cap`, so it cannot chase beyond `model_prob - required_edge`. The retry
-only widens the hint by one extra tick:
+`fair_cap`, so it cannot chase beyond `model_prob - required_edge`. The default
+live hint ladder is configurable:
 
 ```text
-attempt 1: min(ask_limit + 1 tick, fair_cap)
-attempt 2: min(ask_limit + 2 ticks, fair_cap)
+attempt 1: min(ask_limit + 2 ticks, fair_cap)
+attempt 2: min(ask_limit + 4 ticks, fair_cap)
 ```
 
 SELL also gets one retry, but the sell floor depends on exit urgency. In CLOB

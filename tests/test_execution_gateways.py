@@ -122,7 +122,7 @@ def test_live_buy_hint_buffers_best_ask_but_caps_at_depth_limit(monkeypatch) -> 
     result = asyncio.run(gateway.buy("up", amount_usd=5.0, max_price=0.55, best_ask=0.50))
 
     assert result.success is True
-    assert captured["price_hint"] == 0.51
+    assert captured["price_hint"] == 0.52
 
 
 def test_live_buy_hint_buffers_depth_limit_when_provided(monkeypatch) -> None:
@@ -140,7 +140,7 @@ def test_live_buy_hint_buffers_depth_limit_when_provided(monkeypatch) -> None:
     )
 
     assert result.success is True
-    assert captured["price_hint"] == 0.55
+    assert captured["price_hint"] == 0.56
 
 
 def test_live_buy_hint_never_exceeds_depth_limit(monkeypatch) -> None:
@@ -172,10 +172,28 @@ def test_live_buy_retries_once_with_same_formula_cap(monkeypatch) -> None:
 
     assert result.success is True
     assert len(gateway.calls) == 2
-    assert gateway.calls[0][3] == 0.55
+    assert gateway.calls[0][3] == 0.56
     assert gateway.calls[1][3] == 0.56
     assert result.attempt == 2
     assert result.total_latency_ms is not None
+
+
+def test_live_buy_retry_can_use_configured_four_tick_buffer(monkeypatch) -> None:
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.58, message="MATCHED", mode="live"),
+    ])
+    gateway.buy_price_buffer_ticks = 2.0
+    gateway.buy_retry_price_buffer_ticks = 4.0
+
+    result = asyncio.run(
+        gateway.buy("up", amount_usd=5.0, max_price=0.60, best_ask=0.50, price_hint_base=0.54)
+    )
+
+    assert result.success is True
+    assert gateway.calls[0][3] == 0.56
+    assert gateway.calls[1][3] == 0.58
 
 
 def test_live_sell_retry_reposts_same_floor_price(monkeypatch) -> None:

@@ -25,6 +25,8 @@ class ExecutionConfig:
     max_book_age_sec: float = 1.0
     retry_count: int = 1
     retry_interval_sec: float = 0.2
+    buy_price_buffer_ticks: float = 2.0
+    buy_retry_price_buffer_ticks: float = 4.0
 
 
 @dataclass(frozen=True)
@@ -199,11 +201,21 @@ def _order_id_from_error(exc: Exception) -> str | None:
 
 
 class LiveFakExecutionGateway:
-    def __init__(self, *, live_risk_ack: bool, retry_count: int = 1, retry_interval_sec: float = 0.2) -> None:
+    def __init__(
+        self,
+        *,
+        live_risk_ack: bool,
+        retry_count: int = 1,
+        retry_interval_sec: float = 0.2,
+        buy_price_buffer_ticks: float = 2.0,
+        buy_retry_price_buffer_ticks: float = 4.0,
+    ) -> None:
         if not live_risk_ack:
             raise ValueError("live mode requires --i-understand-live-risk")
         self.retry_count = max(0, int(retry_count))
         self.retry_interval_sec = max(0.0, float(retry_interval_sec))
+        self.buy_price_buffer_ticks = max(0.0, float(buy_price_buffer_ticks))
+        self.buy_retry_price_buffer_ticks = max(self.buy_price_buffer_ticks, float(buy_retry_price_buffer_ticks))
 
     async def buy(
         self,
@@ -217,10 +229,11 @@ class LiveFakExecutionGateway:
         last = ExecutionResult(False, message="live buy not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
+            buffer_ticks = self.buy_price_buffer_ticks if attempt == 0 else self.buy_retry_price_buffer_ticks
             price_hint = buffer_buy_price_hint(
                 token_id,
                 base_price,
-                buffer_ticks=config.PRICE_HINT_BUFFER_TICKS + attempt,
+                buffer_ticks=buffer_ticks,
                 max_price=max_price,
             )
             last = await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)

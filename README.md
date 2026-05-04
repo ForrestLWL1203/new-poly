@@ -141,11 +141,13 @@ Current default strategy behavior:
 - FAK entry decisions use size-aware `ask_avg` for edge, require
   `ask_limit <= model_prob - required_edge`, require the formula cap to leave
   at least one tick of executable margin, and send BUY hints as
-  `min(ask_limit + tick_buffer, model_prob - required_edge)`.
+  `min(ask_limit + configured_tick_buffer, model_prob - required_edge)`.
 - Entry depth uses a safety multiplier in live-oriented configs: the bot may
   buy `amount_usd`, but requires enough ask depth for
   `amount_usd * depth_safety_multiplier` inside the same formula cap.
-- FAK BUY gets one capped retry. FAK SELL also retries once, but the sell floor
+- FAK BUY gets one capped retry. The default live BUY hint ladder is
+  `+2 ticks` then `+4 ticks`, always capped by formula fair cap. FAK SELL also
+  retries once, but the sell floor
   depends on exit urgency: profit exits only loosen by one tick on retry,
   `logic_decay_exit` / `risk_exit` start two ticks below `bid_limit`, and
   `final_force_exit` uses a wider emergency ladder.

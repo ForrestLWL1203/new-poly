@@ -241,6 +241,8 @@ def load_bot_config(path: Path) -> BotConfig:
         max_book_age_sec=float(_deep_get(raw, ("execution", "max_book_age_sec"), 1.0)),
         retry_count=int(_deep_get(raw, ("execution", "retry_count"), 1)),
         retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.2)),
+        buy_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_price_buffer_ticks"), 2.0)),
+        buy_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_retry_price_buffer_ticks"), 4.0)),
     )
     amount_usd = float(_deep_get(raw, ("execution", "amount_usd"), 5.0))
     return BotConfig(
@@ -285,6 +287,8 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
             max_book_age_sec=cfg.execution.max_book_age_sec,
             retry_count=cfg.execution.retry_count,
             retry_interval_sec=cfg.execution.retry_interval_sec,
+            buy_price_buffer_ticks=cfg.execution.buy_price_buffer_ticks,
+            buy_retry_price_buffer_ticks=cfg.execution.buy_retry_price_buffer_ticks,
         )
         cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
     if args.interval_sec is not None:
@@ -583,6 +587,8 @@ async def run(options: RuntimeOptions) -> int:
             live_risk_ack=options.live_risk_ack,
             retry_count=cfg.execution.retry_count,
             retry_interval_sec=cfg.execution.retry_interval_sec,
+            buy_price_buffer_ticks=cfg.execution.buy_price_buffer_ticks,
+            buy_retry_price_buffer_ticks=cfg.execution.buy_retry_price_buffer_ticks,
         )
         if options.mode == "live"
         else PaperExecutionGateway(stream=stream, config=cfg.execution)
