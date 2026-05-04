@@ -196,6 +196,66 @@ def test_live_sell_retry_reposts_same_floor_price(monkeypatch) -> None:
     assert result.total_latency_ms is not None
 
 
+def test_live_sell_profit_exit_uses_small_aggressive_retry(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 10.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.39, message="MATCHED", mode="live"),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="defensive_take_profit"))
+
+    assert result.success is True
+    assert gateway.calls[0][3] == 0.40
+    assert gateway.calls[1][3] == 0.39
+
+
+def test_live_sell_logic_decay_starts_below_bid_limit(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 10.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.37, message="MATCHED", mode="live"),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="logic_decay_exit"))
+
+    assert result.success is True
+    assert gateway.calls[0][3] == 0.38
+    assert gateway.calls[1][3] == 0.37
+
+
+def test_live_sell_final_force_uses_emergency_ladder(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 10.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.30, message="MATCHED", mode="live"),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="final_force_exit"))
+
+    assert result.success is True
+    assert gateway.calls[0][3] == 0.35
+    assert gateway.calls[1][3] == 0.30
+
+
+def test_live_sell_price_hint_never_goes_below_one_tick(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 10.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.03, exit_reason="final_force_exit"))
+
+    assert result.success is False
+    assert gateway.calls[0][3] == 0.01
+    assert gateway.calls[1][3] == 0.01
+
+
 def test_live_sell_no_balance_is_not_an_order_attempt(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
     gateway = SequencedLiveGateway([])
@@ -281,6 +341,31 @@ def test_live_post_does_not_treat_fill_fields_as_success_without_matched_status(
     assert result.success is False
     assert result.filled_size == pytest.approx(1.0)
     assert result.avg_price == pytest.approx(0.50)
+
+
+def test_live_post_no_match_exception_is_no_fill_with_latency(monkeypatch) -> None:
+    class Client:
+        def create_market_order(self, args, options=None):
+            return {"signed": True}
+
+        def post_order(self, signed, order_type):
+            raise RuntimeError(
+                "PolyApiException[status_code=400, error_message={'error': "
+                "'no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.', "
+                "'orderID': '0xabc'}]"
+            )
+
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: Client())
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True)
+
+    result = gateway._post("up", 1.0, "BUY", 0.50)
+
+    assert result.success is False
+    assert result.order_id == "0xabc"
+    assert "no match" in result.message
+    assert result.latency_ms is not None
+    assert result.total_latency_ms == result.latency_ms
 
 
 def test_paper_buy_uses_depth_limit_not_average() -> None:

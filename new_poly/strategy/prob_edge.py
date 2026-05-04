@@ -29,6 +29,8 @@ class EdgeConfig:
     final_hold_min_bid_limit: float = 0.95
     prob_stagnation_window_sec: float = 3.0
     prob_stagnation_epsilon: float = 0.002
+    min_fair_cap_margin_ticks: float = 0.0
+    entry_tick_size: float = 0.01
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,8 @@ class MarketSnapshot:
     down_ask_avg: float | None = None
     up_ask_limit: float | None = None
     down_ask_limit: float | None = None
+    up_ask_safety_limit: float | None = None
+    down_ask_safety_limit: float | None = None
     up_best_ask: float | None = None
     down_best_ask: float | None = None
     up_bid_avg: float | None = None
@@ -125,6 +129,15 @@ def _spread_ok(snapshot: MarketSnapshot, side: str, cfg: EdgeConfig, phase: Entr
     return bid is not None and ask is not None and ask - bid < cfg.late_max_spread
 
 
+def _entry_depth_ok(depth_limit: float, safety_limit: float | None, fair_cap: float, cfg: EdgeConfig) -> bool:
+    if depth_limit > fair_cap:
+        return False
+    if safety_limit is not None and safety_limit > fair_cap:
+        return False
+    tick = cfg.entry_tick_size if cfg.entry_tick_size > 0 else 0.01
+    return (fair_cap - depth_limit) + 1e-12 >= cfg.min_fair_cap_margin_ticks * tick
+
+
 def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConfig) -> StrategyDecision:
     if state.has_position:
         return StrategyDecision(action="skip", reason="already_holding")
@@ -147,12 +160,12 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
     if snapshot.up_ask_depth_ok and snapshot.up_ask_avg is not None and snapshot.up_ask_limit is not None:
         up_edge = probs.up - snapshot.up_ask_avg
         up_fair_cap = probs.up - phase.required_edge
-        if up_edge >= phase.required_edge and snapshot.up_ask_limit <= up_fair_cap and _spread_ok(snapshot, "up", cfg, phase):
+        if up_edge >= phase.required_edge and _entry_depth_ok(snapshot.up_ask_limit, snapshot.up_ask_safety_limit, up_fair_cap, cfg) and _spread_ok(snapshot, "up", cfg, phase):
             candidates.append(StrategyDecision("enter", "edge", "up", model_prob=probs.up, price=snapshot.up_ask_avg, limit_price=up_fair_cap, depth_limit_price=snapshot.up_ask_limit, best_ask=snapshot.up_best_ask, edge=up_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge))
     if snapshot.down_ask_depth_ok and snapshot.down_ask_avg is not None and snapshot.down_ask_limit is not None:
         down_edge = probs.down - snapshot.down_ask_avg
         down_fair_cap = probs.down - phase.required_edge
-        if down_edge >= phase.required_edge and snapshot.down_ask_limit <= down_fair_cap and _spread_ok(snapshot, "down", cfg, phase):
+        if down_edge >= phase.required_edge and _entry_depth_ok(snapshot.down_ask_limit, snapshot.down_ask_safety_limit, down_fair_cap, cfg) and _spread_ok(snapshot, "down", cfg, phase):
             candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_ask_avg, limit_price=down_fair_cap, depth_limit_price=snapshot.down_ask_limit, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge))
     if not candidates:
         return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge)

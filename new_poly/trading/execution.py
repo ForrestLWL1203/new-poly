@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
@@ -10,7 +11,7 @@ from typing import Awaitable, Callable
 from new_poly import config
 from new_poly.market.stream import PriceStream
 from .clob_client import get_client, get_order_options, get_token_balance
-from .fak_quotes import buffer_buy_price_hint
+from .fak_quotes import buffer_buy_price_hint, get_tick_size
 
 BUY = "BUY"
 SELL = "SELL"
@@ -20,6 +21,7 @@ SELL = "SELL"
 class ExecutionConfig:
     paper_latency_sec: float = 0.4
     depth_notional: float = 5.0
+    depth_safety_multiplier: float = 1.0
     max_book_age_sec: float = 1.0
     retry_count: int = 1
     retry_interval_sec: float = 0.2
@@ -80,6 +82,28 @@ def _avg_sell_fill(levels: list[tuple[float, float]], shares: float, min_price: 
     return None
 
 
+def _sell_aggression_ticks(exit_reason: str | None, attempt: int) -> float:
+    if exit_reason == "final_force_exit":
+        return 5.0 if attempt == 0 else 10.0
+    if exit_reason in {"logic_decay_exit", "risk_exit"}:
+        return 2.0 if attempt == 0 else 3.0
+    if exit_reason in {"market_overprice_exit", "defensive_take_profit", "profit_protection_exit"}:
+        return 0.0 if attempt == 0 else 1.0
+    return 0.0
+
+
+def _sell_price_hint(token_id: str, min_price: float | None, exit_reason: str | None, attempt: int) -> float | None:
+    if min_price is None:
+        return None
+    tick = get_tick_size(token_id)
+    if tick <= 0:
+        tick = 0.01
+    buffered = min_price - _sell_aggression_ticks(exit_reason, attempt) * tick
+    floor = tick
+    rounded = round(max(floor, buffered), 6)
+    return min(1.0, rounded)
+
+
 class PaperExecutionGateway:
     def __init__(
         self,
@@ -125,7 +149,7 @@ class PaperExecutionGateway:
                 return ExecutionResult(True, order_id="paper-buy", filled_size=shares, avg_price=avg_price, message="paper buy filled", latency_ms=total_latency_ms, attempt=attempt + 1, total_latency_ms=total_latency_ms)
         return ExecutionResult(False, message="paper no fill: insufficient ask depth", latency_ms=total_latency_ms, attempt=self.config.retry_count + 1, total_latency_ms=total_latency_ms)
 
-    async def sell(self, token_id: str, shares: float, min_price: float | None = None) -> ExecutionResult:
+    async def sell(self, token_id: str, shares: float, min_price: float | None = None, exit_reason: str | None = None) -> ExecutionResult:
         start = time.monotonic()
         await self._delay()
         for attempt in range(self.config.retry_count + 1):
@@ -164,6 +188,16 @@ def _is_matched_response(resp: dict) -> bool:
     return bool(resp.get("success")) and status == "MATCHED"
 
 
+def _is_fak_no_match_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "no orders found to match" in text and "fak" in text
+
+
+def _order_id_from_error(exc: Exception) -> str | None:
+    match = re.search(r"['\"]orderID['\"]\s*:\s*['\"]([^'\"]+)['\"]", str(exc))
+    return match.group(1) if match else None
+
+
 class LiveFakExecutionGateway:
     def __init__(self, *, live_risk_ack: bool, retry_count: int = 1, retry_interval_sec: float = 0.2) -> None:
         if not live_risk_ack:
@@ -196,7 +230,7 @@ class LiveFakExecutionGateway:
                 await asyncio.sleep(self.retry_interval_sec)
         return last
 
-    async def sell(self, token_id: str, shares: float, min_price: float | None = None) -> ExecutionResult:
+    async def sell(self, token_id: str, shares: float, min_price: float | None = None, exit_reason: str | None = None) -> ExecutionResult:
         balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
         amount = min(shares, balance or 0.0)
         if amount <= 0:
@@ -204,7 +238,7 @@ class LiveFakExecutionGateway:
         last = ExecutionResult(False, message="live sell not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
-            price_hint = min_price
+            price_hint = _sell_price_hint(token_id, min_price, exit_reason, attempt)
             last = await asyncio.to_thread(self._post, token_id, amount, SELL, price_hint or min_price)
             if last.success or attempt >= self.retry_count:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
@@ -225,7 +259,20 @@ class LiveFakExecutionGateway:
         sdk_side = SDK_BUY if side == BUY else SDK_SELL
         args = MarketOrderArgs(token_id=token_id, amount=amount, side=sdk_side, order_type=OrderType.FAK, price=price_hint or 0)
         signed = client.create_market_order(args, options=get_order_options(token_id))
-        resp = client.post_order(signed, OrderType.FAK)
+        try:
+            resp = client.post_order(signed, OrderType.FAK)
+        except Exception as exc:
+            latency_ms = round((time.monotonic() - start) * 1000)
+            if _is_fak_no_match_error(exc):
+                return ExecutionResult(
+                    success=False,
+                    order_id=_order_id_from_error(exc),
+                    message="live no fill: FAK no match",
+                    mode="live",
+                    latency_ms=latency_ms,
+                    total_latency_ms=latency_ms,
+                )
+            raise
         latency_ms = round((time.monotonic() - start) * 1000)
         order_id = resp.get("orderID") or resp.get("orderId") or resp.get("id")
         filled = _safe_float(resp.get("sizeFilled", resp.get("filledSize", 0)))

@@ -149,6 +149,61 @@ def test_entry_rejects_depth_limit_above_formula_cap() -> None:
     assert decision.reason == "edge_too_small"
 
 
+def test_entry_rejects_when_formula_cap_has_less_than_one_tick_margin() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, min_fair_cap_margin_ticks=1.0, entry_tick_size=0.01)
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.0,
+        k_price=100.0,
+        sigma_eff=2.0,
+        up_ask_avg=0.40,
+        up_ask_limit=0.451,
+        up_best_ask=0.44,
+        up_ask_depth_ok=True,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        down_ask_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "edge_too_small"
+
+
+def test_entry_rejects_when_safety_depth_exceeds_formula_cap() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05)
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.0,
+        k_price=100.0,
+        sigma_eff=2.0,
+        up_ask_avg=0.40,
+        up_ask_limit=0.42,
+        up_ask_safety_limit=0.47,
+        up_best_ask=0.40,
+        up_ask_depth_ok=True,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        down_ask_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "edge_too_small"
+
+
 def test_entry_uses_phase_edges_and_disables_late() -> None:
     cfg = EdgeConfig(early_required_edge=0.10, core_required_edge=0.06, entry_start_age_sec=40.0)
     state = StrategyState(current_market_slug="m1")

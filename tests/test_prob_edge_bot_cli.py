@@ -91,6 +91,14 @@ def test_log_prune_every_windows_has_minimum_one() -> None:
     assert opts.log_prune_every_windows == 1
 
 
+def test_aggressive_config_has_live_fak_safety_guards() -> None:
+    args = build_arg_parser().parse_args(["--config", "configs/prob_edge_aggressive.yaml", "--once"])
+    opts = build_runtime_options(args)
+
+    assert opts.config.execution.depth_safety_multiplier == 1.5
+    assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
+
+
 def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Path) -> None:
     path = tmp_path / "run.jsonl"
     path.write_text(

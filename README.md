@@ -139,10 +139,18 @@ Current default strategy behavior:
 - Entry thresholds are time phased: `0.12` for `90 <= age < 120`, `0.08` for
   `120 <= age < 240`, and late entry is disabled from `240s` onward.
 - FAK entry decisions use size-aware `ask_avg` for edge, require
-  `ask_limit <= model_prob - required_edge`, and send BUY hints as
+  `ask_limit <= model_prob - required_edge`, require the formula cap to leave
+  at least one tick of executable margin, and send BUY hints as
   `min(ask_limit + tick_buffer, model_prob - required_edge)`.
-- FAK BUY gets one capped retry; FAK SELL reposts once at the same
-  `min_price` floor to catch changed book state without crossing lower.
+- Entry depth uses a safety multiplier in live-oriented configs: the bot may
+  buy `amount_usd`, but requires enough ask depth for
+  `amount_usd * depth_safety_multiplier` inside the same formula cap.
+- FAK BUY gets one capped retry. FAK SELL also retries once, but the sell floor
+  depends on exit urgency: profit exits only loosen by one tick on retry,
+  `logic_decay_exit` / `risk_exit` start two ticks below `bid_limit`, and
+  `final_force_exit` uses a wider emergency ladder.
+- A live CLOB `FAK no match` response is treated as `order_no_fill`, not a
+  fatal bot error, and records the failed POST latency for later diagnostics.
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
 - Exits include logic decay, market-overprice exits, final-60s defensive
   take-profit, final-30s profit protection, and final-15s forced risk exit.

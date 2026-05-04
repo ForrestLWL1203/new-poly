@@ -67,6 +67,31 @@ def test_avg_price_for_notional() -> None:
     assert limit_price == 0.42
 
 
+def test_token_state_uses_safety_multiplier_without_changing_trade_average() -> None:
+    class FakeStream:
+        def get_latest_ask_levels_with_size(self, token_id):
+            return [(0.50, 2.0), (0.52, 1.0)]
+
+        def get_latest_bid_levels_with_size(self, token_id):
+            return [(0.49, 10.0)]
+
+        def get_latest_best_bid(self, token_id):
+            return 0.49
+
+        def get_latest_best_ask(self, token_id):
+            return 0.50
+
+        def get_latest_best_ask_age(self, token_id):
+            return 0.01
+
+    state = collector.token_state(FakeStream(), "up", depth_notional=1.0, depth_safety_multiplier=1.5)
+
+    assert state["ask_avg"] == 0.5
+    assert state["ask_limit"] == 0.5
+    assert state["ask_safety_limit"] == 0.52
+    assert state["ask_depth_ok"] is True
+
+
 def test_window_tracker_counts_only_valid_windows() -> None:
     tracker = collector.WindowLimitTracker(limit=2)
 

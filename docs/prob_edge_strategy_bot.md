@@ -140,6 +140,20 @@ ask_limit <= fair_cap
 This prevents an average-cheap book from passing when the deepest required ask
 level is already more expensive than the model allows.
 
+Live-oriented configs add two extra FAK quality guards:
+
+```text
+fair_cap - ask_limit >= min_fair_cap_margin_ticks * tick_size
+ask_safety_limit <= fair_cap
+```
+
+`ask_safety_limit` is computed from
+`amount_usd * depth_safety_multiplier`. The bot still calculates `ask_avg` and
+`ask_limit` from the actual order notional, so the safety buffer does not
+artificially worsen the edge. It only requires extra executable depth inside the
+formula cap. The default aggressive/live-smoke profile uses a `1.5x` depth
+safety multiplier and a one-tick fair-cap margin.
+
 Live FAK BUY price hinting then uses the depth limit, not the first ask:
 
 ```text
@@ -186,11 +200,33 @@ attempt 1: min(ask_limit + 1 tick, fair_cap)
 attempt 2: min(ask_limit + 2 ticks, fair_cap)
 ```
 
-SELL also gets one retry. The sell hint is the configured `min_price` floor on
-both attempts. In CLOB FAK semantics this is already the most aggressive
-allowed sell limit: any visible bid at or above `min_price` can fill, while bids
-below the floor are rejected. The retry is a second chance against a changed
-book, not a price-escalation ladder.
+SELL also gets one retry, but the sell floor depends on exit urgency. In CLOB
+FAK semantics any visible bid at or above the sell floor can fill, while bids
+below the floor are rejected.
+
+```text
+market_overprice_exit / defensive_take_profit / profit_protection_exit:
+  attempt 1: bid_limit
+  attempt 2: bid_limit - 1 tick
+
+logic_decay_exit / risk_exit:
+  attempt 1: bid_limit - 2 ticks
+  attempt 2: bid_limit - 3 ticks
+
+final_force_exit:
+  attempt 1: bid_limit - 5 ticks
+  attempt 2: bid_limit - 10 ticks
+```
+
+Sell floors are clamped at one tick. The purpose is asymmetric: profit exits try
+to preserve price, while stop/risk exits prefer reducing exposure over waiting
+for a perfect bid.
+
+Live CLOB can return a `400` response such as `no orders found to match with FAK
+order`. That is normal FAK behavior when the local WS book has moved before the
+POST reaches the matching engine. The live executor records it as
+`order_no_fill` with `latency_ms` / `total_latency_ms` and keeps the bot running;
+it does not create a position and does not terminate the process.
 
 Paper mode mirrors the same retry count and interval against the latest local
 book after the simulated latency. Paper applies `paper_latency_sec` once for the

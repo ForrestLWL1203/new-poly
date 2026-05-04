@@ -218,11 +218,13 @@ def avg_price_for_notional(levels: list[tuple[float, float]], target_notional: f
     return compact_float(avg), notional >= target_notional - 1e-9, notional, compact_float(limit_price)
 
 
-def token_state(stream: PriceStream, token_id: str, depth_notional: float) -> dict[str, Any]:
+def token_state(stream: PriceStream, token_id: str, depth_notional: float, depth_safety_multiplier: float = 1.0) -> dict[str, Any]:
     asks = stream.get_latest_ask_levels_with_size(token_id)
     bids = stream.get_latest_bid_levels_with_size(token_id)
     ask_avg, ask_ok, _, ask_limit = avg_price_for_notional(asks, depth_notional)
     bid_avg, bid_ok, _, bid_limit = avg_price_for_notional(bids, depth_notional)
+    safety_notional = depth_notional * max(1.0, float(depth_safety_multiplier))
+    _, ask_safety_ok, _, ask_safety_limit = avg_price_for_notional(asks, safety_notional)
     return {
         "bid": compact_float(stream.get_latest_best_bid(token_id)),
         "ask": compact_float(stream.get_latest_best_ask(token_id)),
@@ -230,9 +232,10 @@ def token_state(stream: PriceStream, token_id: str, depth_notional: float) -> di
         "ask_avg": ask_avg,
         "bid_avg": bid_avg,
         "ask_limit": ask_limit,
+        "ask_safety_limit": ask_safety_limit,
         "bid_limit": bid_limit,
         "stable_depth_usd": compact_float(sum(price * size for price, size in asks), 4),
-        "ask_depth_ok": ask_ok,
+        "ask_depth_ok": ask_ok and ask_safety_ok,
         "bid_depth_ok": bid_ok,
     }
 

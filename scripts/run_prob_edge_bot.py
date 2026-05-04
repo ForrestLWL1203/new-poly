@@ -231,10 +231,13 @@ def load_bot_config(path: Path) -> BotConfig:
         final_hold_min_bid_limit=float(_deep_get(raw, ("strategy", "final_hold_min_bid_limit"), 0.95)),
         prob_stagnation_window_sec=float(_deep_get(raw, ("strategy", "prob_stagnation_window_sec"), 3.0)),
         prob_stagnation_epsilon=float(_deep_get(raw, ("strategy", "prob_stagnation_epsilon"), 0.002)),
+        min_fair_cap_margin_ticks=float(_deep_get(raw, ("strategy", "min_fair_cap_margin_ticks"), 0.0)),
+        entry_tick_size=float(_deep_get(raw, ("strategy", "entry_tick_size"), 0.01)),
     )
     execution = ExecutionConfig(
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.4)),
         depth_notional=float(_deep_get(raw, ("execution", "depth_notional"), 5.0)),
+        depth_safety_multiplier=float(_deep_get(raw, ("execution", "depth_safety_multiplier"), 1.0)),
         max_book_age_sec=float(_deep_get(raw, ("execution", "max_book_age_sec"), 1.0)),
         retry_count=int(_deep_get(raw, ("execution", "retry_count"), 1)),
         retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.2)),
@@ -278,6 +281,7 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         execution = ExecutionConfig(
             paper_latency_sec=cfg.execution.paper_latency_sec,
             depth_notional=float(args.amount_usd),
+            depth_safety_multiplier=cfg.execution.depth_safety_multiplier,
             max_book_age_sec=cfg.execution.max_book_age_sec,
             retry_count=cfg.execution.retry_count,
             retry_interval_sec=cfg.execution.retry_interval_sec,
@@ -494,8 +498,8 @@ def _snapshot(window, prices: WindowPrices, feed: BinancePriceFeed, stream: Pric
     age_sec = (now - window.start_time).total_seconds()
     remaining_sec = (window.end_time - now).total_seconds()
     price_source, s_price, basis_bps = effective_price(feed, prices)
-    up = token_state(stream, window.up_token, cfg.amount_usd)
-    down = token_state(stream, window.down_token, cfg.amount_usd)
+    up = token_state(stream, window.up_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
+    down = token_state(stream, window.down_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     snap = MarketSnapshot(
         market_slug=window.slug,
         age_sec=age_sec,
@@ -507,6 +511,8 @@ def _snapshot(window, prices: WindowPrices, feed: BinancePriceFeed, stream: Pric
         down_ask_avg=down["ask_avg"],
         up_ask_limit=up["ask_limit"],
         down_ask_limit=down["ask_limit"],
+        up_ask_safety_limit=up["ask_safety_limit"],
+        down_ask_safety_limit=down["ask_safety_limit"],
         up_best_ask=up["ask"],
         down_best_ask=down["ask"],
         up_bid_avg=up["bid_avg"],
@@ -662,7 +668,12 @@ async def run(options: RuntimeOptions) -> int:
                     state.record_model_prob(snap.age_sec, decision.model_prob)
                 if decision.action == "exit":
                     exiting_position = state.open_position
-                    result = await gateway.sell(state.open_position.token_id, state.open_position.filled_shares, min_price=decision.limit_price)
+                    result = await gateway.sell(
+                        state.open_position.token_id,
+                        state.open_position.filled_shares,
+                        min_price=decision.limit_price,
+                        exit_reason=decision.reason,
+                    )
                     row["order"] = result.__dict__
                     if options.analysis_logs:
                         row["analysis"] = _exit_analysis(decision, result)

@@ -465,3 +465,7 @@ Book parsing notes:
 - Record local receive times for every external data event.
 - Keep raw API credentials and private keys out of logs.
 - Log enough non-secret order diagnostics to debug latency and response shape.
+- When inspecting VPS JSONL logs over SSH, avoid embedding multi-line Python in
+  a single quoted `python -c` command. Use `ssh ... 'bash -s' <<'REMOTE'` with a
+  heredoc, or upload/run a small temporary script, so shell quoting does not
+  corrupt the diagnostic command.
