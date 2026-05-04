@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Optional
 
 from new_poly import config
 from new_poly.market.stream import PriceStream
@@ -42,6 +42,7 @@ class ExecutionResult:
     latency_ms: int | None = None
     attempt: int = 1
     total_latency_ms: int | None = None
+    timing: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ def _with_attempt(result: ExecutionResult, *, attempt: int, total_latency_ms: in
         latency_ms=result.latency_ms,
         attempt=attempt,
         total_latency_ms=total_latency_ms,
+        timing=result.timing,
     )
 
 
@@ -87,7 +89,12 @@ def _retry_skipped(result: ExecutionResult, *, attempt: int, total_latency_ms: i
         latency_ms=result.latency_ms,
         attempt=attempt,
         total_latency_ms=total_latency_ms,
+        timing=result.timing,
     )
+
+
+def _ms_since(start: float) -> int:
+    return round((time.monotonic() - start) * 1000)
 
 
 def _avg_buy_fill(levels: list[tuple[float, float]], amount_usd: float, max_price: float | None) -> tuple[float, float] | None:
@@ -177,17 +184,33 @@ class PaperExecutionGateway:
         self.config = config
         self.before_fill = before_fill
 
-    async def _delay(self) -> None:
+    async def _delay(self) -> int:
+        start = time.monotonic()
         if self.before_fill is not None:
             await self.before_fill()
         if self.config.paper_latency_sec > 0:
             await asyncio.sleep(self.config.paper_latency_sec)
+        return _ms_since(start)
 
-    async def _retry_wait(self) -> None:
+    async def _retry_wait(self) -> int:
+        start = time.monotonic()
         if self.before_fill is not None:
             await self.before_fill()
         if self.config.retry_interval_sec > 0:
             await asyncio.sleep(self.config.retry_interval_sec)
+        return _ms_since(start)
+
+    def _paper_timing(self, *, start: float, attempts: int, sleep_ms: int, retry_wait_ms: int, retry_refresh_ms: int, book_read_ms: int) -> dict[str, Any]:
+        return {
+            "paper_configured_latency_ms": round(max(0.0, self.config.paper_latency_sec) * 1000),
+            "paper_actual_sleep_ms": sleep_ms,
+            "retry_configured_wait_ms": round(max(0.0, self.config.retry_interval_sec) * 1000),
+            "retry_actual_wait_ms": retry_wait_ms,
+            "retry_refresh_ms": retry_refresh_ms,
+            "book_read_ms": book_read_ms,
+            "attempts": attempts,
+            "total_latency_ms": _ms_since(start),
+        }
 
     async def buy(
         self,
@@ -199,28 +222,48 @@ class PaperExecutionGateway:
         retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         start = time.monotonic()
-        await self._delay()
+        sleep_ms = await self._delay()
+        retry_wait_ms = 0
+        retry_refresh_ms = 0
+        book_read_ms = 0
         for attempt in range(self.config.retry_count + 1):
             if attempt > 0:
-                await self._retry_wait()
+                retry_wait_ms += await self._retry_wait()
                 if retry_refresh is not None:
+                    refresh_start = time.monotonic()
                     refreshed = await retry_refresh(attempt)
+                    retry_refresh_ms += _ms_since(refresh_start)
                     if refreshed is None:
+                        total_latency_ms = _ms_since(start)
                         return _retry_skipped(
-                            ExecutionResult(False, message="paper buy no fill", mode="paper"),
+                            ExecutionResult(
+                                False,
+                                message="paper buy no fill",
+                                mode="paper",
+                                timing=self._paper_timing(
+                                    start=start,
+                                    attempts=attempt,
+                                    sleep_ms=sleep_ms,
+                                    retry_wait_ms=retry_wait_ms,
+                                    retry_refresh_ms=retry_refresh_ms,
+                                    book_read_ms=book_read_ms,
+                                ),
+                            ),
                             attempt=attempt,
-                            total_latency_ms=round((time.monotonic() - start) * 1000),
+                            total_latency_ms=total_latency_ms,
                         )
                     max_price = refreshed.max_price
                     best_ask = refreshed.best_ask
                     price_hint_base = refreshed.price_hint_base
+            book_start = time.monotonic()
             levels = self.stream.get_latest_ask_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
+            book_read_ms += _ms_since(book_start)
             fill = _avg_buy_fill(levels, amount_usd, max_price)
-            total_latency_ms = round((time.monotonic() - start) * 1000)
+            total_latency_ms = _ms_since(start)
             if fill is not None:
                 shares, avg_price = fill
-                return ExecutionResult(True, order_id="paper-buy", filled_size=shares, avg_price=avg_price, message="paper buy filled", latency_ms=total_latency_ms, attempt=attempt + 1, total_latency_ms=total_latency_ms)
-        return ExecutionResult(False, message="paper no fill: insufficient ask depth", latency_ms=total_latency_ms, attempt=self.config.retry_count + 1, total_latency_ms=total_latency_ms)
+                return ExecutionResult(True, order_id="paper-buy", filled_size=shares, avg_price=avg_price, message="paper buy filled", latency_ms=total_latency_ms, attempt=attempt + 1, total_latency_ms=total_latency_ms, timing=self._paper_timing(start=start, attempts=attempt + 1, sleep_ms=sleep_ms, retry_wait_ms=retry_wait_ms, retry_refresh_ms=retry_refresh_ms, book_read_ms=book_read_ms))
+        return ExecutionResult(False, message="paper no fill: insufficient ask depth", latency_ms=total_latency_ms, attempt=self.config.retry_count + 1, total_latency_ms=total_latency_ms, timing=self._paper_timing(start=start, attempts=self.config.retry_count + 1, sleep_ms=sleep_ms, retry_wait_ms=retry_wait_ms, retry_refresh_ms=retry_refresh_ms, book_read_ms=book_read_ms))
 
     async def sell(
         self,
@@ -231,21 +274,41 @@ class PaperExecutionGateway:
         retry_refresh: SellRetryRefresh | None = None,
     ) -> ExecutionResult:
         start = time.monotonic()
-        await self._delay()
+        sleep_ms = await self._delay()
+        retry_wait_ms = 0
+        retry_refresh_ms = 0
+        book_read_ms = 0
         for attempt in range(self.config.retry_count + 1):
             if attempt > 0:
-                await self._retry_wait()
+                retry_wait_ms += await self._retry_wait()
                 if retry_refresh is not None:
+                    refresh_start = time.monotonic()
                     refreshed = await retry_refresh(attempt)
+                    retry_refresh_ms += _ms_since(refresh_start)
                     if refreshed is None:
+                        total_latency_ms = _ms_since(start)
                         return _retry_skipped(
-                            ExecutionResult(False, message="paper sell no fill", mode="paper"),
+                            ExecutionResult(
+                                False,
+                                message="paper sell no fill",
+                                mode="paper",
+                                timing=self._paper_timing(
+                                    start=start,
+                                    attempts=attempt,
+                                    sleep_ms=sleep_ms,
+                                    retry_wait_ms=retry_wait_ms,
+                                    retry_refresh_ms=retry_refresh_ms,
+                                    book_read_ms=book_read_ms,
+                                ),
+                            ),
                             attempt=attempt,
-                            total_latency_ms=round((time.monotonic() - start) * 1000),
+                            total_latency_ms=total_latency_ms,
                         )
                     min_price = refreshed.min_price
                     exit_reason = refreshed.exit_reason
+            book_start = time.monotonic()
             levels = self.stream.get_latest_bid_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
+            book_read_ms += _ms_since(book_start)
             effective_min = _sell_price_hint(
                 token_id,
                 min_price,
@@ -255,11 +318,11 @@ class PaperExecutionGateway:
                 sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
             )
             fill = _avg_sell_fill(levels, shares, effective_min)
-            total_latency_ms = round((time.monotonic() - start) * 1000)
+            total_latency_ms = _ms_since(start)
             if fill is not None:
                 sold, avg_price = fill
-                return ExecutionResult(True, order_id="paper-sell", filled_size=sold, avg_price=avg_price, message="paper sell filled", latency_ms=total_latency_ms, attempt=attempt + 1, total_latency_ms=total_latency_ms)
-        return ExecutionResult(False, message="paper no fill: insufficient bid depth", latency_ms=total_latency_ms, attempt=self.config.retry_count + 1, total_latency_ms=total_latency_ms)
+                return ExecutionResult(True, order_id="paper-sell", filled_size=sold, avg_price=avg_price, message="paper sell filled", latency_ms=total_latency_ms, attempt=attempt + 1, total_latency_ms=total_latency_ms, timing=self._paper_timing(start=start, attempts=attempt + 1, sleep_ms=sleep_ms, retry_wait_ms=retry_wait_ms, retry_refresh_ms=retry_refresh_ms, book_read_ms=book_read_ms))
+        return ExecutionResult(False, message="paper no fill: insufficient bid depth", latency_ms=total_latency_ms, attempt=self.config.retry_count + 1, total_latency_ms=total_latency_ms, timing=self._paper_timing(start=start, attempts=self.config.retry_count + 1, sleep_ms=sleep_ms, retry_wait_ms=retry_wait_ms, retry_refresh_ms=retry_refresh_ms, book_read_ms=book_read_ms))
 
 
 def _safe_float(value) -> float:

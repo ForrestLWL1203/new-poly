@@ -371,7 +371,7 @@ def _dynamic_candidate_payload(last_check_result: dict[str, Any]) -> list[Any]:
 
 def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
     fill_price = result.avg_price if result is not None and result.success else None
-    return {
+    row = {
         "order_intent": "entry",
         "entry_side": decision.side,
         "entry_phase": decision.phase,
@@ -388,11 +388,14 @@ def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None =
         "order_attempt": result.attempt if result is not None else None,
         "order_total_latency_ms": result.total_latency_ms if result is not None else None,
     }
+    if result is not None and result.timing:
+        row["order_timing"] = result.timing
+    return row
 
 
 def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
     fill_price = result.avg_price if result is not None and result.success else None
-    return {
+    row = {
         "order_intent": "exit",
         "exit_side": decision.side,
         "exit_reason": decision.reason,
@@ -407,6 +410,9 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
         "order_attempt": result.attempt if result is not None else None,
         "order_total_latency_ms": result.total_latency_ms if result is not None else None,
     }
+    if result is not None and result.timing:
+        row["order_timing"] = result.timing
+    return row
 
 
 def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str, str]]) -> bool:

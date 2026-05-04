@@ -220,7 +220,7 @@ def test_entry_analysis_records_signal_and_fill_edges() -> None:
         phase="core",
         required_edge=0.08,
     )
-    result = ExecutionResult(True, filled_size=10.0, avg_price=0.56, attempt=2, total_latency_ms=620)
+    result = ExecutionResult(True, filled_size=10.0, avg_price=0.56, attempt=2, total_latency_ms=620, timing={"paper_actual_sleep_ms": 400})
 
     analysis = _entry_analysis(decision, result)
 
@@ -229,6 +229,7 @@ def test_entry_analysis_records_signal_and_fill_edges() -> None:
     assert analysis["entry_edge_at_fill"] == 0.14
     assert analysis["entry_depth_limit_price"] == 0.55
     assert analysis["order_attempt"] == 2
+    assert analysis["order_timing"]["paper_actual_sleep_ms"] == 400
 
 
 def test_exit_analysis_records_exit_floor_and_profit() -> None:
@@ -243,7 +244,7 @@ def test_exit_analysis_records_exit_floor_and_profit() -> None:
         prob_stagnant=True,
         prob_delta_3s=-0.01,
     )
-    result = ExecutionResult(True, filled_size=7.0, avg_price=0.41, attempt=1, total_latency_ms=410)
+    result = ExecutionResult(True, filled_size=7.0, avg_price=0.41, attempt=1, total_latency_ms=410, timing={"book_read_ms": 1})
 
     analysis = _exit_analysis(decision, result)
 
@@ -252,6 +253,7 @@ def test_exit_analysis_records_exit_floor_and_profit() -> None:
     assert analysis["exit_min_price"] == 0.40
     assert analysis["exit_profit_per_share"] == -0.03
     assert analysis["exit_price"] == 0.41
+    assert analysis["order_timing"]["book_read_ms"] == 1
 
 
 def test_outside_entry_time_skip_logs_once_per_window() -> None:

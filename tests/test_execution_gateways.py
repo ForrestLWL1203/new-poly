@@ -487,6 +487,50 @@ def test_paper_buy_uses_depth_limit_not_average() -> None:
     asyncio.run(scenario())
 
 
+def test_paper_buy_records_compact_timing_telemetry() -> None:
+    async def scenario() -> None:
+        stream = FakeStream()
+        gateway = PaperExecutionGateway(
+            stream=stream,
+            config=ExecutionConfig(paper_latency_sec=0.0, retry_interval_sec=0.0),
+        )
+
+        result = await gateway.buy("up", amount_usd=5.0, max_price=0.60)
+
+        assert result.success is True
+        assert result.timing["paper_configured_latency_ms"] == 0
+        assert "paper_actual_sleep_ms" in result.timing
+        assert "book_read_ms" in result.timing
+        assert result.timing["attempts"] == 1
+        assert result.timing["total_latency_ms"] == result.total_latency_ms
+
+    asyncio.run(scenario())
+
+
+def test_live_post_keeps_detailed_timing_empty(monkeypatch) -> None:
+    class Client:
+        def create_market_order(self, args, options=None):
+            return {"signed": True}
+
+        def post_order(self, signed, order_type):
+            return {
+                "orderID": "ord-matched",
+                "success": True,
+                "status": "MATCHED",
+                "takingAmount": "1.6667",
+                "makingAmount": "1.0",
+            }
+
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: Client())
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True)
+
+    result = gateway._post("up", 1.0, "BUY", 0.60)
+
+    assert result.success is True
+    assert result.timing == {}
+
+
 def test_paper_retry_uses_one_latency_plus_retry_interval() -> None:
     async def scenario() -> None:
         stream = FakeStream()
