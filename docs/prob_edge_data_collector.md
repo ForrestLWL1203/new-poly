@@ -73,6 +73,7 @@ Useful options:
 --interval-sec 1
 --jsonl <path>
 --depth-notional 5
+--depth-safety-multiplier 1.5
 --collect-dvol / --no-collect-dvol
 --dvol-refresh-sec 0
 --warmup-timeout-sec 8
@@ -149,11 +150,18 @@ book_age_ms
 ask_avg
 bid_avg
 ask_limit
+ask_safety_limit
 bid_limit
 stable_depth_usd
 ask_depth_ok
 bid_depth_ok
 ```
+
+`ask_avg` and `ask_limit` are computed for `--depth-notional`. `ask_safety_limit`
+is computed for `--depth-notional * --depth-safety-multiplier`, and
+`ask_depth_ok` requires both the normal and safety depth checks to pass. This
+lets replay enforce the same safety-depth guard used by the strategy bot without
+logging full order books.
 
 The collector intentionally does not log full order books. Add a separate book
 recorder if full offline fill simulation becomes necessary.

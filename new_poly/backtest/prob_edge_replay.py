@@ -26,6 +26,8 @@ class BacktestConfig:
     buy_slippage_ticks: float = 0.0
     sell_slippage_ticks: float = 0.0
     settlement_boundary_usd: float = 5.0
+    min_fair_cap_margin_ticks: float = 0.0
+    entry_tick_size: float = 0.01
 
     def edge_config(self) -> EdgeConfig:
         return EdgeConfig(
@@ -36,6 +38,8 @@ class BacktestConfig:
             max_book_age_ms=self.max_book_age_ms,
             max_entries_per_market=self.max_entries_per_market,
             late_entry_enabled=self.late_entry_enabled,
+            min_fair_cap_margin_ticks=self.min_fair_cap_margin_ticks,
+            entry_tick_size=self.entry_tick_size,
         )
 
 
@@ -78,6 +82,8 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
         down_ask_avg=_float(down.get("ask_avg")),
         up_ask_limit=_float(up.get("ask_limit")),
         down_ask_limit=_float(down.get("ask_limit")),
+        up_ask_safety_limit=_float(up.get("ask_safety_limit")),
+        down_ask_safety_limit=_float(down.get("ask_safety_limit")),
         up_best_ask=_float(up.get("ask")),
         down_best_ask=_float(down.get("ask")),
         up_bid_avg=_float(up.get("bid_avg")),
@@ -304,6 +310,8 @@ def scan_configs(
             buy_slippage_ticks=base.buy_slippage_ticks,
             sell_slippage_ticks=base.sell_slippage_ticks,
             settlement_boundary_usd=base.settlement_boundary_usd,
+            min_fair_cap_margin_ticks=base.min_fair_cap_margin_ticks,
+            entry_tick_size=base.entry_tick_size,
         )
         result = run_backtest(materialized, cfg)
         if result.summary["entries"] < min_entries:

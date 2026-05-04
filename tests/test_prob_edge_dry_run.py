@@ -202,6 +202,7 @@ def test_collector_row_is_strategy_neutral() -> None:
         stream=FakeStream(),
         now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
         depth_notional=5.0,
+        depth_safety_multiplier=1.5,
         sigma_eff=0.6,
         sigma_source="manual",
         volatility_stale=False,
@@ -223,6 +224,8 @@ def test_collector_row_is_strategy_neutral() -> None:
     assert row["volatility"]["sigma"] == 0.4
     assert row["volatility_stale"] is False
     assert row["up"]["ask_limit"] == 0.51
+    assert row["up"]["ask_safety_limit"] == 0.51
+    assert row["depth_safety_multiplier"] == 1.5
     assert "close_price" not in row
     for forbidden in ("decision", "candidate_side", "skip_reason", "required_edge", "edge_components", "up_prob", "down_prob"):
         assert forbidden not in row
@@ -266,6 +269,7 @@ def test_collector_row_marks_stale_volatility() -> None:
         stream=FakeStream(),
         now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
         depth_notional=5.0,
+        depth_safety_multiplier=1.5,
         sigma_eff=None,
         sigma_source="missing",
         volatility_stale=True,

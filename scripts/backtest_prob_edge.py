@@ -45,6 +45,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-end-age-sec", type=float, default=270.0)
     parser.add_argument("--max-entries-per-market", type=int, default=2)
     parser.add_argument("--tick-size", type=float, default=0.01)
+    parser.add_argument("--min-fair-cap-margin-ticks", type=float, default=0.0)
+    parser.add_argument("--entry-tick-size", type=float, default=0.01)
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
     parser.add_argument("--buy-slippage-ticks", type=float)
     parser.add_argument("--sell-slippage-ticks", type=float)
@@ -76,6 +78,8 @@ def main() -> int:
         buy_slippage_ticks=buy_slippage_ticks,
         sell_slippage_ticks=sell_slippage_ticks,
         settlement_boundary_usd=args.settlement_boundary_usd,
+        min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,
+        entry_tick_size=args.entry_tick_size,
     )
     result = run_backtest(rows, cfg)
     payload: dict[str, Any] = {

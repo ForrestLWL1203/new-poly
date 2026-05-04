@@ -49,6 +49,23 @@ python3 scripts/backtest_prob_edge.py \
 Use `--buy-slippage-ticks` and `--sell-slippage-ticks` when the two sides need
 different assumptions. The default `tick_size` is `0.01`.
 
+To replay the current live/dry-run entry guard, pass the fair-cap margin used by
+the bot:
+
+```bash
+python3 scripts/backtest_prob_edge.py \
+  --jsonl data/prob-edge-collector-96-20260503T162542Z.kprice-ok.jsonl \
+  --amount-usd 1 \
+  --entry-start-age-sec 100 \
+  --entry-end-age-sec 240 \
+  --early-required-edge 0.14 \
+  --core-required-edge 0.12 \
+  --max-entries-per-market 4 \
+  --min-fair-cap-margin-ticks 1 \
+  --entry-tick-size 0.01 \
+  --slippage-ticks 3
+```
+
 For win-rate-first scans, filter tiny samples and sort by win rate:
 
 ```bash
@@ -78,6 +95,13 @@ The replay uses:
 Entry decisions still use size-aware `ask_avg` for edge screening, but simulated
 fills use the worse executable depth limit. If slippage pushes BUY above the
 fair cap (`model_prob - required_edge`), the fill is skipped.
+
+When collector rows include `ask_safety_limit`, replay also enforces the current
+depth safety check: the safety-depth limit must remain inside the same fair cap.
+Older collector files that lack `ask_safety_limit` cannot reconstruct the newer
+`depth_safety_multiplier` filter because they do not contain full order-book
+levels; those files can still test fair-cap margin and slippage, but not the
+extra safety-depth requirement.
 
 Trade fields keep both edge definitions:
 

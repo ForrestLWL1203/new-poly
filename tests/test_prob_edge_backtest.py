@@ -185,3 +185,23 @@ def test_backtest_config_passes_max_entries_to_strategy() -> None:
     cfg = BacktestConfig(max_entries_per_market=4)
 
     assert cfg.edge_config().max_entries_per_market == 4
+
+
+def test_backtest_rejects_entry_when_safety_depth_exceeds_formula_cap() -> None:
+    rows = [_row("m1", 120, 100.10)]
+    rows[0]["up"]["ask_avg"] = 0.20
+    rows[0]["up"]["ask_limit"] = 0.20
+    rows[0]["up"]["ask_safety_limit"] = 0.99
+
+    result = run_backtest(rows, BacktestConfig(core_required_edge=0.05))
+
+    assert result.summary["entries"] == 0
+
+
+def test_backtest_config_passes_fair_cap_margin_to_strategy() -> None:
+    cfg = BacktestConfig(min_fair_cap_margin_ticks=1.0, tick_size=0.01)
+
+    edge_cfg = cfg.edge_config()
+
+    assert edge_cfg.min_fair_cap_margin_ticks == 1.0
+    assert edge_cfg.entry_tick_size == 0.01

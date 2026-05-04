@@ -248,6 +248,7 @@ def build_row(
     stream: PriceStream,
     now: dt.datetime,
     depth_notional: float,
+    depth_safety_multiplier: float,
     sigma_eff: float | None,
     sigma_source: str,
     volatility_stale: bool,
@@ -258,8 +259,8 @@ def build_row(
     remaining_sec = (window.end_time - now).total_seconds()
     price_source, s_price, basis_bps = effective_price(feed, prices)
     good_resolution = is_chainlink_btc_resolution(window.resolution_source, window.description)
-    up = token_state(stream, window.up_token, depth_notional)
-    down = token_state(stream, window.down_token, depth_notional)
+    up = token_state(stream, window.up_token, depth_notional, depth_safety_multiplier)
+    down = token_state(stream, window.down_token, depth_notional, depth_safety_multiplier)
     ask_sum = up["ask_avg"] + down["ask_avg"] if up["ask_avg"] is not None and down["ask_avg"] is not None else None
     bid_sum = up["bid_avg"] + down["bid_avg"] if up["bid_avg"] is not None and down["bid_avg"] is not None else None
     warnings: list[str] = []
@@ -302,6 +303,7 @@ def build_row(
         "binance_open_delta_ms": prices.binance_open_delta_ms,
         "basis_bps": compact_float(basis_bps, 3),
         "depth_notional": compact_float(depth_notional, 2),
+        "depth_safety_multiplier": compact_float(depth_safety_multiplier, 3),
         "up": up,
         "down": down,
         "yes_no_sum": {
@@ -341,6 +343,7 @@ def find_following_window(window: MarketWindow, series: MarketSeries) -> MarketW
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Emit compact JSONL data rows for BTC 5m probability-edge research.")
     parser.add_argument("--depth-notional", type=float, default=5.0)
+    parser.add_argument("--depth-safety-multiplier", type=float, default=1.5)
     parser.add_argument("--order-notional", type=float, dest="depth_notional", help=argparse.SUPPRESS)
     parser.add_argument("--max-book-age-ms", type=int, default=1000)
     parser.add_argument("--jsonl", type=Path)
@@ -411,6 +414,7 @@ async def run(args: argparse.Namespace) -> int:
                 stream=stream,
                 now=now,
                 depth_notional=args.depth_notional,
+                depth_safety_multiplier=args.depth_safety_multiplier,
                 sigma_eff=sigma_eff,
                 sigma_source=sigma_source,
                 volatility_stale=volatility_stale,
