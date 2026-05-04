@@ -31,6 +31,17 @@ python3 scripts/run_prob_edge_bot.py \
   --jsonl data/prob-edge-bot-paper.jsonl
 ```
 
+Aggressive paper candidate for longer VPS dry-runs:
+
+```bash
+mkdir -p data
+python3 scripts/run_prob_edge_bot.py \
+  --config configs/prob_edge_aggressive.yaml \
+  --mode paper \
+  --windows 48 \
+  --jsonl data/prob-edge-bot-paper-aggressive-48w.jsonl
+```
+
 Paper mode enables analysis logs by default. Live mode keeps them off unless
 explicitly requested:
 
@@ -70,7 +81,15 @@ python3 scripts/run_prob_edge_bot.py \
 - S is Binance proxy price, basis-adjusted once K and Binance open are known.
 - The old single `required_edge` field is no longer used.
 
-Config knobs live in `configs/prob_edge_mvp.yaml`:
+Config files:
+
+- `configs/prob_edge_mvp.yaml`: baseline/default config.
+- `configs/prob_edge_aggressive.yaml`: current optimized aggressive paper
+  candidate from the first 96-window replay. It uses `100-240s` entry timing,
+  `0.14/0.12` early/core edge thresholds, `max_entries_per_market=4`, and
+  `$1` notional/depth.
+
+Config knobs include:
 
 ```text
 early_required_edge

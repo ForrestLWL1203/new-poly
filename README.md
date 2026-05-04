@@ -157,6 +157,24 @@ Paper strategy runs print analysis logs by default. Live mode defaults analysis
 logs off; add `--analysis-logs` during live debugging or `--no-analysis-logs`
 for compact long-running paper logs.
 
+Current parameter files:
+
+- `configs/prob_edge_mvp.yaml`: conservative baseline/default config.
+- `configs/prob_edge_aggressive.yaml`: current optimized aggressive paper
+  candidate from the first 96-window replay. It uses `100-240s` entry timing,
+  `0.14/0.12` early/core edge thresholds, `max_entries_per_market=4`, and
+  `$1` paper notional/depth.
+
+Longer aggressive paper run:
+
+```bash
+python3 scripts/run_prob_edge_bot.py \
+  --config configs/prob_edge_aggressive.yaml \
+  --mode paper \
+  --windows 48 \
+  --jsonl data/prob-edge-bot-paper-aggressive-48w.jsonl
+```
+
 See [docs/prob_edge_strategy_bot.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_strategy_bot.md).
 
 ### Probability Edge Backtest
