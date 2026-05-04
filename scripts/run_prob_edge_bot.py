@@ -39,7 +39,14 @@ from new_poly.strategy.dynamic_params import (
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.clob_client import prefetch_order_params
-from new_poly.trading.execution import ExecutionConfig, ExecutionResult, LiveFakExecutionGateway, PaperExecutionGateway
+from new_poly.trading.execution import (
+    BuyRetryParams,
+    ExecutionConfig,
+    ExecutionResult,
+    LiveFakExecutionGateway,
+    PaperExecutionGateway,
+    SellRetryParams,
+)
 
 from scripts.collect_prob_edge_data import (
     WindowPrices,
@@ -240,7 +247,7 @@ def load_bot_config(path: Path) -> BotConfig:
         depth_safety_multiplier=float(_deep_get(raw, ("execution", "depth_safety_multiplier"), 1.0)),
         max_book_age_sec=float(_deep_get(raw, ("execution", "max_book_age_sec"), 1.0)),
         retry_count=int(_deep_get(raw, ("execution", "retry_count"), 1)),
-        retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.2)),
+        retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.05)),
         buy_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_price_buffer_ticks"), 2.0)),
         buy_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_retry_price_buffer_ticks"), 4.0)),
         sell_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_price_buffer_ticks"), 3.0)),
@@ -555,6 +562,46 @@ def _snapshot(window, prices: WindowPrices, feed: BinancePriceFeed, stream: Pric
     return snap, meta
 
 
+async def _refresh_entry_retry_params(
+    *,
+    window,
+    prices: WindowPrices,
+    feed: BinancePriceFeed,
+    stream: PriceStream,
+    cfg: BotConfig,
+    sigma_eff: float | None,
+    state: StrategyState,
+    original_side: str | None,
+) -> BuyRetryParams | None:
+    snap, _meta = _snapshot(window, prices, feed, stream, cfg, sigma_eff)
+    decision = evaluate_entry(snap, state, cfg.edge)
+    if decision.action != "enter" or decision.side != original_side:
+        return None
+    return BuyRetryParams(
+        max_price=decision.limit_price,
+        best_ask=decision.best_ask,
+        price_hint_base=decision.depth_limit_price,
+    )
+
+
+async def _refresh_exit_retry_params(
+    *,
+    window,
+    prices: WindowPrices,
+    feed: BinancePriceFeed,
+    stream: PriceStream,
+    cfg: BotConfig,
+    sigma_eff: float | None,
+    state: StrategyState,
+    position: PositionSnapshot,
+) -> SellRetryParams | None:
+    snap, _meta = _snapshot(window, prices, feed, stream, cfg, sigma_eff)
+    decision = evaluate_exit(snap, position, cfg.edge, state)
+    if decision.action != "exit" or decision.limit_price is None:
+        return None
+    return SellRetryParams(min_price=decision.limit_price, exit_reason=decision.reason)
+
+
 async def run(options: RuntimeOptions) -> int:
     cfg = options.config
     logger = JsonlLogger(options.jsonl, retention_hours=options.log_retention_hours)
@@ -687,6 +734,16 @@ async def run(options: RuntimeOptions) -> int:
                         state.open_position.filled_shares,
                         min_price=decision.limit_price,
                         exit_reason=decision.reason,
+                        retry_refresh=lambda attempt, position=exiting_position: _refresh_exit_retry_params(
+                            window=window,
+                            prices=prices,
+                            feed=feed,
+                            stream=stream,
+                            cfg=cfg,
+                            sigma_eff=sigma_eff,
+                            state=state,
+                            position=position,
+                        ),
                     )
                     row["order"] = result.__dict__
                     if options.analysis_logs:
@@ -714,6 +771,16 @@ async def run(options: RuntimeOptions) -> int:
                         max_price=decision.limit_price,
                         best_ask=decision.best_ask,
                         price_hint_base=decision.depth_limit_price,
+                        retry_refresh=lambda attempt, side=decision.side: _refresh_entry_retry_params(
+                            window=window,
+                            prices=prices,
+                            feed=feed,
+                            stream=stream,
+                            cfg=cfg,
+                            sigma_eff=sigma_eff,
+                            state=state,
+                            original_side=side,
+                        ),
                     )
                     row["order"] = result.__dict__
                     if options.analysis_logs:

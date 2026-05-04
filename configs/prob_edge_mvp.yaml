@@ -28,7 +28,7 @@ execution:
   paper_latency_sec: 0.4
   max_book_age_sec: 1.0
   retry_count: 1
-  retry_interval_sec: 0.2
+  retry_interval_sec: 0.05
   buy_price_buffer_ticks: 2
   buy_retry_price_buffer_ticks: 4
   sell_price_buffer_ticks: 3

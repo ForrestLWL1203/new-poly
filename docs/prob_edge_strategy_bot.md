@@ -188,12 +188,15 @@ Execution retry is intentionally small:
 
 ```text
 retry_count = 1
-retry_interval_sec = 0.2
+retry_interval_sec = 0.05
 ```
 
-BUY gets at most one retry. The retry still uses the same formula cap
-`fair_cap`, so it cannot chase beyond `model_prob - required_edge`. The default
-live hint ladder is configurable:
+BUY gets at most one retry. After a no-fill, both paper and live wait only
+`retry_interval_sec`, then rebuild a fresh strategy snapshot from the current
+Binance price, current remaining time, and current in-memory CLOB WS book. The
+retry is posted only if the same side still passes `evaluate_entry`; otherwise
+it is skipped instead of chasing a stale signal. The default hint ladder is
+configurable:
 
 ```text
 attempt 1: min(ask_limit + 2 ticks, fair_cap)
@@ -224,15 +227,21 @@ prioritize reducing expiry exposure over profile-level tuning. Sell floors are
 clamped at one tick; for very low-priced tokens, attempt 1 and attempt 2 may
 therefore collapse to the same one-tick floor.
 
+SELL retry follows the same shared policy: paper and live rebuild a fresh
+snapshot before retrying and only submit the second FAK if `evaluate_exit` still
+returns an exit signal for the open position. The refreshed `bid_limit` and exit
+reason are used to compute the retry floor.
+
 Live CLOB can return a `400` response such as `no orders found to match with FAK
 order`. That is normal FAK behavior when the local WS book has moved before the
 POST reaches the matching engine. The live executor records it as
 `order_no_fill` with `latency_ms` / `total_latency_ms` and keeps the bot running;
 it does not create a position and does not terminate the process.
 
-Paper mode mirrors the same retry count, interval, and BUY/SELL price floors
-against the latest local book after the simulated latency. Paper applies
-`paper_latency_sec` once for the initial order signal, then only
+Paper and live share the same strategy decisions and retry refresh callbacks.
+The only intended mode difference is execution: paper simulates latency and
+local FAK fills without POSTing orders, while live posts real CLOB FAK orders.
+Paper applies `paper_latency_sec` once for the initial order signal, then only
 `retry_interval_sec` before the retry so retry simulation does not drift by an
 extra full tick.
 

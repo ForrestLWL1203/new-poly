@@ -6,7 +6,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 from new_poly import config
 from new_poly.market.stream import PriceStream
@@ -24,7 +24,7 @@ class ExecutionConfig:
     depth_safety_multiplier: float = 1.0
     max_book_age_sec: float = 1.0
     retry_count: int = 1
-    retry_interval_sec: float = 0.2
+    retry_interval_sec: float = 0.05
     buy_price_buffer_ticks: float = 2.0
     buy_retry_price_buffer_ticks: float = 4.0
     sell_price_buffer_ticks: float = 3.0
@@ -44,6 +44,23 @@ class ExecutionResult:
     total_latency_ms: int | None = None
 
 
+@dataclass(frozen=True)
+class BuyRetryParams:
+    max_price: float | None
+    best_ask: float | None
+    price_hint_base: float | None
+
+
+@dataclass(frozen=True)
+class SellRetryParams:
+    min_price: float | None
+    exit_reason: str | None
+
+
+BuyRetryRefresh = Callable[[int], Awaitable[Optional[BuyRetryParams]]]
+SellRetryRefresh = Callable[[int], Awaitable[Optional[SellRetryParams]]]
+
+
 def _with_attempt(result: ExecutionResult, *, attempt: int, total_latency_ms: int) -> ExecutionResult:
     return ExecutionResult(
         success=result.success,
@@ -51,6 +68,21 @@ def _with_attempt(result: ExecutionResult, *, attempt: int, total_latency_ms: in
         filled_size=result.filled_size,
         avg_price=result.avg_price,
         message=result.message,
+        mode=result.mode,
+        latency_ms=result.latency_ms,
+        attempt=attempt,
+        total_latency_ms=total_latency_ms,
+    )
+
+
+def _retry_skipped(result: ExecutionResult, *, attempt: int, total_latency_ms: int) -> ExecutionResult:
+    message = result.message or "order no fill"
+    return ExecutionResult(
+        success=False,
+        order_id=result.order_id,
+        filled_size=result.filled_size,
+        avg_price=result.avg_price,
+        message=f"{message}; retry skipped: signal no longer valid",
         mode=result.mode,
         latency_ms=result.latency_ms,
         attempt=attempt,
@@ -164,12 +196,24 @@ class PaperExecutionGateway:
         max_price: float | None = None,
         best_ask: float | None = None,
         price_hint_base: float | None = None,
+        retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         start = time.monotonic()
         await self._delay()
         for attempt in range(self.config.retry_count + 1):
             if attempt > 0:
                 await self._retry_wait()
+                if retry_refresh is not None:
+                    refreshed = await retry_refresh(attempt)
+                    if refreshed is None:
+                        return _retry_skipped(
+                            ExecutionResult(False, message="paper buy no fill", mode="paper"),
+                            attempt=attempt,
+                            total_latency_ms=round((time.monotonic() - start) * 1000),
+                        )
+                    max_price = refreshed.max_price
+                    best_ask = refreshed.best_ask
+                    price_hint_base = refreshed.price_hint_base
             levels = self.stream.get_latest_ask_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
             fill = _avg_buy_fill(levels, amount_usd, max_price)
             total_latency_ms = round((time.monotonic() - start) * 1000)
@@ -178,12 +222,29 @@ class PaperExecutionGateway:
                 return ExecutionResult(True, order_id="paper-buy", filled_size=shares, avg_price=avg_price, message="paper buy filled", latency_ms=total_latency_ms, attempt=attempt + 1, total_latency_ms=total_latency_ms)
         return ExecutionResult(False, message="paper no fill: insufficient ask depth", latency_ms=total_latency_ms, attempt=self.config.retry_count + 1, total_latency_ms=total_latency_ms)
 
-    async def sell(self, token_id: str, shares: float, min_price: float | None = None, exit_reason: str | None = None) -> ExecutionResult:
+    async def sell(
+        self,
+        token_id: str,
+        shares: float,
+        min_price: float | None = None,
+        exit_reason: str | None = None,
+        retry_refresh: SellRetryRefresh | None = None,
+    ) -> ExecutionResult:
         start = time.monotonic()
         await self._delay()
         for attempt in range(self.config.retry_count + 1):
             if attempt > 0:
                 await self._retry_wait()
+                if retry_refresh is not None:
+                    refreshed = await retry_refresh(attempt)
+                    if refreshed is None:
+                        return _retry_skipped(
+                            ExecutionResult(False, message="paper sell no fill", mode="paper"),
+                            attempt=attempt,
+                            total_latency_ms=round((time.monotonic() - start) * 1000),
+                        )
+                    min_price = refreshed.min_price
+                    exit_reason = refreshed.exit_reason
             levels = self.stream.get_latest_bid_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
             effective_min = _sell_price_hint(
                 token_id,
@@ -241,7 +302,7 @@ class LiveFakExecutionGateway:
         *,
         live_risk_ack: bool,
         retry_count: int = 1,
-        retry_interval_sec: float = 0.2,
+        retry_interval_sec: float = 0.05,
         buy_price_buffer_ticks: float = 2.0,
         buy_retry_price_buffer_ticks: float = 4.0,
         sell_price_buffer_ticks: float = 3.0,
@@ -263,6 +324,7 @@ class LiveFakExecutionGateway:
         max_price: float | None = None,
         best_ask: float | None = None,
         price_hint_base: float | None = None,
+        retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         base_price = price_hint_base if price_hint_base is not None else best_ask
         last = ExecutionResult(False, message="live buy not attempted", mode="live")
@@ -280,9 +342,27 @@ class LiveFakExecutionGateway:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
             if self.retry_interval_sec > 0:
                 await asyncio.sleep(self.retry_interval_sec)
+            if retry_refresh is not None:
+                refreshed = await retry_refresh(attempt + 1)
+                if refreshed is None:
+                    return _retry_skipped(
+                        last,
+                        attempt=attempt + 1,
+                        total_latency_ms=round((time.monotonic() - start) * 1000),
+                    )
+                max_price = refreshed.max_price
+                best_ask = refreshed.best_ask
+                base_price = refreshed.price_hint_base if refreshed.price_hint_base is not None else refreshed.best_ask
         return last
 
-    async def sell(self, token_id: str, shares: float, min_price: float | None = None, exit_reason: str | None = None) -> ExecutionResult:
+    async def sell(
+        self,
+        token_id: str,
+        shares: float,
+        min_price: float | None = None,
+        exit_reason: str | None = None,
+        retry_refresh: SellRetryRefresh | None = None,
+    ) -> ExecutionResult:
         balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
         amount = min(shares, balance or 0.0)
         if amount <= 0:
@@ -303,6 +383,16 @@ class LiveFakExecutionGateway:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
             if self.retry_interval_sec > 0:
                 await asyncio.sleep(self.retry_interval_sec)
+            if retry_refresh is not None:
+                refreshed = await retry_refresh(attempt + 1)
+                if refreshed is None:
+                    return _retry_skipped(
+                        last,
+                        attempt=attempt + 1,
+                        total_latency_ms=round((time.monotonic() - start) * 1000),
+                    )
+                min_price = refreshed.min_price
+                exit_reason = refreshed.exit_reason
             balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
             amount = min(shares, balance or 0.0)
             if amount <= 0:

@@ -152,6 +152,9 @@ Current default strategy behavior:
   `-5 ticks`, and `final_force_exit` uses a fixed `-5/-10 tick` emergency
   ladder. Paper mode uses the same SELL floors, clamped at one tick for very
   low-priced tokens.
+- After a no-fill, paper and live both wait `0.05s`, rebuild a fresh strategy
+  snapshot from current Binance price and in-memory CLOB WS book, and retry only
+  if the same entry/exit signal is still valid.
 - A live CLOB `FAK no match` response is treated as `order_no_fill`, not a
   fatal bot error, and records the failed POST latency for later diagnostics.
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
