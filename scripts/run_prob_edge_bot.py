@@ -142,7 +142,8 @@ def _parse_scalar(value: str) -> Any:
 def load_bot_config(path: Path) -> BotConfig:
     raw = _load_yaml(path)
     edge = EdgeConfig(
-        required_edge=float(_deep_get(raw, ("strategy", "required_edge"), 0.05)),
+        early_required_edge=float(_deep_get(raw, ("strategy", "early_required_edge"), 0.10)),
+        core_required_edge=float(_deep_get(raw, ("strategy", "core_required_edge"), 0.06)),
         model_decay_buffer=float(_deep_get(raw, ("strategy", "model_decay_buffer"), 0.02)),
         overprice_buffer=float(_deep_get(raw, ("strategy", "overprice_buffer"), 0.02)),
         entry_start_age_sec=float(_deep_get(raw, ("strategy", "entry_start_age_sec"), 40.0)),
@@ -150,6 +151,16 @@ def load_bot_config(path: Path) -> BotConfig:
         final_no_entry_remaining_sec=float(_deep_get(raw, ("strategy", "final_no_entry_remaining_sec"), 30.0)),
         max_entries_per_market=int(_deep_get(raw, ("strategy", "max_entries_per_market"), 2)),
         max_book_age_ms=float(_deep_get(raw, ("strategy", "max_book_age_ms"), 1000.0)),
+        late_entry_enabled=bool(_deep_get(raw, ("strategy", "late_entry_enabled"), False)),
+        late_required_edge=float(_deep_get(raw, ("strategy", "late_required_edge"), 0.10)),
+        late_max_spread=float(_deep_get(raw, ("strategy", "late_max_spread"), 0.02)),
+        defensive_profit_min=float(_deep_get(raw, ("strategy", "defensive_profit_min"), 0.03)),
+        protection_profit_min=float(_deep_get(raw, ("strategy", "protection_profit_min"), 0.01)),
+        final_hold_min_prob=float(_deep_get(raw, ("strategy", "final_hold_min_prob"), 0.98)),
+        final_hold_min_bid_avg=float(_deep_get(raw, ("strategy", "final_hold_min_bid_avg"), 0.97)),
+        final_hold_min_bid_limit=float(_deep_get(raw, ("strategy", "final_hold_min_bid_limit"), 0.95)),
+        prob_stagnation_window_sec=float(_deep_get(raw, ("strategy", "prob_stagnation_window_sec"), 3.0)),
+        prob_stagnation_epsilon=float(_deep_get(raw, ("strategy", "prob_stagnation_epsilon"), 0.002)),
     )
     execution = ExecutionConfig(
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.4)),
@@ -346,8 +357,10 @@ async def run(options: RuntimeOptions) -> int:
             }
 
             if state.has_position and state.open_position is not None:
-                decision = evaluate_exit(snap, state.open_position, cfg.edge)
+                decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
                 row["decision"] = decision.__dict__
+                if decision.model_prob is not None:
+                    state.record_model_prob(snap.age_sec, decision.model_prob)
                 if decision.action == "exit":
                     result = await gateway.sell(state.open_position.token_id, state.open_position.filled_shares, min_price=decision.limit_price)
                     row["order"] = result.__dict__
@@ -360,7 +373,13 @@ async def run(options: RuntimeOptions) -> int:
                 row["decision"] = decision.__dict__
                 if decision.action == "enter":
                     token_id = window.up_token if decision.side == "up" else window.down_token
-                    result = await gateway.buy(token_id, cfg.amount_usd, max_price=decision.limit_price, best_ask=decision.best_ask)
+                    result = await gateway.buy(
+                        token_id,
+                        cfg.amount_usd,
+                        max_price=decision.limit_price,
+                        best_ask=decision.best_ask,
+                        price_hint_base=decision.depth_limit_price,
+                    )
                     row["order"] = result.__dict__
                     if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
                         state.record_entry(PositionSnapshot(

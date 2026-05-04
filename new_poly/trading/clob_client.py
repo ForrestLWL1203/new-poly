@@ -87,7 +87,7 @@ def get_tick_size(token_id: str) -> float:
     try:
         value = float(get_client().get_tick_size(token_id))
     except Exception:
-        value = 0.001
+        value = 0.01
     _tick_size_cache[token_id] = value
     return value
 

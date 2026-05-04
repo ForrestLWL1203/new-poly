@@ -10,7 +10,8 @@ from .state import PositionSnapshot, StrategyState
 
 @dataclass(frozen=True)
 class EdgeConfig:
-    required_edge: float = 0.05
+    early_required_edge: float = 0.10
+    core_required_edge: float = 0.06
     model_decay_buffer: float = 0.02
     overprice_buffer: float = 0.02
     entry_start_age_sec: float = 40.0
@@ -18,6 +19,23 @@ class EdgeConfig:
     final_no_entry_remaining_sec: float = 30.0
     max_entries_per_market: int = 2
     max_book_age_ms: float = 1000.0
+    late_entry_enabled: bool = False
+    late_required_edge: float = 0.10
+    late_max_spread: float = 0.02
+    defensive_profit_min: float = 0.03
+    protection_profit_min: float = 0.01
+    final_hold_min_prob: float = 0.98
+    final_hold_min_bid_avg: float = 0.97
+    final_hold_min_bid_limit: float = 0.95
+    prob_stagnation_window_sec: float = 3.0
+    prob_stagnation_epsilon: float = 0.002
+
+
+@dataclass(frozen=True)
+class EntryPhase:
+    phase: str
+    allowed: bool
+    required_edge: float | None
 
 
 @dataclass(frozen=True)
@@ -55,10 +73,16 @@ class StrategyDecision:
     model_prob: float | None = None
     price: float | None = None
     limit_price: float | None = None
+    depth_limit_price: float | None = None
     best_ask: float | None = None
     edge: float | None = None
     up_prob: float | None = None
     down_prob: float | None = None
+    phase: str | None = None
+    required_edge: float | None = None
+    profit_now: float | None = None
+    prob_stagnant: bool | None = None
+    prob_delta_3s: float | None = None
 
 
 def _missing_model_inputs(snapshot: MarketSnapshot) -> bool:
@@ -77,36 +101,65 @@ def _probs(snapshot: MarketSnapshot):
     return binary_probabilities(snapshot.s_price, snapshot.k_price, snapshot.sigma_eff, snapshot.remaining_sec)
 
 
+def required_edge_for_entry(snapshot: MarketSnapshot, cfg: EdgeConfig) -> EntryPhase:
+    if snapshot.remaining_sec <= cfg.final_no_entry_remaining_sec:
+        return EntryPhase("final_no_entry", False, None)
+    if snapshot.age_sec < cfg.entry_start_age_sec or snapshot.age_sec > cfg.entry_end_age_sec:
+        return EntryPhase("outside_window", False, None)
+    if snapshot.age_sec < 120.0:
+        return EntryPhase("early", True, cfg.early_required_edge)
+    if snapshot.age_sec < 240.0:
+        return EntryPhase("core", True, cfg.core_required_edge)
+    if not cfg.late_entry_enabled:
+        return EntryPhase("late_disabled", False, None)
+    return EntryPhase("late", True, cfg.late_required_edge)
+
+
+def _spread_ok(snapshot: MarketSnapshot, side: str, cfg: EdgeConfig, phase: EntryPhase) -> bool:
+    if phase.phase != "late":
+        return True
+    if side == "up":
+        bid, ask = snapshot.up_bid_avg, snapshot.up_ask_avg
+    else:
+        bid, ask = snapshot.down_bid_avg, snapshot.down_ask_avg
+    return bid is not None and ask is not None and ask - bid < cfg.late_max_spread
+
+
 def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConfig) -> StrategyDecision:
     if state.has_position:
         return StrategyDecision(action="skip", reason="already_holding")
     if state.entry_count >= cfg.max_entries_per_market:
         return StrategyDecision(action="skip", reason="max_entries")
-    if snapshot.age_sec < cfg.entry_start_age_sec or snapshot.age_sec > cfg.entry_end_age_sec:
-        return StrategyDecision(action="skip", reason="outside_entry_time")
-    if snapshot.remaining_sec <= cfg.final_no_entry_remaining_sec:
-        return StrategyDecision(action="skip", reason="final_no_entry")
+    phase = required_edge_for_entry(snapshot, cfg)
+    if not phase.allowed:
+        reason = "late_entry_disabled" if phase.phase == "late_disabled" else phase.phase
+        if reason == "outside_window":
+            reason = "outside_entry_time"
+        return StrategyDecision(action="skip", reason=reason, phase=phase.phase, required_edge=phase.required_edge)
     if _missing_model_inputs(snapshot):
-        return StrategyDecision(action="skip", reason="missing_model_inputs")
+        return StrategyDecision(action="skip", reason="missing_model_inputs", phase=phase.phase, required_edge=phase.required_edge)
     if _stale_books(snapshot, cfg):
-        return StrategyDecision(action="skip", reason="stale_book")
+        return StrategyDecision(action="skip", reason="stale_book", phase=phase.phase, required_edge=phase.required_edge)
 
     probs = _probs(snapshot)
     candidates: list[StrategyDecision] = []
+    assert phase.required_edge is not None
     if snapshot.up_ask_depth_ok and snapshot.up_ask_avg is not None and snapshot.up_ask_limit is not None:
         up_edge = probs.up - snapshot.up_ask_avg
-        if up_edge >= cfg.required_edge:
-            candidates.append(StrategyDecision("enter", "edge", "up", model_prob=probs.up, price=snapshot.up_ask_avg, limit_price=snapshot.up_ask_limit, best_ask=snapshot.up_best_ask, edge=up_edge, up_prob=probs.up, down_prob=probs.down))
+        up_fair_cap = probs.up - phase.required_edge
+        if up_edge >= phase.required_edge and snapshot.up_ask_limit <= up_fair_cap and _spread_ok(snapshot, "up", cfg, phase):
+            candidates.append(StrategyDecision("enter", "edge", "up", model_prob=probs.up, price=snapshot.up_ask_avg, limit_price=up_fair_cap, depth_limit_price=snapshot.up_ask_limit, best_ask=snapshot.up_best_ask, edge=up_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge))
     if snapshot.down_ask_depth_ok and snapshot.down_ask_avg is not None and snapshot.down_ask_limit is not None:
         down_edge = probs.down - snapshot.down_ask_avg
-        if down_edge >= cfg.required_edge:
-            candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_ask_avg, limit_price=snapshot.down_ask_limit, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down))
+        down_fair_cap = probs.down - phase.required_edge
+        if down_edge >= phase.required_edge and snapshot.down_ask_limit <= down_fair_cap and _spread_ok(snapshot, "down", cfg, phase):
+            candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_ask_avg, limit_price=down_fair_cap, depth_limit_price=snapshot.down_ask_limit, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge))
     if not candidates:
-        return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down)
+        return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge)
     return max(candidates, key=lambda item: item.edge or 0.0)
 
 
-def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: EdgeConfig) -> StrategyDecision:
+def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: EdgeConfig, state: StrategyState | None = None) -> StrategyDecision:
     if _missing_model_inputs(snapshot):
         return StrategyDecision(action="exit", reason="risk_exit")
     if _stale_books(snapshot, cfg):
@@ -126,8 +179,19 @@ def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: Edg
 
     if not depth_ok or bid is None or bid_limit is None:
         return StrategyDecision(action="hold", reason="missing_exit_depth", side=position.token_side, model_prob=model_prob, up_prob=probs.up, down_prob=probs.down)
+    profit_now = bid - position.entry_avg_price
+    prob_delta_3s = state.prob_delta(snapshot.age_sec, model_prob, window_sec=cfg.prob_stagnation_window_sec) if state is not None else None
+    prob_stagnant = False if prob_delta_3s is None else prob_delta_3s <= cfg.prob_stagnation_epsilon
+    if snapshot.remaining_sec <= 15.0:
+        strong_hold = model_prob >= cfg.final_hold_min_prob and bid >= cfg.final_hold_min_bid_avg and bid_limit >= cfg.final_hold_min_bid_limit
+        if not strong_hold:
+            return StrategyDecision(action="exit", reason="final_force_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s)
+    if 15.0 < snapshot.remaining_sec <= 30.0 and profit_now >= cfg.protection_profit_min:
+        return StrategyDecision(action="exit", reason="profit_protection_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s)
+    if 30.0 < snapshot.remaining_sec <= 60.0 and profit_now >= cfg.defensive_profit_min and prob_stagnant:
+        return StrategyDecision(action="exit", reason="defensive_take_profit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s)
     if model_prob < position.entry_avg_price - cfg.model_decay_buffer:
-        return StrategyDecision(action="exit", reason="logic_decay_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down)
+        return StrategyDecision(action="exit", reason="logic_decay_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s)
     if bid > model_prob + cfg.overprice_buffer:
-        return StrategyDecision(action="exit", reason="market_overprice_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down)
-    return StrategyDecision(action="hold", reason="edge_intact", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down)
+        return StrategyDecision(action="exit", reason="market_overprice_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s)
+    return StrategyDecision(action="hold", reason="edge_intact", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s)

@@ -40,6 +40,19 @@ def test_amount_override_keeps_depth_check_same_notional() -> None:
     assert opts.config.execution.depth_notional == 12.5
 
 
+def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
+    args = build_arg_parser().parse_args(["--once"])
+    opts = build_runtime_options(args)
+
+    assert not hasattr(opts.config.edge, "required_edge")
+    assert opts.config.edge.early_required_edge == 0.10
+    assert opts.config.edge.core_required_edge == 0.06
+    assert opts.config.edge.late_entry_enabled is False
+    assert opts.config.edge.defensive_profit_min == 0.03
+    assert opts.config.edge.protection_profit_min == 0.01
+    assert opts.config.edge.final_hold_min_prob == 0.98
+
+
 def test_dvol_stale_after_configured_age() -> None:
     assert is_dvol_stale(None, now_monotonic=1000.0, max_age_sec=900.0) is True
 

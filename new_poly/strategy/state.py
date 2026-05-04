@@ -27,6 +27,7 @@ class StrategyState:
     entry_count: int = 0
     realized_pnl: float = 0.0
     last_exit_reason: str | None = None
+    prob_history: list[tuple[float, float]] | None = None
 
     @property
     def has_position(self) -> bool:
@@ -37,10 +38,12 @@ class StrategyState:
         self.open_position = None
         self.entry_count = 0
         self.last_exit_reason = None
+        self.prob_history = []
 
     def record_entry(self, position: PositionSnapshot) -> None:
         self.open_position = position
         self.entry_count += 1
+        self.prob_history = []
 
     def record_exit(self, exit_price: float, reason: str) -> float:
         if self.open_position is None:
@@ -50,6 +53,7 @@ class StrategyState:
         self.open_position.exit_status = reason
         self.open_position = None
         self.last_exit_reason = reason
+        self.prob_history = []
         return pnl
 
     def record_settlement(self, winning_side: str) -> float:
@@ -61,4 +65,22 @@ class StrategyState:
         self.open_position.exit_status = "settled"
         self.open_position = None
         self.last_exit_reason = "settled"
+        self.prob_history = []
         return pnl
+
+    def record_model_prob(self, age_sec: float, model_prob: float, *, retention_sec: float = 5.0) -> None:
+        if self.prob_history is None:
+            self.prob_history = []
+        self.prob_history.append((age_sec, model_prob))
+        cutoff = age_sec - retention_sec
+        self.prob_history = [(ts, prob) for ts, prob in self.prob_history if ts >= cutoff]
+
+    def prob_delta(self, age_sec: float, model_prob: float, *, window_sec: float) -> float | None:
+        if not self.prob_history:
+            return None
+        cutoff = age_sec - window_sec
+        candidates = [(ts, prob) for ts, prob in self.prob_history if ts <= cutoff]
+        if not candidates:
+            return None
+        _ts, old_prob = max(candidates, key=lambda item: item[0])
+        return model_prob - old_prob

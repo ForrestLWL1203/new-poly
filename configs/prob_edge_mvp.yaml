@@ -1,5 +1,6 @@
 strategy:
-  required_edge: 0.05
+  early_required_edge: 0.10
+  core_required_edge: 0.06
   model_decay_buffer: 0.02
   overprice_buffer: 0.02
   entry_start_age_sec: 40
@@ -7,6 +8,16 @@ strategy:
   final_no_entry_remaining_sec: 30
   max_entries_per_market: 2
   max_book_age_ms: 1000
+  late_entry_enabled: false
+  late_required_edge: 0.10
+  late_max_spread: 0.02
+  defensive_profit_min: 0.03
+  protection_profit_min: 0.01
+  final_hold_min_prob: 0.98
+  final_hold_min_bid_avg: 0.97
+  final_hold_min_bid_limit: 0.95
+  prob_stagnation_window_sec: 3.0
+  prob_stagnation_epsilon: 0.002
 
 execution:
   amount_usd: 5.0

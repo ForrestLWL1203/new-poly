@@ -82,7 +82,14 @@ class PaperExecutionGateway:
         if self.config.paper_latency_sec > 0:
             await asyncio.sleep(self.config.paper_latency_sec)
 
-    async def buy(self, token_id: str, amount_usd: float, max_price: float | None = None, best_ask: float | None = None) -> ExecutionResult:
+    async def buy(
+        self,
+        token_id: str,
+        amount_usd: float,
+        max_price: float | None = None,
+        best_ask: float | None = None,
+        price_hint_base: float | None = None,
+    ) -> ExecutionResult:
         start = time.monotonic()
         await self._delay()
         levels = self.stream.get_latest_ask_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
@@ -129,8 +136,21 @@ class LiveFakExecutionGateway:
         if not live_risk_ack:
             raise ValueError("live mode requires --i-understand-live-risk")
 
-    async def buy(self, token_id: str, amount_usd: float, max_price: float | None = None, best_ask: float | None = None) -> ExecutionResult:
-        price_hint = buffer_buy_price_hint(token_id, max_price, buffer_ticks=config.PRICE_HINT_BUFFER_TICKS)
+    async def buy(
+        self,
+        token_id: str,
+        amount_usd: float,
+        max_price: float | None = None,
+        best_ask: float | None = None,
+        price_hint_base: float | None = None,
+    ) -> ExecutionResult:
+        base_price = price_hint_base if price_hint_base is not None else best_ask
+        price_hint = buffer_buy_price_hint(
+            token_id,
+            base_price,
+            buffer_ticks=config.PRICE_HINT_BUFFER_TICKS,
+            max_price=max_price,
+        )
         return await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)
 
     async def sell(self, token_id: str, shares: float, min_price: float | None = None) -> ExecutionResult:

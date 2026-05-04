@@ -131,6 +131,17 @@ It defaults to `paper` mode and uses one shared strategy state machine for both
 paper and live runs. Live mode will not post orders unless both `--mode live`
 and `--i-understand-live-risk` are provided.
 
+Current default strategy behavior:
+
+- Entry thresholds are time phased: `0.10` for `40 <= age < 120`, `0.06` for
+  `120 <= age < 240`, and late entry is disabled from `240s` onward.
+- FAK entry decisions use size-aware `ask_avg` for edge, require
+  `ask_limit <= model_prob - required_edge`, and send BUY hints as
+  `min(ask_limit + tick_buffer, model_prob - required_edge)`.
+- FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
+- Exits include logic decay, market-overprice exits, final-60s defensive
+  take-profit, final-30s profit protection, and final-15s forced risk exit.
+
 Paper smoke test:
 
 ```bash

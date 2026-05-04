@@ -14,8 +14,16 @@ from new_poly.market.stream import PriceStream
 
 
 def get_tick_size(_token_id: str) -> float:
-    """Return a conservative default tick until live CLOB client plumbing lands."""
-    return 0.001
+    """Return live CLOB tick size, falling back to the common binary-market tick."""
+    try:
+        from new_poly.trading.clob_client import get_tick_size as clob_tick_size
+
+        tick = float(clob_tick_size(_token_id))
+        if tick > 0:
+            return tick
+    except Exception:
+        pass
+    return 0.01
 
 
 DEPTH_ENTRY_SKIP_LEVELS = 0
@@ -68,7 +76,7 @@ def buffer_buy_price_hint(
         return None
     tick = get_tick_size(token_id)
     if tick <= 0:
-        tick = 0.001
+        tick = 0.01
     ticks = config.PRICE_HINT_BUFFER_TICKS if buffer_ticks is None else buffer_ticks
     buffered = best_ask + tick * ticks
     if max_price is not None:
@@ -88,7 +96,7 @@ def buffer_sell_price_hint(
         return None
     tick = get_tick_size(token_id)
     if tick <= 0:
-        tick = 0.001
+        tick = 0.01
     ticks = config.FAK_RETRY_PRICE_HINT_BUFFER_TICKS if buffer_ticks is None else buffer_ticks
     buffered = bid_price - tick * ticks
     if min_price is not None:

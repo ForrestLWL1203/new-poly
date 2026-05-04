@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from new_poly.trading import fak_quotes
 from new_poly.trading.execution import (
     ExecutionConfig,
     LiveFakExecutionGateway,
@@ -88,7 +89,16 @@ def test_live_gateway_requires_explicit_risk_ack() -> None:
         LiveFakExecutionGateway(live_risk_ack=False)
 
 
-def test_live_buy_hint_buffers_depth_limit_price(monkeypatch) -> None:
+def test_buy_hint_uses_clob_tick_size(monkeypatch) -> None:
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+
+    hint = fak_quotes.buffer_buy_price_hint("up", best_ask=0.50, buffer_ticks=1, max_price=0.55)
+
+    assert hint == 0.51
+
+
+def test_live_buy_hint_buffers_best_ask_but_caps_at_depth_limit(monkeypatch) -> None:
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
     captured = {}
 
     class Gateway(LiveFakExecutionGateway):
@@ -100,7 +110,41 @@ def test_live_buy_hint_buffers_depth_limit_price(monkeypatch) -> None:
     result = asyncio.run(gateway.buy("up", amount_usd=5.0, max_price=0.55, best_ask=0.50))
 
     assert result == "posted"
-    assert captured["price_hint"] == 0.551
+    assert captured["price_hint"] == 0.51
+
+
+def test_live_buy_hint_buffers_depth_limit_when_provided(monkeypatch) -> None:
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    captured = {}
+
+    class Gateway(LiveFakExecutionGateway):
+        def _post(self, token_id, amount, side, price_hint):
+            captured["price_hint"] = price_hint
+            return "posted"
+
+    gateway = Gateway(live_risk_ack=True)
+    result = asyncio.run(
+        gateway.buy("up", amount_usd=5.0, max_price=0.56, best_ask=0.50, price_hint_base=0.54)
+    )
+
+    assert result == "posted"
+    assert captured["price_hint"] == 0.55
+
+
+def test_live_buy_hint_never_exceeds_depth_limit(monkeypatch) -> None:
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    captured = {}
+
+    class Gateway(LiveFakExecutionGateway):
+        def _post(self, token_id, amount, side, price_hint):
+            captured["price_hint"] = price_hint
+            return "posted"
+
+    gateway = Gateway(live_risk_ack=True)
+    result = asyncio.run(gateway.buy("up", amount_usd=5.0, max_price=0.55, best_ask=0.55))
+
+    assert result == "posted"
+    assert captured["price_hint"] == 0.55
 
 
 def test_paper_buy_uses_depth_limit_not_average() -> None:

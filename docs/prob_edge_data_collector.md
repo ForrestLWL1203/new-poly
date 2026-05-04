@@ -144,6 +144,8 @@ ask
 book_age_ms
 ask_avg
 bid_avg
+ask_limit
+bid_limit
 stable_depth_usd
 ask_depth_ok
 bid_depth_ok
