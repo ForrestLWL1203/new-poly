@@ -9,6 +9,7 @@ from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
+from new_poly.trading.clob_client import _build_http_client_kwargs
 
 
 def test_market_series_builds_btc_5m_slugs() -> None:
@@ -76,3 +77,21 @@ def test_dvol_snapshot_serializes_sigma_and_age() -> None:
         "timestamp_ms": 1_000_000,
         "age_sec": 30.0,
     }
+
+
+def test_clob_http_client_kwargs_enable_keepalive_pool(monkeypatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.local:8080")
+
+    kwargs = _build_http_client_kwargs()
+
+    assert kwargs["http2"] is True
+    assert kwargs["proxy"] == "http://proxy.local:8080"
+    assert kwargs["limits"].max_connections == 100
+    assert kwargs["limits"].max_keepalive_connections == 20
+    assert kwargs["timeout"].connect == 2.0
+
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    direct_kwargs = _build_http_client_kwargs()
+    assert "proxy" not in direct_kwargs
+    assert direct_kwargs["limits"].max_connections == 100

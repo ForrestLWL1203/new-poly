@@ -15,12 +15,25 @@ _tick_size_cache: dict[str, float] = {}
 _order_params_cache: dict[str, tuple[str, bool]] = {}
 
 
+def _build_http_client_kwargs() -> dict[str, Any]:
+    import httpx
+
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    kwargs: dict[str, Any] = {
+        "http2": True,
+        "limits": httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
+        "timeout": httpx.Timeout(10.0, connect=2.0),
+    }
+    if proxy:
+        kwargs["proxy"] = proxy
+    return kwargs
+
+
 def _configure_proxy() -> None:
     from py_clob_client_v2.http_helpers import helpers as _http_helpers
 
-    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-    if proxy and hasattr(_http_helpers, "_http_client"):
-        _http_helpers._http_client = _http_helpers._http_client.__class__(http2=True, proxy=proxy)
+    if hasattr(_http_helpers, "_http_client"):
+        _http_helpers._http_client = _http_helpers._http_client.__class__(**_build_http_client_kwargs())
 
 
 def load_polymarket_config(path: Path | None = None) -> dict[str, Any]:

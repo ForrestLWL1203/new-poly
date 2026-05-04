@@ -154,6 +154,9 @@ Current default strategy behavior:
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
 - Exits include logic decay, market-overprice exits, final-60s defensive
   take-profit, final-30s profit protection, and final-15s forced risk exit.
+- Live CLOB auth uses one cached `ClobClient` and configures the SDK HTTP
+  client with `http2`, a larger keep-alive pool, and explicit timeouts to avoid
+  waiting on connection setup during FAK posting.
 
 Paper smoke test:
 

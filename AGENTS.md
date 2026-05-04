@@ -305,6 +305,10 @@ pytest-asyncio>=0.23
 - API credentials are required for L2 trading auth. The old flow first tried
   `derive_api_key()` and used `create_api_key()` only if derive returned none,
   then called `client.set_api_creds(creds)`.
+- The current project caches a single `ClobClient` process-wide and configures
+  the SDK HTTP helper client with `http2`, `max_connections=100`,
+  `max_keepalive_connections=20`, `keepalive_expiry=30s`, and a short
+  `connect=2s` timeout.
 - Existing CLI config may live at `~/.config/polymarket/config.json`.
 
 ### Environment Variables
