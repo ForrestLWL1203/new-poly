@@ -91,6 +91,13 @@ python3 scripts/run_prob_edge_bot.py \
   fail-closed and does not trade. Only after the source has been continuously
   unhealthy for `market_data.polymarket_backup_after_sec` does it lazily start
   Binance/Coinbase and fall back to the previous basis-adjusted proxy logic.
+- Optional `market_data.lead_signal_enabled` starts Binance/Coinbase while
+  Polymarket remains the pricing baseline, but only when analysis logs are
+  enabled. This records whether CEX prices are leading or disagreeing with the
+  Polymarket source; it does not change `S` or entry/exit decisions yet.
+- `market_data.max_polymarket_price_age_sec` defaults to `4.0`; a five-window
+  VPS paper run observed occasional healthy Polymarket updates around `3.27s`,
+  so the previous `3.0` threshold was slightly too tight.
 - The old single `required_edge` field is no longer used.
 
 Config files:
@@ -406,11 +413,23 @@ coinbase_open_price
 coinbase_open_source
 source_spread_usd
 source_spread_bps
+lead_binance_vs_polymarket_usd
+lead_binance_vs_polymarket_bps
+lead_coinbase_vs_polymarket_usd
+lead_coinbase_vs_polymarket_bps
+lead_proxy_vs_polymarket_usd
+lead_proxy_vs_polymarket_bps
+lead_binance_return_1s_bps / 3s / 5s
+lead_coinbase_return_1s_bps / 3s / 5s
+lead_polymarket_return_1s_bps / 3s / 5s
+lead_binance_side / lead_coinbase_side / lead_proxy_side / lead_polymarket_side
+lead_*_side_disagrees_with_polymarket
 ```
 
 Null and `"missing"` analysis values are omitted. Polymarket fields appear when
 the Polymarket feed has data; proxy/Binance/Coinbase fields appear only after
-lazy backup activation or when running with `--no-polymarket-price`.
+lazy backup activation, when running with `--no-polymarket-price`, or when
+`lead_signal_enabled` is enabled for analysis.
 
 Analysis logs are enabled by default in paper mode, disabled by default in live
 mode, and can be explicitly toggled with `--analysis-logs` or

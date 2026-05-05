@@ -58,6 +58,7 @@ runtime:
 
 market_data:
   polymarket_price_enabled: true
-  max_polymarket_price_age_sec: 3.0
+  max_polymarket_price_age_sec: 4.0
   polymarket_backup_after_sec: 180.0
   coinbase_enabled: true
+  lead_signal_enabled: true

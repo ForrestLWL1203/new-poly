@@ -118,6 +118,34 @@ def compact_float(value: float | None, digits: int = 6) -> float | None:
     return round(float(value), digits)
 
 
+def price_return_bps(feed: Any, *, now_ts: float, lookback_sec: float) -> float | None:
+    latest = getattr(feed, "latest_price", None) if feed is not None else None
+    if latest is None or latest <= 0:
+        return None
+    if not hasattr(feed, "price_at_or_before"):
+        return None
+    try:
+        previous = feed.price_at_or_before(now_ts - lookback_sec, max_backward_sec=lookback_sec + 2.0)
+    except TypeError:
+        previous = feed.price_at_or_before(now_ts - lookback_sec)
+    if previous is None or previous <= 0:
+        return None
+    return ((latest - previous) / previous) * 10_000.0
+
+
+def lead_delta(price: float | None, polymarket_price: float | None) -> tuple[float | None, float | None]:
+    if price is None or polymarket_price is None or polymarket_price <= 0:
+        return None, None
+    delta = price - polymarket_price
+    return delta, (delta / polymarket_price) * 10_000.0
+
+
+def side_vs_k(price: float | None, k_price: float | None) -> str | None:
+    if price is None or k_price is None:
+        return None
+    return "up" if price >= k_price else "down"
+
+
 def window_bucket(age_sec: float, remaining_sec: float) -> str:
     if remaining_sec <= 0:
         return "closed"
@@ -291,7 +319,7 @@ def effective_price(
     coinbase_enabled: bool = True,
     polymarket_feed: PolymarketChainlinkBtcPriceFeed | None = None,
     polymarket_enabled: bool = True,
-    max_polymarket_age_sec: float = 3.0,
+    max_polymarket_age_sec: float = 4.0,
 ) -> EffectivePrice:
     binance_latest = feed.latest_price if feed is not None else None
     coinbase_latest = coinbase_feed.latest_price if coinbase_enabled and coinbase_feed is not None else None
@@ -470,7 +498,7 @@ def build_row(
     volatility: DvolSnapshot | None,
     coinbase_enabled: bool = True,
     polymarket_price_enabled: bool = True,
-    max_polymarket_price_age_sec: float = 3.0,
+    max_polymarket_price_age_sec: float = 4.0,
 ) -> dict[str, Any]:
     age_sec = (now - window.start_time).total_seconds()
     remaining_sec = (window.end_time - now).total_seconds()
@@ -484,6 +512,14 @@ def build_row(
         max_polymarket_age_sec=max_polymarket_price_age_sec,
     )
     price_source, s_price, basis_bps = price.source, price.effective, price.basis_bps
+    now_ts = now.timestamp()
+    lead_binance_usd, lead_binance_bps = lead_delta(price.binance, price.polymarket)
+    lead_coinbase_usd, lead_coinbase_bps = lead_delta(price.coinbase, price.polymarket)
+    lead_proxy_usd, lead_proxy_bps = lead_delta(price.proxy, price.polymarket)
+    lead_binance_side = side_vs_k(price.binance, prices.k_price)
+    lead_coinbase_side = side_vs_k(price.coinbase, prices.k_price)
+    lead_proxy_side = side_vs_k(price.proxy, prices.k_price)
+    lead_polymarket_side = side_vs_k(price.polymarket, prices.k_price)
     good_resolution = is_chainlink_btc_resolution(window.resolution_source, window.description)
     up = token_state(stream, window.up_token, depth_notional, depth_safety_multiplier)
     down = token_state(stream, window.down_token, depth_notional, depth_safety_multiplier)
@@ -549,6 +585,40 @@ def build_row(
         "basis_bps": compact_float(basis_bps, 3),
         "source_spread_usd": compact_float(price.spread_usd, 2),
         "source_spread_bps": compact_float(price.spread_bps, 3),
+        "lead_binance_vs_polymarket_usd": compact_float(lead_binance_usd, 2),
+        "lead_binance_vs_polymarket_bps": compact_float(lead_binance_bps, 3),
+        "lead_coinbase_vs_polymarket_usd": compact_float(lead_coinbase_usd, 2),
+        "lead_coinbase_vs_polymarket_bps": compact_float(lead_coinbase_bps, 3),
+        "lead_proxy_vs_polymarket_usd": compact_float(lead_proxy_usd, 2),
+        "lead_proxy_vs_polymarket_bps": compact_float(lead_proxy_bps, 3),
+        "lead_binance_return_1s_bps": compact_float(price_return_bps(feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_binance_return_3s_bps": compact_float(price_return_bps(feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_binance_return_5s_bps": compact_float(price_return_bps(feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_coinbase_return_1s_bps": compact_float(price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_coinbase_return_3s_bps": compact_float(price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_coinbase_return_5s_bps": compact_float(price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_polymarket_return_1s_bps": compact_float(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_polymarket_return_3s_bps": compact_float(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_polymarket_return_5s_bps": compact_float(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_binance_side": lead_binance_side,
+        "lead_coinbase_side": lead_coinbase_side,
+        "lead_proxy_side": lead_proxy_side,
+        "lead_polymarket_side": lead_polymarket_side,
+        "lead_binance_side_disagrees_with_polymarket": (
+            lead_binance_side != lead_polymarket_side
+            if lead_binance_side is not None and lead_polymarket_side is not None
+            else None
+        ),
+        "lead_coinbase_side_disagrees_with_polymarket": (
+            lead_coinbase_side != lead_polymarket_side
+            if lead_coinbase_side is not None and lead_polymarket_side is not None
+            else None
+        ),
+        "lead_proxy_side_disagrees_with_polymarket": (
+            lead_proxy_side != lead_polymarket_side
+            if lead_proxy_side is not None and lead_polymarket_side is not None
+            else None
+        ),
         "depth_notional": compact_float(depth_notional, 2),
         "depth_safety_multiplier": compact_float(depth_safety_multiplier, 3),
         "up": up,
@@ -610,8 +680,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-coinbase", dest="coinbase_enabled", action="store_false")
     parser.add_argument("--polymarket-price", dest="polymarket_price_enabled", action="store_true", default=True)
     parser.add_argument("--no-polymarket-price", dest="polymarket_price_enabled", action="store_false")
-    parser.add_argument("--max-polymarket-price-age-sec", type=float, default=3.0)
+    parser.add_argument("--max-polymarket-price-age-sec", type=float, default=4.0)
     parser.add_argument("--polymarket-backup-after-sec", type=float, default=180.0)
+    parser.add_argument("--lead-signal", dest="lead_signal_enabled", action="store_true", default=False)
+    parser.add_argument("--no-lead-signal", dest="lead_signal_enabled", action="store_false")
     return parser
 
 
@@ -636,9 +708,10 @@ async def run(args: argparse.Namespace) -> int:
         nonlocal feed, coinbase_feed, backup_started
         if backup_started:
             return
-        feed = BinancePriceFeed("btcusdt")
-        await feed.start()
-        if args.coinbase_enabled:
+        if feed is None:
+            feed = BinancePriceFeed("btcusdt")
+            await feed.start()
+        if args.coinbase_enabled and coinbase_feed is None:
             coinbase_feed = CoinbaseBtcPriceFeed()
             await coinbase_feed.start()
         backup_started = True
@@ -648,6 +721,13 @@ async def run(args: argparse.Namespace) -> int:
         prices = WindowPrices()
         if polymarket_feed is not None:
             await polymarket_feed.start()
+        if args.lead_signal_enabled:
+            if feed is None:
+                feed = BinancePriceFeed("btcusdt")
+                await feed.start()
+            if args.coinbase_enabled and coinbase_feed is None:
+                coinbase_feed = CoinbaseBtcPriceFeed()
+                await coinbase_feed.start()
         if polymarket_feed is None:
             await ensure_backup_started()
         await stream.connect([window.up_token, window.down_token])

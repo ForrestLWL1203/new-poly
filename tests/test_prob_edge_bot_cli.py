@@ -18,6 +18,7 @@ from scripts.run_prob_edge_bot import (
     _price_analysis,
     _refresh_exit_retry_params,
     _runtime_log_meta,
+    _snapshot,
     _should_write_row,
     _warmup_warning_row,
     build_arg_parser,
@@ -148,6 +149,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.market_disagrees_exit_max_remaining_sec == 60.0
     assert opts.config.edge.market_disagrees_exit_min_loss == 0.03
     assert opts.config.edge.final_force_exit_remaining_sec == 30.0
+    assert opts.config.lead_signal_enabled is True
 
 
 def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Path) -> None:
@@ -340,6 +342,15 @@ def test_price_analysis_logs_only_active_polymarket_source_fields() -> None:
         "coinbase_price": None,
         "proxy_price": None,
         "source_spread_usd": None,
+        "lead_binance_vs_polymarket_usd": 40.0,
+        "lead_binance_vs_polymarket_bps": 3.997,
+        "lead_coinbase_vs_polymarket_usd": 20.0,
+        "lead_proxy_vs_polymarket_usd": 30.0,
+        "lead_binance_return_3s_bps": 1.2,
+        "lead_polymarket_return_3s_bps": 0.4,
+        "lead_binance_side": "up",
+        "lead_polymarket_side": "down",
+        "lead_binance_side_disagrees_with_polymarket": True,
     }
 
     analysis = _price_analysis(meta)
@@ -353,7 +364,75 @@ def test_price_analysis_logs_only_active_polymarket_source_fields() -> None:
         "polymarket_price_age_sec": 0.8,
         "polymarket_open_price": 100000.0,
         "polymarket_open_source": "ws_first_after",
+        "lead_binance_vs_polymarket_usd": 40.0,
+        "lead_binance_vs_polymarket_bps": 3.997,
+        "lead_coinbase_vs_polymarket_usd": 20.0,
+        "lead_proxy_vs_polymarket_usd": 30.0,
+        "lead_binance_return_3s_bps": 1.2,
+        "lead_polymarket_return_3s_bps": 0.4,
+        "lead_binance_side": "up",
+        "lead_polymarket_side": "down",
+        "lead_binance_side_disagrees_with_polymarket": True,
     }
+
+
+def test_lead_signal_does_not_enable_proxy_pricing_before_backup() -> None:
+    class FakeFeed:
+        latest_price = 100_120.0
+
+        def price_at_or_before(self, *_args, **_kwargs):
+            return 100_100.0
+
+    class FakePolymarketFeed:
+        latest_price = 100_080.0
+
+        def latest_age_sec(self):
+            return 5.0
+
+        def price_at_or_before(self, *_args, **_kwargs):
+            return 100_070.0
+
+    class FakeStream:
+        def get_latest_ask_levels_with_size(self, _token_id):
+            return [(0.5, 10.0)]
+
+        def get_latest_bid_levels_with_size(self, _token_id):
+            return [(0.49, 10.0)]
+
+        def get_latest_best_bid(self, _token_id):
+            return 0.49
+
+        def get_latest_best_ask(self, _token_id):
+            return 0.5
+
+        def get_latest_best_ask_age(self, _token_id):
+            return 0.01
+
+    window = type("Window", (), {
+        "slug": "m1",
+        "start_time": dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=120),
+        "end_time": dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=180),
+        "up_token": "up",
+        "down_token": "down",
+    })()
+    args = build_arg_parser().parse_args(["--config", "configs/prob_edge_aggressive.yaml", "--once"])
+    cfg = build_runtime_options(args).config
+
+    snap, meta = _snapshot(
+        window,
+        WindowPrices(k_price=100_000.0),
+        FakeFeed(),
+        None,
+        FakePolymarketFeed(),
+        FakeStream(),
+        cfg,
+        0.4,
+        fallback_pricing_enabled=False,
+    )
+
+    assert snap.s_price is None
+    assert meta["price_source"] == "missing"
+    assert meta["lead_binance_vs_polymarket_usd"] == 40.0
 
 
 def test_price_analysis_logs_only_backup_proxy_fields_when_fallback_active() -> None:

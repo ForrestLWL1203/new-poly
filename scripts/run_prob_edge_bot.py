@@ -79,8 +79,9 @@ class BotConfig:
     settlement_boundary_usd: float
     coinbase_enabled: bool = False
     polymarket_price_enabled: bool = True
-    max_polymarket_price_age_sec: float = 3.0
+    max_polymarket_price_age_sec: float = 4.0
     polymarket_backup_after_sec: float = 180.0
+    lead_signal_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -285,8 +286,9 @@ def load_bot_config(path: Path) -> BotConfig:
         settlement_boundary_usd=float(_deep_get(raw, ("runtime", "settlement_boundary_usd"), 5.0)),
         coinbase_enabled=bool(_deep_get(raw, ("market_data", "coinbase_enabled"), False)),
         polymarket_price_enabled=bool(_deep_get(raw, ("market_data", "polymarket_price_enabled"), True)),
-        max_polymarket_price_age_sec=float(_deep_get(raw, ("market_data", "max_polymarket_price_age_sec"), 3.0)),
+        max_polymarket_price_age_sec=float(_deep_get(raw, ("market_data", "max_polymarket_price_age_sec"), 4.0)),
         polymarket_backup_after_sec=float(_deep_get(raw, ("market_data", "polymarket_backup_after_sec"), 180.0)),
+        lead_signal_enabled=bool(_deep_get(raw, ("market_data", "lead_signal_enabled"), False)),
     )
 
 
@@ -312,6 +314,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--polymarket-price", dest="polymarket_price_enabled", action="store_true", default=None)
     parser.add_argument("--no-polymarket-price", dest="polymarket_price_enabled", action="store_false")
     parser.add_argument("--polymarket-backup-after-sec", type=float)
+    parser.add_argument("--lead-signal", dest="lead_signal_enabled", action="store_true", default=None)
+    parser.add_argument("--no-lead-signal", dest="lead_signal_enabled", action="store_false")
     return parser
 
 
@@ -330,15 +334,17 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
             sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
             sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
         )
-        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec)
+        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, cfg.lead_signal_enabled)
     if args.interval_sec is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec)
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, cfg.lead_signal_enabled)
     if args.coinbase_enabled is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, bool(args.coinbase_enabled), cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec)
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, bool(args.coinbase_enabled), cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, cfg.lead_signal_enabled)
     if args.polymarket_price_enabled is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, bool(args.polymarket_price_enabled), cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec)
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, bool(args.polymarket_price_enabled), cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, cfg.lead_signal_enabled)
     if args.polymarket_backup_after_sec is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, max(0.0, float(args.polymarket_backup_after_sec)))
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, max(0.0, float(args.polymarket_backup_after_sec)), cfg.lead_signal_enabled)
+    if args.lead_signal_enabled is not None:
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, bool(args.lead_signal_enabled))
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
     if args.dynamic_params and args.jsonl is None:
@@ -374,6 +380,7 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
         "polymarket_price_enabled": cfg.polymarket_price_enabled,
         "max_polymarket_price_age_sec": cfg.max_polymarket_price_age_sec,
         "polymarket_backup_after_sec": cfg.polymarket_backup_after_sec,
+        "lead_signal_enabled": cfg.lead_signal_enabled,
         "windows": options.windows,
         "once": options.once,
         "strategy": asdict(cfg.edge),
@@ -471,6 +478,28 @@ PRICE_ANALYSIS_FIELDS = {
     "proxy_open_price",
     "source_spread_usd",
     "source_spread_bps",
+    "lead_binance_vs_polymarket_usd",
+    "lead_binance_vs_polymarket_bps",
+    "lead_coinbase_vs_polymarket_usd",
+    "lead_coinbase_vs_polymarket_bps",
+    "lead_proxy_vs_polymarket_usd",
+    "lead_proxy_vs_polymarket_bps",
+    "lead_binance_return_1s_bps",
+    "lead_binance_return_3s_bps",
+    "lead_binance_return_5s_bps",
+    "lead_coinbase_return_1s_bps",
+    "lead_coinbase_return_3s_bps",
+    "lead_coinbase_return_5s_bps",
+    "lead_polymarket_return_1s_bps",
+    "lead_polymarket_return_3s_bps",
+    "lead_polymarket_return_5s_bps",
+    "lead_binance_side",
+    "lead_coinbase_side",
+    "lead_polymarket_side",
+    "lead_proxy_side",
+    "lead_binance_side_disagrees_with_polymarket",
+    "lead_coinbase_side_disagrees_with_polymarket",
+    "lead_proxy_side_disagrees_with_polymarket",
 }
 
 
@@ -487,6 +516,28 @@ def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
             "polymarket_price_age_sec",
             "polymarket_open_price",
             "polymarket_open_source",
+            "lead_binance_vs_polymarket_usd",
+            "lead_binance_vs_polymarket_bps",
+            "lead_coinbase_vs_polymarket_usd",
+            "lead_coinbase_vs_polymarket_bps",
+            "lead_proxy_vs_polymarket_usd",
+            "lead_proxy_vs_polymarket_bps",
+            "lead_binance_return_1s_bps",
+            "lead_binance_return_3s_bps",
+            "lead_binance_return_5s_bps",
+            "lead_coinbase_return_1s_bps",
+            "lead_coinbase_return_3s_bps",
+            "lead_coinbase_return_5s_bps",
+            "lead_polymarket_return_1s_bps",
+            "lead_polymarket_return_3s_bps",
+            "lead_polymarket_return_5s_bps",
+            "lead_binance_side",
+            "lead_coinbase_side",
+            "lead_polymarket_side",
+            "lead_proxy_side",
+            "lead_binance_side_disagrees_with_polymarket",
+            "lead_coinbase_side_disagrees_with_polymarket",
+            "lead_proxy_side_disagrees_with_polymarket",
         )
     elif source.startswith("proxy_"):
         fields = base_fields + (
@@ -516,6 +567,34 @@ def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
         for key in fields
         if key in meta and (value := meta.get(key)) is not None and value != "missing"
     }
+
+
+def _price_return_bps(feed: Any, *, now_ts: float, lookback_sec: float) -> float | None:
+    latest = getattr(feed, "latest_price", None) if feed is not None else None
+    if latest is None or latest <= 0:
+        return None
+    if not hasattr(feed, "price_at_or_before"):
+        return None
+    try:
+        previous = feed.price_at_or_before(now_ts - lookback_sec, max_backward_sec=lookback_sec + 2.0)
+    except TypeError:
+        previous = feed.price_at_or_before(now_ts - lookback_sec)
+    if previous is None or previous <= 0:
+        return None
+    return ((latest - previous) / previous) * 10_000.0
+
+
+def _lead_delta(price: float | None, polymarket_price: float | None) -> tuple[float | None, float | None]:
+    if price is None or polymarket_price is None or polymarket_price <= 0:
+        return None, None
+    delta = price - polymarket_price
+    return delta, (delta / polymarket_price) * 10_000.0
+
+
+def _side_vs_k(price: float | None, k_price: float | None) -> str | None:
+    if price is None or k_price is None:
+        return None
+    return "up" if price >= k_price else "down"
 
 
 def _warmup_warning_row(*, now: dt.datetime, mode: str, market_slug: str, backup_after_sec: float) -> dict[str, Any]:
@@ -609,6 +688,7 @@ def _bot_config_with_edge(cfg: BotConfig, edge: EdgeConfig) -> BotConfig:
         polymarket_price_enabled=cfg.polymarket_price_enabled,
         max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec,
         polymarket_backup_after_sec=cfg.polymarket_backup_after_sec,
+        lead_signal_enabled=cfg.lead_signal_enabled,
     )
 
 
@@ -678,13 +758,16 @@ def _snapshot(
     stream: PriceStream,
     cfg: BotConfig,
     sigma_eff: float | None,
+    fallback_pricing_enabled: bool = True,
 ) -> tuple[MarketSnapshot, dict[str, Any]]:
     now = dt.datetime.now(dt.timezone.utc)
     age_sec = (now - window.start_time).total_seconds()
     remaining_sec = (window.end_time - now).total_seconds()
+    pricing_feed = feed if fallback_pricing_enabled else None
+    pricing_coinbase_feed = coinbase_feed if fallback_pricing_enabled else None
     price = effective_price(
-        feed,
-        coinbase_feed,
+        pricing_feed,
+        pricing_coinbase_feed,
         prices,
         coinbase_enabled=cfg.coinbase_enabled,
         polymarket_feed=polymarket_feed,
@@ -692,6 +775,20 @@ def _snapshot(
         max_polymarket_age_sec=cfg.max_polymarket_price_age_sec,
     )
     price_source, s_price, basis_bps = price.source, price.effective, price.basis_bps
+    now_ts = now.timestamp()
+    raw_binance_price = feed.latest_price if feed is not None else None
+    raw_coinbase_price = coinbase_feed.latest_price if cfg.coinbase_enabled and coinbase_feed is not None else None
+    raw_proxy_values = [value for value in (raw_binance_price, raw_coinbase_price) if value is not None]
+    raw_proxy_price = sum(raw_proxy_values) / len(raw_proxy_values) if raw_proxy_values else None
+    raw_source_spread_usd = abs(raw_binance_price - raw_coinbase_price) if raw_binance_price is not None and raw_coinbase_price is not None else None
+    raw_source_spread_bps = (raw_source_spread_usd / raw_proxy_price) * 10_000.0 if raw_source_spread_usd is not None and raw_proxy_price else None
+    lead_binance_usd, lead_binance_bps = _lead_delta(raw_binance_price, price.polymarket)
+    lead_coinbase_usd, lead_coinbase_bps = _lead_delta(raw_coinbase_price, price.polymarket)
+    lead_proxy_usd, lead_proxy_bps = _lead_delta(raw_proxy_price, price.polymarket)
+    lead_binance_side = _side_vs_k(raw_binance_price, prices.k_price)
+    lead_coinbase_side = _side_vs_k(raw_coinbase_price, prices.k_price)
+    lead_proxy_side = _side_vs_k(raw_proxy_price, prices.k_price)
+    lead_polymarket_side = _side_vs_k(price.polymarket, prices.k_price)
     up = token_state(stream, window.up_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     down = token_state(stream, window.down_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     snap = MarketSnapshot(
@@ -732,8 +829,8 @@ def _snapshot(
         "s_price": _compact(s_price, 2),
         "k_price": _compact(prices.k_price, 2),
         "basis_bps": _compact(basis_bps, 3),
-        "binance_price": _compact(price.binance, 2),
-        "coinbase_price": _compact(price.coinbase, 2),
+        "binance_price": _compact(raw_binance_price, 2),
+        "coinbase_price": _compact(raw_coinbase_price, 2),
         "polymarket_price": _compact(price.polymarket, 2),
         "polymarket_price_age_sec": _compact(price.polymarket_age_sec, 3),
         "proxy_price": _compact(price.proxy, 2),
@@ -744,8 +841,42 @@ def _snapshot(
         "coinbase_open_price": _compact(prices.coinbase_open_price, 2),
         "coinbase_open_source": prices.coinbase_open_source,
         "proxy_open_price": _compact(price.proxy_open, 2),
-        "source_spread_usd": _compact(price.spread_usd, 2),
-        "source_spread_bps": _compact(price.spread_bps, 3),
+        "source_spread_usd": _compact(raw_source_spread_usd if raw_source_spread_usd is not None else price.spread_usd, 2),
+        "source_spread_bps": _compact(raw_source_spread_bps if raw_source_spread_bps is not None else price.spread_bps, 3),
+        "lead_binance_vs_polymarket_usd": _compact(lead_binance_usd, 2),
+        "lead_binance_vs_polymarket_bps": _compact(lead_binance_bps, 3),
+        "lead_coinbase_vs_polymarket_usd": _compact(lead_coinbase_usd, 2),
+        "lead_coinbase_vs_polymarket_bps": _compact(lead_coinbase_bps, 3),
+        "lead_proxy_vs_polymarket_usd": _compact(lead_proxy_usd, 2),
+        "lead_proxy_vs_polymarket_bps": _compact(lead_proxy_bps, 3),
+        "lead_binance_return_1s_bps": _compact(_price_return_bps(feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_binance_return_3s_bps": _compact(_price_return_bps(feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_binance_return_5s_bps": _compact(_price_return_bps(feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_coinbase_return_1s_bps": _compact(_price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_coinbase_return_3s_bps": _compact(_price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_coinbase_return_5s_bps": _compact(_price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_polymarket_return_1s_bps": _compact(_price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_polymarket_return_3s_bps": _compact(_price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_polymarket_return_5s_bps": _compact(_price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_binance_side": lead_binance_side,
+        "lead_coinbase_side": lead_coinbase_side,
+        "lead_proxy_side": lead_proxy_side,
+        "lead_polymarket_side": lead_polymarket_side,
+        "lead_binance_side_disagrees_with_polymarket": (
+            lead_binance_side != lead_polymarket_side
+            if lead_binance_side is not None and lead_polymarket_side is not None
+            else None
+        ),
+        "lead_coinbase_side_disagrees_with_polymarket": (
+            lead_coinbase_side != lead_polymarket_side
+            if lead_coinbase_side is not None and lead_polymarket_side is not None
+            else None
+        ),
+        "lead_proxy_side_disagrees_with_polymarket": (
+            lead_proxy_side != lead_polymarket_side
+            if lead_proxy_side is not None and lead_polymarket_side is not None
+            else None
+        ),
         "up": up,
         "down": down,
     }
@@ -764,8 +895,9 @@ async def _refresh_entry_retry_params(
     sigma_eff: float | None,
     state: StrategyState,
     original_side: str | None,
+    fallback_pricing_enabled: bool = False,
 ) -> BuyRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
+    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff, fallback_pricing_enabled=fallback_pricing_enabled)
     decision = evaluate_entry(snap, state, cfg.edge)
     if decision.action != "enter" or decision.side != original_side:
         return None
@@ -789,8 +921,9 @@ async def _refresh_exit_retry_params(
     state: StrategyState,
     position: PositionSnapshot,
     exit_reason: str | None = None,
+    fallback_pricing_enabled: bool = False,
 ) -> SellRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
+    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff, fallback_pricing_enabled=fallback_pricing_enabled)
     decision = evaluate_exit(snap, position, cfg.edge, state)
     if decision.action == "exit" and decision.limit_price is not None:
         return SellRetryParams(min_price=decision.limit_price, exit_reason=decision.reason)
@@ -849,9 +982,10 @@ async def run(options: RuntimeOptions) -> int:
             if polymarket_unhealthy_since is not None
             else 0.0
         )
-        feed = BinancePriceFeed("btcusdt")
-        await feed.start()
-        if cfg.coinbase_enabled:
+        if feed is None:
+            feed = BinancePriceFeed("btcusdt")
+            await feed.start()
+        if cfg.coinbase_enabled and coinbase_feed is None:
             coinbase_feed = CoinbaseBtcPriceFeed()
             await coinbase_feed.start()
         backup_started = True
@@ -894,6 +1028,13 @@ async def run(options: RuntimeOptions) -> int:
         state.reset_for_market(window.slug)
         if polymarket_feed is not None:
             await polymarket_feed.start()
+        if cfg.lead_signal_enabled and options.analysis_logs:
+            if feed is None:
+                feed = BinancePriceFeed("btcusdt")
+                await feed.start()
+            if cfg.coinbase_enabled and coinbase_feed is None:
+                coinbase_feed = CoinbaseBtcPriceFeed()
+                await coinbase_feed.start()
         if polymarket_feed is None:
             await ensure_backup_started()
         await stream.connect([window.up_token, window.down_token])
@@ -968,7 +1109,17 @@ async def run(options: RuntimeOptions) -> int:
                 next_dvol_refresh = time.monotonic() + cfg.dvol_refresh_sec
             dvol_stale = is_dvol_stale(volatility, now_monotonic=time.monotonic(), max_age_sec=cfg.max_dvol_age_sec)
             sigma_eff = None if dvol_stale or volatility is None else volatility.sigma
-            snap, meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
+            snap, meta = _snapshot(
+                window,
+                prices,
+                feed,
+                coinbase_feed,
+                polymarket_feed,
+                stream,
+                cfg,
+                sigma_eff,
+                fallback_pricing_enabled=backup_started or polymarket_feed is None,
+            )
             price_analysis = _price_analysis(meta)
 
             row: dict[str, Any] = {
@@ -1014,6 +1165,7 @@ async def run(options: RuntimeOptions) -> int:
                             state=state,
                             position=position,
                             exit_reason=decision.reason,
+                            fallback_pricing_enabled=backup_started or polymarket_feed is None,
                         ),
                     )
                     row["order"] = result.__dict__
@@ -1053,6 +1205,7 @@ async def run(options: RuntimeOptions) -> int:
                             sigma_eff=sigma_eff,
                             state=state,
                             original_side=side,
+                            fallback_pricing_enabled=backup_started or polymarket_feed is None,
                         ),
                     )
                     row["order"] = result.__dict__

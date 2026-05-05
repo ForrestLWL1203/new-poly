@@ -112,9 +112,10 @@ Useful options:
 --include-current-window
 --windows 12
 --polymarket-price / --no-polymarket-price
---max-polymarket-price-age-sec 3
+--max-polymarket-price-age-sec 4
 --polymarket-backup-after-sec 180
 --coinbase / --no-coinbase
+--lead-signal / --no-lead-signal
 --verbose
 ```
 
@@ -173,6 +174,14 @@ proxy_open_price
 basis_bps
 source_spread_usd
 source_spread_bps
+lead_binance_vs_polymarket_usd / bps
+lead_coinbase_vs_polymarket_usd / bps
+lead_proxy_vs_polymarket_usd / bps
+lead_binance_return_1s_bps / 3s / 5s
+lead_coinbase_return_1s_bps / 3s / 5s
+lead_polymarket_return_1s_bps / 3s / 5s
+lead_binance_side / lead_coinbase_side / lead_proxy_side / lead_polymarket_side
+lead_*_side_disagrees_with_polymarket
 depth_notional
 up
 down
