@@ -34,14 +34,14 @@ execution:
   paper_latency_sec: 0.4
   max_book_age_sec: 1.0
   retry_count: 1
-  retry_interval_sec: 0.05
+  retry_interval_sec: 0.0
   buy_price_buffer_ticks: 2
   buy_retry_price_buffer_ticks: 4
   sell_price_buffer_ticks: 3
   sell_retry_price_buffer_ticks: 5
 
 runtime:
-  interval_sec: 1.0
+  interval_sec: 0.5
   warmup_timeout_sec: 8.0
   dvol_refresh_sec: 300
   max_dvol_age_sec: 900

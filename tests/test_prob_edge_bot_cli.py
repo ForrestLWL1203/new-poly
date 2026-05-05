@@ -100,6 +100,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.buy_retry_price_buffer_ticks == 4.0
     assert opts.config.execution.sell_price_buffer_ticks == 3.0
     assert opts.config.execution.sell_retry_price_buffer_ticks == 5.0
+    assert opts.config.execution.retry_interval_sec == 0.0
+    assert opts.config.interval_sec == 0.5
     assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
     assert opts.config.edge.prob_drop_exit_window_sec == 5.0
     assert opts.config.edge.prob_drop_exit_threshold == 0.06
@@ -167,7 +169,7 @@ def test_amount_override_keeps_depth_check_same_notional() -> None:
     assert opts.config.amount_usd == 12.5
     assert opts.config.execution.depth_notional == 12.5
     assert opts.config.execution.retry_count == 1
-    assert opts.config.execution.retry_interval_sec == 0.05
+    assert opts.config.execution.retry_interval_sec == 0.0
 
 
 def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:

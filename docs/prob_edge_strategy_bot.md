@@ -201,15 +201,14 @@ Execution retry is intentionally small:
 
 ```text
 retry_count = 1
-retry_interval_sec = 0.05
+retry_interval_sec = 0.0
 ```
 
-BUY gets at most one retry. After a no-fill, both paper and live wait only
-`retry_interval_sec`, then rebuild a fresh strategy snapshot from the current
-Binance price, current remaining time, and current in-memory CLOB WS book. The
-retry is posted only if the same side still passes `evaluate_entry`; otherwise
-it is skipped instead of chasing a stale signal. The default hint ladder is
-configurable:
+BUY gets at most one retry. After a no-fill, both paper and live immediately
+rebuild a fresh strategy snapshot from the current Binance price, current
+remaining time, and current in-memory CLOB WS book. The retry is posted only if
+the same side still passes `evaluate_entry`; otherwise it is skipped instead of
+chasing a stale signal. The default hint ladder is configurable:
 
 ```text
 attempt 1: min(ask_limit + 2 ticks, fair_cap)
@@ -255,8 +254,9 @@ Paper and live share the same strategy decisions and retry refresh callbacks.
 The only intended mode difference is execution: paper simulates latency and
 local FAK fills without POSTing orders, while live posts real CLOB FAK orders.
 Paper applies `paper_latency_sec` once for the initial order signal, then only
-`retry_interval_sec` before the retry so retry simulation does not drift by an
-extra full tick.
+an optional `retry_interval_sec` before the retry. Current live-oriented
+profiles set that interval to `0`, so retry refresh happens without an
+intentional wait.
 
 ## Exit Logic
 

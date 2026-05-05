@@ -136,7 +136,8 @@ and `--i-understand-live-risk` are provided.
 
 Current default strategy behavior:
 
-- Entry thresholds are time phased: `0.12` for `90 <= age < 120`, `0.08` for
+- The tuned live-oriented profile evaluates the strategy loop every `0.5s`.
+- Entry thresholds are time phased: `0.16` for `100 <= age < 120`, `0.14` for
   `120 <= age < 240`, and late entry is disabled from `240s` onward.
 - FAK entry decisions use size-aware `ask_avg` for edge, require
   `ask_limit <= model_prob - required_edge`, require the formula cap to leave
@@ -152,9 +153,10 @@ Current default strategy behavior:
   `-5 ticks`, and `final_force_exit` uses a fixed `-5/-10 tick` emergency
   ladder. Paper mode uses the same SELL floors, clamped at one tick for very
   low-priced tokens.
-- After a no-fill, paper and live both wait `0.05s`, rebuild a fresh strategy
-  snapshot from current Binance price and in-memory CLOB WS book, and retry only
-  if the same entry/exit signal is still valid.
+- After a no-fill, paper and live immediately rebuild a fresh strategy snapshot
+  from current Binance price and in-memory CLOB WS book, and retry only if the
+  same entry/exit signal is still valid. Current live-oriented configs set
+  `retry_interval_sec=0.0`.
 - A live CLOB `FAK no match` response is treated as `order_no_fill`, not a
   fatal bot error, and records the failed POST latency for later diagnostics.
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.

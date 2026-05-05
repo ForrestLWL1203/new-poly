@@ -24,7 +24,7 @@ class ExecutionConfig:
     depth_safety_multiplier: float = 1.0
     max_book_age_sec: float = 1.0
     retry_count: int = 1
-    retry_interval_sec: float = 0.05
+    retry_interval_sec: float = 0.0
     buy_price_buffer_ticks: float = 2.0
     buy_retry_price_buffer_ticks: float = 4.0
     sell_price_buffer_ticks: float = 3.0
@@ -365,7 +365,7 @@ class LiveFakExecutionGateway:
         *,
         live_risk_ack: bool,
         retry_count: int = 1,
-        retry_interval_sec: float = 0.05,
+        retry_interval_sec: float = 0.0,
         buy_price_buffer_ticks: float = 2.0,
         buy_retry_price_buffer_ticks: float = 4.0,
         sell_price_buffer_ticks: float = 3.0,
