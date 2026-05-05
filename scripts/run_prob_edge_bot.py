@@ -518,6 +518,38 @@ def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _warmup_warning_row(*, now: dt.datetime, mode: str, market_slug: str, backup_after_sec: float) -> dict[str, Any]:
+    return {
+        "ts": now.astimezone().isoformat(),
+        "event": "warning",
+        "mode": mode,
+        "market_slug": market_slug,
+        "warning": "polymarket_ws_warmup_no_tick",
+        "message": "polymarket WS warmup expired without first tick",
+        "backup_starts_after_sec": float(backup_after_sec),
+    }
+
+
+def _backup_feed_started_row(
+    *,
+    now: dt.datetime,
+    mode: str,
+    market_slug: str,
+    unhealthy_for_sec: float,
+    coinbase_started: bool,
+) -> dict[str, Any]:
+    return {
+        "ts": now.astimezone().isoformat(),
+        "event": "backup_feed_started",
+        "mode": mode,
+        "market_slug": market_slug,
+        "trigger": "polymarket_unhealthy_for_seconds",
+        "unhealthy_for_sec": _compact(unhealthy_for_sec, 3),
+        "binance_started": True,
+        "coinbase_started": bool(coinbase_started),
+    }
+
+
 def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str, str]]) -> bool:
     decision = row.get("decision")
     if not isinstance(decision, dict):
@@ -812,12 +844,24 @@ async def run(options: RuntimeOptions) -> int:
         nonlocal feed, coinbase_feed, backup_started
         if backup_started:
             return
+        unhealthy_for_sec = (
+            time.monotonic() - polymarket_unhealthy_since
+            if polymarket_unhealthy_since is not None
+            else 0.0
+        )
         feed = BinancePriceFeed("btcusdt")
         await feed.start()
         if cfg.coinbase_enabled:
             coinbase_feed = CoinbaseBtcPriceFeed()
             await coinbase_feed.start()
         backup_started = True
+        logger.write(_backup_feed_started_row(
+            now=dt.datetime.now(dt.timezone.utc),
+            mode=options.mode,
+            market_slug=state.current_market_slug or "",
+            unhealthy_for_sec=unhealthy_for_sec,
+            coinbase_started=cfg.coinbase_enabled,
+        ))
 
     gateway = (
         LiveFakExecutionGateway(
@@ -864,6 +908,13 @@ async def run(options: RuntimeOptions) -> int:
             elif feed.latest_price is not None or (coinbase_feed is not None and coinbase_feed.latest_price is not None):
                 break
             await asyncio.sleep(0.1)
+        if polymarket_feed is not None and polymarket_feed.latest_price is None:
+            logger.write(_warmup_warning_row(
+                now=dt.datetime.now(dt.timezone.utc),
+                mode=options.mode,
+                market_slug=window.slug,
+                backup_after_sec=cfg.polymarket_backup_after_sec,
+            ))
 
         while True:
             if dynamic_task is not None and dynamic_task.done():

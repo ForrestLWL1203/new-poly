@@ -31,6 +31,7 @@ K_RETRY_AGES_SEC = (5.0, 8.0, 12.0, 20.0, 30.0, 40.0)
 K_RETRY_TIMEOUT_SEC = 40.0
 BTC_OPEN_LOOKAROUND_SEC = 5.0
 DEFAULT_MAX_DVOL_AGE_SEC = 900.0
+POLYMARKET_OPEN_DISAGREE_TOLERANCE_USD = 1.0
 
 
 @dataclass
@@ -134,6 +135,14 @@ def window_bucket(age_sec: float, remaining_sec: float) -> str:
 def is_chainlink_btc_resolution(*values: str | None) -> bool:
     text = " ".join(str(value or "").lower() for value in values)
     return ("chainlink" in text or "chain.link" in text) and ("btc" in text or "bitcoin" in text) and "usd" in text
+
+
+def polymarket_open_disagrees(prices: WindowPrices, *, tolerance_usd: float = POLYMARKET_OPEN_DISAGREE_TOLERANCE_USD) -> bool:
+    return (
+        prices.polymarket_open_price is not None
+        and prices.k_price is not None
+        and abs(prices.polymarket_open_price - prices.k_price) > tolerance_usd
+    )
 
 
 def extract_crypto_prices_from_api_response(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -497,6 +506,9 @@ def build_row(
         warnings.append("binance_open_rest_fallback")
     if prices.coinbase_open_source == "rest_candle":
         warnings.append("coinbase_open_rest_fallback")
+    ws_api_open_disagree = polymarket_open_disagrees(prices)
+    if ws_api_open_disagree:
+        warnings.append("polymarket_ws_open_disagrees_with_api")
     if polymarket_price_enabled and price.source != "polymarket_chainlink":
         warnings.append("polymarket_price_fallback")
     if not good_resolution:
@@ -510,7 +522,7 @@ def build_row(
         "remaining_sec": int(round(remaining_sec)),
         "window_bucket": window_bucket(age_sec, remaining_sec),
         "resolution_source": window.resolution_source,
-        "settlement_aligned": bool(good_resolution and price.source == "polymarket_chainlink"),
+        "settlement_aligned": bool(good_resolution and price.source == "polymarket_chainlink" and not ws_api_open_disagree),
         "sigma_source": sigma_source if sigma_eff is not None else "missing",
         "sigma_eff": compact_float(sigma_eff),
         "volatility_stale": volatility_stale,

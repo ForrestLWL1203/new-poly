@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.run_prob_edge_bot import (
     WindowPrices,
+    _backup_feed_started_row,
     _config_log_row,
     _entry_analysis,
     _exit_analysis,
@@ -18,6 +19,7 @@ from scripts.run_prob_edge_bot import (
     _refresh_exit_retry_params,
     _runtime_log_meta,
     _should_write_row,
+    _warmup_warning_row,
     build_arg_parser,
     build_runtime_options,
     choose_settlement,
@@ -380,6 +382,40 @@ def test_price_analysis_logs_only_backup_proxy_fields_when_fallback_active() -> 
     assert analysis["coinbase_price"] == 100100.0
     assert analysis["polymarket_price"] == 100080.0
     assert "polymarket_open_price" not in analysis
+
+
+def test_warmup_warning_row_explains_fail_closed_backup_delay() -> None:
+    now = dt.datetime(2026, 5, 6, 0, 0, tzinfo=dt.timezone.utc)
+
+    row = _warmup_warning_row(now=now, mode="paper", market_slug="m1", backup_after_sec=180.0)
+
+    assert row == {
+        "ts": now.astimezone().isoformat(),
+        "event": "warning",
+        "mode": "paper",
+        "market_slug": "m1",
+        "warning": "polymarket_ws_warmup_no_tick",
+        "message": "polymarket WS warmup expired without first tick",
+        "backup_starts_after_sec": 180.0,
+    }
+
+
+def test_backup_feed_started_row_is_auditable() -> None:
+    now = dt.datetime(2026, 5, 6, 0, 0, tzinfo=dt.timezone.utc)
+
+    row = _backup_feed_started_row(
+        now=now,
+        mode="paper",
+        market_slug="m1",
+        unhealthy_for_sec=181.2,
+        coinbase_started=True,
+    )
+
+    assert row["event"] == "backup_feed_started"
+    assert row["trigger"] == "polymarket_unhealthy_for_seconds"
+    assert row["unhealthy_for_sec"] == 181.2
+    assert row["binance_started"] is True
+    assert row["coinbase_started"] is True
 
 
 def test_config_log_row_contains_non_secret_runtime_shape() -> None:

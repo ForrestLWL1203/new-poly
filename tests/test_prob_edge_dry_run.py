@@ -250,6 +250,69 @@ def test_collector_row_is_strategy_neutral() -> None:
     assert "private" not in json.dumps(row).lower()
 
 
+def test_collector_warns_when_polymarket_ws_open_disagrees_with_api() -> None:
+    class FakeFeed:
+        latest_price = None
+
+    class FakePolymarketFeed:
+        latest_price = 100_010.0
+
+        def latest_age_sec(self):
+            return 0.5
+
+    class FakeStream:
+        def get_latest_ask_levels_with_size(self, token_id):
+            return [(0.51, 100.0)]
+
+        def get_latest_bid_levels_with_size(self, token_id):
+            return [(0.50, 100.0)]
+
+        def get_latest_best_bid(self, token_id):
+            return 0.50
+
+        def get_latest_best_ask(self, token_id):
+            return 0.51
+
+        def get_latest_best_ask_age(self, token_id):
+            return 0.25
+
+    window = collector.MarketWindow(
+        question="Bitcoin Up or Down",
+        up_token="up",
+        down_token="down",
+        start_time=collector.dt.datetime(2026, 5, 3, 0, 0, tzinfo=collector.dt.timezone.utc),
+        end_time=collector.dt.datetime(2026, 5, 3, 0, 5, tzinfo=collector.dt.timezone.utc),
+        slug="btc-updown-5m-1",
+        resolution_source="https://data.chain.link/streams/btc-usd",
+    )
+    prices = collector.WindowPrices(
+        k_price=100_000.0,
+        polymarket_open_price=100_002.5,
+        k_source="polymarket_crypto_price_api",
+    )
+
+    row = collector.build_row(
+        window=window,
+        prices=prices,
+        feed=FakeFeed(),
+        coinbase_feed=None,
+        polymarket_feed=FakePolymarketFeed(),
+        stream=FakeStream(),
+        now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
+        depth_notional=5.0,
+        depth_safety_multiplier=1.5,
+        sigma_eff=0.6,
+        sigma_source="manual",
+        volatility_stale=False,
+        paired_buffer=0.01,
+        volatility=None,
+    )
+
+    assert row["price_source"] == "polymarket_chainlink"
+    assert "polymarket_ws_open_disagrees_with_api" in row["warnings"]
+    assert row["settlement_aligned"] is False
+
+
 def test_collector_row_marks_stale_volatility() -> None:
     class FakeFeed:
         latest_price = 100_120.0

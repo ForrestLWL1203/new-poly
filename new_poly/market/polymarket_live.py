@@ -112,6 +112,12 @@ class PolymarketChainlinkBtcPriceFeed:
         return first_price
 
     def _inject(self, ts: float, price: float) -> None:
+        if not self._history or ts > self._history[-1][0]:
+            self._history.append((ts, price))
+            return
+        if ts == self._history[-1][0]:
+            self._history[-1] = (ts, price)
+            return
         ts_values = [t for t, _ in self._history]
         idx = bisect_left(ts_values, ts)
         if idx < len(self._history) and self._history[idx][0] == ts:
@@ -128,12 +134,14 @@ class PolymarketChainlinkBtcPriceFeed:
                 "filters": json.dumps({"symbol": self._symbol}),
             }],
         }
+        backoff = 1.0
         while self._running:
             try:
                 if self._ws is None:
                     self._ws = await websockets.connect(POLYMARKET_LIVE_DATA_WS_URL)
                     await self._ws.send(json.dumps(subscribe))
                     log.debug("PolymarketChainlinkBtcPriceFeed connected: %s %s", POLYMARKET_LIVE_DATA_WS_URL, self._symbol)
+                    backoff = 1.0
 
                 async for msg in self._ws:
                     try:
@@ -154,7 +162,8 @@ class PolymarketChainlinkBtcPriceFeed:
                 log.warning("PolymarketChainlinkBtcPriceFeed error: %s", e)
                 self._ws = None
             if self._running:
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2.0, 30.0)
 
     def _prune(self, now: float) -> None:
         cutoff = now - self._max_history_sec
