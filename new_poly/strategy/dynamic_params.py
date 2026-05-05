@@ -519,7 +519,10 @@ def candidate_results_from_rows(rows: Iterable[dict[str, Any]], cfg: DynamicConf
                 sell_slippage_ticks=cfg.slippage_ticks,
                 sell_price_buffer_ticks=base.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=base.sell_retry_price_buffer_ticks,
+                prob_drop_exit_window_sec=base.prob_drop_exit_window_sec,
+                prob_drop_exit_threshold=base.prob_drop_exit_threshold,
                 settlement_boundary_usd=base.settlement_boundary_usd,
+                min_entry_model_prob=base.min_entry_model_prob,
             ),
         )
         summary = result.summary

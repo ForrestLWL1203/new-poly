@@ -37,9 +37,12 @@ class BacktestConfig:
     sell_slippage_ticks: float = 0.0
     sell_price_buffer_ticks: float = 3.0
     sell_retry_price_buffer_ticks: float = 5.0
+    prob_drop_exit_window_sec: float = 0.0
+    prob_drop_exit_threshold: float = 0.0
     settlement_boundary_usd: float = 5.0
     min_fair_cap_margin_ticks: float = 0.0
     entry_tick_size: float = 0.01
+    min_entry_model_prob: float = 0.0
 
     def edge_config(self) -> EdgeConfig:
         return EdgeConfig(
@@ -50,8 +53,11 @@ class BacktestConfig:
             max_book_age_ms=self.max_book_age_ms,
             max_entries_per_market=self.max_entries_per_market,
             late_entry_enabled=self.late_entry_enabled,
+            prob_drop_exit_window_sec=self.prob_drop_exit_window_sec,
+            prob_drop_exit_threshold=self.prob_drop_exit_threshold,
             min_fair_cap_margin_ticks=self.min_fair_cap_margin_ticks,
             entry_tick_size=self.entry_tick_size,
+            min_entry_model_prob=self.min_entry_model_prob,
         )
 
 
@@ -154,8 +160,9 @@ def _entry_fill_price(decision, cfg: BacktestConfig) -> float | None:
 
 
 def _exit_fill_price(decision, cfg: BacktestConfig) -> float | None:
-    base = decision.limit_price if decision.limit_price is not None else decision.price
-    if base is None:
+    executable = decision.price
+    floor_base = decision.limit_price if decision.limit_price is not None else decision.price
+    if executable is None or floor_base is None:
         return None
     if decision.reason == "final_force_exit":
         # Mirror the first live emergency floor. Replay does not simulate the
@@ -165,8 +172,9 @@ def _exit_fill_price(decision, cfg: BacktestConfig) -> float | None:
         strategy_floor_ticks = cfg.sell_price_buffer_ticks
     else:
         strategy_floor_ticks = 0.0
-    ticks = max(strategy_floor_ticks, cfg.sell_slippage_ticks)
-    return round(min(1.0, max(cfg.tick_size, base - ticks * cfg.tick_size)), 6)
+    fak_floor = floor_base - strategy_floor_ticks * cfg.tick_size
+    slipped = executable - cfg.sell_slippage_ticks * cfg.tick_size
+    return round(min(1.0, max(cfg.tick_size, fak_floor, slipped)), 6)
 
 
 def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None = None) -> BacktestResult:
@@ -193,7 +201,11 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
             if state.has_position and state.open_position is not None:
                 decision = evaluate_exit(snap, state.open_position, edge_cfg, state)
                 if decision.model_prob is not None:
-                    state.record_model_prob(snap.age_sec, decision.model_prob)
+                    state.record_model_prob(
+                        snap.age_sec,
+                        decision.model_prob,
+                        retention_sec=max(edge_cfg.prob_stagnation_window_sec, edge_cfg.prob_drop_exit_window_sec, 5.0),
+                    )
                 if decision.action == "exit" and decision.price is not None and active_trade is not None:
                     exit_price = _exit_fill_price(decision, cfg)
                     if exit_price is None:
@@ -332,9 +344,12 @@ def scan_configs(
             sell_slippage_ticks=base.sell_slippage_ticks,
             sell_price_buffer_ticks=base.sell_price_buffer_ticks,
             sell_retry_price_buffer_ticks=base.sell_retry_price_buffer_ticks,
+            prob_drop_exit_window_sec=base.prob_drop_exit_window_sec,
+            prob_drop_exit_threshold=base.prob_drop_exit_threshold,
             settlement_boundary_usd=base.settlement_boundary_usd,
             min_fair_cap_margin_ticks=base.min_fair_cap_margin_ticks,
             entry_tick_size=base.entry_tick_size,
+            min_entry_model_prob=base.min_entry_model_prob,
         )
         result = run_backtest(materialized, cfg)
         if result.summary["entries"] < min_entries:

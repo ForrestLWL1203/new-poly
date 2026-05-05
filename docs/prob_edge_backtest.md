@@ -44,20 +44,25 @@ python3 scripts/backtest_prob_edge.py \
 `--slippage-ticks N` applies both:
 
 - BUY fill = executable ask limit + `N * tick_size`
-- SELL fill = executable bid limit - `max(strategy_sell_floor, N) * tick_size`
+- SELL fill = executable bid average - `N * tick_size`, clamped by the FAK
+  floor
 
 Use `--buy-slippage-ticks` and `--sell-slippage-ticks` when the two sides need
 different assumptions. The default `tick_size` is `0.01`.
 
-Replay mirrors the live/paper first-attempt SELL floor:
+Replay mirrors paper/live SELL semantics: the strategy floor is the minimum
+acceptable FAK price, not the actual fill price. When the collector row says the
+position can sell into current bid depth, replay fills from `bid_avg` and only
+uses the floor as a lower bound:
 
 ```text
-normal exits:      bid_limit - max(3, sell_slippage_ticks) ticks
-final_force_exit:  bid_limit - max(5, sell_slippage_ticks) ticks
+normal exits:      max(bid_avg - sell_slippage_ticks, bid_limit - 3 ticks)
+final_force_exit:  max(bid_avg - sell_slippage_ticks, bid_limit - 5 ticks)
 ```
 
-The retry ladder is not simulated in replay; use paper mode when you need to
-observe retry behavior against the latest local book.
+The retry ladder and the 400ms paper latency are not simulated in replay. Use
+paper mode when you need to observe retry behavior or post-signal book movement
+against the latest local book.
 
 To replay the current live/dry-run entry guard, pass the fair-cap margin used by
 the bot:
@@ -68,11 +73,14 @@ python3 scripts/backtest_prob_edge.py \
   --amount-usd 1 \
   --entry-start-age-sec 100 \
   --entry-end-age-sec 240 \
-  --early-required-edge 0.14 \
-  --core-required-edge 0.12 \
+  --early-required-edge 0.16 \
+  --core-required-edge 0.14 \
   --max-entries-per-market 4 \
   --min-fair-cap-margin-ticks 1 \
   --entry-tick-size 0.01 \
+  --min-entry-model-prob 0.35 \
+  --prob-drop-exit-window-sec 5 \
+  --prob-drop-exit-threshold 0.06 \
   --slippage-ticks 3
 ```
 
@@ -106,10 +114,17 @@ Entry decisions still use size-aware `ask_avg` for edge screening, but simulated
 fills use the worse executable depth limit. If slippage pushes BUY above the
 fair cap (`model_prob - required_edge`), the fill is skipped.
 
-SELL replay uses the same strategy floor as paper/live. Normal profit and stop
+SELL replay uses the same floor semantics as paper/live. Normal profit and stop
 exits default to a `3 tick` first floor, while final-force exits use `5 ticks`.
-The floor is clamped at one tick, matching the live executor behavior on very
-low-priced tokens.
+The fill price comes from `bid_avg` unless explicit sell slippage is requested;
+the floor is only a minimum acceptable FAK price. The floor is clamped at one
+tick, matching the live executor behavior on very low-priced tokens.
+
+Note: SELL fill semantics changed in May 2026. Older replay builds started from
+`bid_limit`; current replay starts from `bid_avg` and uses `bid_limit` only as
+the FAK floor base. PnL on identical historical data will generally be higher
+than older conservative runs, so re-run grid scans before relying on old
+parameter rankings.
 
 When collector rows include `ask_safety_limit`, replay also enforces the current
 depth safety check: the safety-depth limit must remain inside the same fair cap.
@@ -124,11 +139,19 @@ Trade fields keep both edge definitions:
   (`model_prob - ask_avg`).
 - `entry_edge_at_fill`: edge after simulated fill price and slippage.
 
+`--min-entry-model-prob` mirrors the live entry-quality gate. It rejects
+low-probability, lottery-style candidates even when their `model_prob - ask_avg`
+discount is large.
+
 It reuses the production strategy functions:
 
 - `evaluate_entry`
 - `evaluate_exit`
 - `StrategyState`
+
+Use `--prob-drop-exit-window-sec` and `--prob-drop-exit-threshold` to replay the
+fast probability-drop exit guard. The current aggressive profile uses `5` and
+`0.06`.
 
 If a position remains open after the final available row for a window, it is
 settled using Binance proxy direction:

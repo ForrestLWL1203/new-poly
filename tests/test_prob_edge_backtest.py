@@ -78,7 +78,7 @@ def test_scan_configs_returns_sorted_results() -> None:
     assert {"early_required_edge", "core_required_edge", "entry_start_age_sec", "entry_end_age_sec"} <= set(results[0])
 
 
-def test_backtest_applies_buy_slippage_and_live_style_sell_floor() -> None:
+def test_backtest_applies_buy_slippage_and_uses_executable_bid_for_sell() -> None:
     rows = [
         _row("m1", 90, 100.10),
         _row("m1", 120, 100.00),
@@ -91,10 +91,10 @@ def test_backtest_applies_buy_slippage_and_live_style_sell_floor() -> None:
     result = run_backtest(rows, BacktestConfig(amount_usd=10.0, buy_slippage_ticks=1, sell_slippage_ticks=1))
 
     assert result.trades[0]["entry_price"] == 0.41
-    assert result.trades[0]["exit_price"] == 0.65
+    assert result.trades[0]["exit_price"] == 0.69
 
 
-def test_backtest_sell_slippage_can_exceed_live_style_sell_floor() -> None:
+def test_backtest_sell_slippage_is_clamped_by_fak_floor() -> None:
     rows = [
         _row("m1", 90, 100.10),
         _row("m1", 120, 100.00),
@@ -106,6 +106,22 @@ def test_backtest_sell_slippage_can_exceed_live_style_sell_floor() -> None:
 
     result = run_backtest(rows, BacktestConfig(amount_usd=10.0, sell_slippage_ticks=5))
 
+    assert result.trades[0]["exit_price"] == 0.65
+
+
+def test_backtest_final_force_exit_uses_emergency_floor() -> None:
+    rows = [
+        _row("m1", 90, 100.10),
+        _row("m1", 286, 100.10),
+    ]
+    rows[0]["up"]["ask_avg"] = 0.39
+    rows[0]["up"]["ask_limit"] = 0.40
+    rows[1]["up"]["bid_avg"] = 0.70
+    rows[1]["up"]["bid_limit"] = 0.68
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=10.0, sell_slippage_ticks=10))
+
+    assert result.trades[0]["exit_reason"] == "final_force_exit"
     assert result.trades[0]["exit_price"] == 0.63
 
 

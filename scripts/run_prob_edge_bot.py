@@ -238,8 +238,11 @@ def load_bot_config(path: Path) -> BotConfig:
         final_hold_min_bid_limit=float(_deep_get(raw, ("strategy", "final_hold_min_bid_limit"), 0.95)),
         prob_stagnation_window_sec=float(_deep_get(raw, ("strategy", "prob_stagnation_window_sec"), 3.0)),
         prob_stagnation_epsilon=float(_deep_get(raw, ("strategy", "prob_stagnation_epsilon"), 0.002)),
+        prob_drop_exit_window_sec=float(_deep_get(raw, ("strategy", "prob_drop_exit_window_sec"), 0.0)),
+        prob_drop_exit_threshold=float(_deep_get(raw, ("strategy", "prob_drop_exit_threshold"), 0.0)),
         min_fair_cap_margin_ticks=float(_deep_get(raw, ("strategy", "min_fair_cap_margin_ticks"), 0.0)),
         entry_tick_size=float(_deep_get(raw, ("strategy", "entry_tick_size"), 0.01)),
+        min_entry_model_prob=float(_deep_get(raw, ("strategy", "min_entry_model_prob"), 0.0)),
     )
     execution = ExecutionConfig(
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.4)),
@@ -405,6 +408,7 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
         "exit_profit_per_share": _compact(decision.profit_now),
         "exit_prob_stagnant": decision.prob_stagnant,
         "exit_prob_delta_3s": _compact(decision.prob_delta_3s),
+        "exit_prob_drop_delta": _compact(decision.prob_drop_delta),
         "exit_price": _compact(fill_price),
         "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
         "order_attempt": result.attempt if result is not None else None,
@@ -487,7 +491,10 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         sell_slippage_ticks=0.0,
         sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
         sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
+        prob_drop_exit_window_sec=cfg.edge.prob_drop_exit_window_sec,
+        prob_drop_exit_threshold=cfg.edge.prob_drop_exit_threshold,
         settlement_boundary_usd=cfg.settlement_boundary_usd,
+        min_entry_model_prob=cfg.edge.min_entry_model_prob,
     )
 
 
@@ -732,7 +739,11 @@ async def run(options: RuntimeOptions) -> int:
                 decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
                 row["decision"] = decision.__dict__
                 if decision.model_prob is not None:
-                    state.record_model_prob(snap.age_sec, decision.model_prob)
+                    state.record_model_prob(
+                        snap.age_sec,
+                        decision.model_prob,
+                        retention_sec=max(cfg.edge.prob_stagnation_window_sec, cfg.edge.prob_drop_exit_window_sec, 5.0),
+                    )
                 if decision.action == "exit":
                     exiting_position = state.open_position
                     result = await gateway.sell(

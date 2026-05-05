@@ -85,9 +85,10 @@ Config files:
 
 - `configs/prob_edge_mvp.yaml`: baseline/default config.
 - `configs/prob_edge_aggressive.yaml`: current optimized aggressive paper
-  candidate from the first 96-window replay. It uses `100-240s` entry timing,
-  `0.14/0.12` early/core edge thresholds, `max_entries_per_market=4`, and
-  `$1` notional/depth.
+  candidate. It is aggressive by entry count but stricter by entry quality:
+  `100-240s` entry timing, `0.16/0.14` early/core edge thresholds,
+  `min_entry_model_prob=0.35`, `max_entries_per_market=4`, and `$1`
+  notional/depth.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
   profile set. It is disabled unless `--dynamic-params` is passed.
 
@@ -106,9 +107,18 @@ final_hold_min_bid_avg
 final_hold_min_bid_limit
 prob_stagnation_window_sec
 prob_stagnation_epsilon
+prob_drop_exit_window_sec
+prob_drop_exit_threshold
+min_entry_model_prob
 retry_count
 retry_interval_sec
 ```
+
+The current `0.16/0.14` edge thresholds and `0.35` model-probability floor came
+from replaying the 120-window collector and dry-run datasets captured on
+2026-05-04. They replace the earlier `0.12/0.08` defaults because those looser
+thresholds admitted too many low-probability lottery-style entries and larger
+`logic_decay_exit` losses.
 
 ## FAK Price Logic
 
@@ -133,12 +143,15 @@ edge = model_prob - ask_avg
 An entry is valid only when both are true:
 
 ```text
+model_prob >= min_entry_model_prob
 edge >= required_edge
 ask_limit <= fair_cap
 ```
 
 This prevents an average-cheap book from passing when the deepest required ask
 level is already more expensive than the model allows.
+`min_entry_model_prob` is a separate quality gate: it rejects low-probability
+lottery-style entries even when their price discount is large.
 
 Live-oriented configs add two extra FAK quality guards:
 
@@ -255,14 +268,23 @@ late-window profit protection:
 - `defensive_take_profit`: when `30 < remaining_sec <= 60`, profit is at least
   `defensive_profit_min`, and the held-side model probability has not risen over
   `prob_stagnation_window_sec`.
+- `prob_drop_exit`: when enabled, the held-side model probability drops by at
+  least `prob_drop_exit_threshold` over `prob_drop_exit_window_sec` and is below
+  the entry-time model probability. The current aggressive profile uses a
+  `5s / 0.06` guard to cut fast probability collapses before classic
+  `logic_decay_exit` fires. The below-entry condition is intentional: positions
+  that became strongly favorable and then partially retreated do not panic-exit
+  while still better than the original model probability. Because probability
+  history is cleared at entry, this guard cannot fire until the position has
+  been open for at least `prob_drop_exit_window_sec`.
 - `profit_protection_exit`: when `15 < remaining_sec <= 30`, profit is at least
   `protection_profit_min`.
 - `final_force_exit`: when `remaining_sec <= 15`, sell if depth exists unless
   `model_prob`, `bid_avg`, and `bid_limit` all exceed their final-hold
   thresholds.
 
-Exit decisions log `profit_now`, `prob_stagnant`, and `prob_delta_3s` for
-post-run analysis.
+Exit decisions log `profit_now`, `prob_stagnant`, `prob_delta_3s`, and
+`prob_drop_delta` for post-run analysis.
 
 If the probability history is too short to compare against the configured
 stagnation window, `prob_stagnant=false` and `defensive_take_profit` does not

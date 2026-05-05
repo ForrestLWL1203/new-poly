@@ -101,6 +101,11 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.sell_price_buffer_ticks == 3.0
     assert opts.config.execution.sell_retry_price_buffer_ticks == 5.0
     assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
+    assert opts.config.edge.prob_drop_exit_window_sec == 5.0
+    assert opts.config.edge.prob_drop_exit_threshold == 0.06
+    assert opts.config.edge.early_required_edge == 0.16
+    assert opts.config.edge.core_required_edge == 0.14
+    assert opts.config.edge.min_entry_model_prob == 0.35
 
 
 def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Path) -> None:
@@ -170,13 +175,14 @@ def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
     opts = build_runtime_options(args)
 
     assert not hasattr(opts.config.edge, "required_edge")
-    assert opts.config.edge.early_required_edge == 0.12
-    assert opts.config.edge.core_required_edge == 0.08
+    assert opts.config.edge.early_required_edge == 0.16
+    assert opts.config.edge.core_required_edge == 0.14
     assert opts.config.edge.entry_start_age_sec == 90.0
     assert opts.config.edge.late_entry_enabled is False
     assert opts.config.edge.defensive_profit_min == 0.03
     assert opts.config.edge.protection_profit_min == 0.01
     assert opts.config.edge.final_hold_min_prob == 0.98
+    assert opts.config.edge.min_entry_model_prob == 0.35
 
 
 def test_dvol_stale_after_configured_age() -> None:

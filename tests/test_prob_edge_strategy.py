@@ -204,6 +204,34 @@ def test_entry_rejects_when_safety_depth_exceeds_formula_cap() -> None:
     assert decision.reason == "edge_too_small"
 
 
+def test_entry_rejects_low_model_probability_even_when_edge_is_large() -> None:
+    cfg = EdgeConfig(core_required_edge=0.14, min_entry_model_prob=0.35)
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=99.95,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_ask_avg=0.05,
+        up_ask_limit=0.05,
+        up_best_ask=0.05,
+        up_ask_depth_ok=True,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        down_ask_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "model_prob_too_low"
+    assert decision.up_prob is not None and decision.up_prob < 0.35
+
+
 def test_entry_uses_phase_edges_and_disables_late() -> None:
     cfg = EdgeConfig(early_required_edge=0.10, core_required_edge=0.06, entry_start_age_sec=40.0)
     state = StrategyState(current_market_slug="m1")
@@ -450,6 +478,141 @@ def test_logic_decay_still_triggers_inside_last_sixty_seconds() -> None:
     ), pos, cfg, StrategyState(current_market_slug="m1"))
 
     assert decision.reason == "logic_decay_exit"
+
+
+def test_prob_drop_exit_triggers_on_fast_probability_drop() -> None:
+    cfg = EdgeConfig(prob_drop_exit_window_sec=5.0, prob_drop_exit_threshold=0.06)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=1.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.70,
+        entry_edge=0.30,
+    )
+    state = StrategyState(current_market_slug="m1")
+    state.prob_history = [(135.0, 0.75)]
+
+    decision = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=140.0,
+        remaining_sec=160.0,
+        s_price=100.05,
+        k_price=100.0,
+        sigma_eff=0.5,
+        up_bid_avg=0.41,
+        up_bid_limit=0.40,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg, state)
+
+    assert decision.action == "exit"
+    assert decision.reason == "prob_drop_exit"
+    assert decision.prob_drop_delta is not None
+    assert decision.prob_drop_delta <= -0.06
+
+
+def test_prob_drop_exit_does_not_fire_when_disabled_or_history_short() -> None:
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=1.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.70,
+        entry_edge=0.30,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=140.0,
+        remaining_sec=160.0,
+        s_price=100.05,
+        k_price=100.0,
+        sigma_eff=0.5,
+        up_bid_avg=0.41,
+        up_bid_limit=0.40,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+    short_history = StrategyState(current_market_slug="m1")
+    short_history.prob_history = [(136.0, 0.62)]
+
+    enabled = evaluate_exit(snap, pos, EdgeConfig(prob_drop_exit_window_sec=5.0, prob_drop_exit_threshold=0.06), short_history)
+    disabled = evaluate_exit(snap, pos, EdgeConfig(prob_drop_exit_window_sec=5.0, prob_drop_exit_threshold=0.0), short_history)
+
+    assert enabled.reason != "prob_drop_exit"
+    assert disabled.reason != "prob_drop_exit"
+
+
+def test_prob_drop_exit_does_not_fire_while_above_entry_model_probability() -> None:
+    cfg = EdgeConfig(prob_drop_exit_window_sec=5.0, prob_drop_exit_threshold=0.06)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=1.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.20,
+    )
+    state = StrategyState(current_market_slug="m1")
+    state.prob_history = [(135.0, 0.75)]
+
+    decision = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=140.0,
+        remaining_sec=160.0,
+        s_price=100.05,
+        k_price=100.0,
+        sigma_eff=0.5,
+        up_bid_avg=0.62,
+        up_bid_limit=0.61,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg, state)
+
+    assert decision.prob_drop_delta is not None
+    assert decision.prob_drop_delta <= -0.06
+    assert decision.reason != "prob_drop_exit"
+
+
+def test_prob_drop_exit_has_priority_over_logic_decay() -> None:
+    cfg = EdgeConfig(model_decay_buffer=0.02, prob_drop_exit_window_sec=5.0, prob_drop_exit_threshold=0.06)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=1.0,
+        entry_avg_price=0.70,
+        filled_shares=10.0,
+        entry_model_prob=0.80,
+        entry_edge=0.10,
+    )
+    state = StrategyState(current_market_slug="m1")
+    state.prob_history = [(135.0, 0.80)]
+
+    decision = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=140.0,
+        remaining_sec=160.0,
+        s_price=99.95,
+        k_price=100.0,
+        sigma_eff=0.2,
+        up_bid_avg=0.61,
+        up_bid_limit=0.60,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg, state)
+
+    assert decision.reason == "prob_drop_exit"
 
 
 def test_state_records_window_settlement_pnl() -> None:
