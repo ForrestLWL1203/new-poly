@@ -5,7 +5,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed, price_ticks_from_message
+from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed, price_ticks_from_message, subscribe_message
+
+
+def test_subscribe_message_uses_compact_filters() -> None:
+    message = subscribe_message("BTC/USD")
+
+    assert message == {
+        "action": "subscribe",
+        "subscriptions": [{
+            "topic": "crypto_prices_chainlink",
+            "type": "update",
+            "filters": '{"symbol":"btc/usd"}',
+        }],
+    }
 
 
 def test_price_ticks_from_initial_batch_message() -> None:

@@ -17,6 +17,24 @@ log = logging.getLogger(__name__)
 POLYMARKET_LIVE_DATA_WS_URL = "wss://ws-live-data.polymarket.com"
 
 
+def subscribe_message(symbol: str = "btc/usd") -> dict[str, Any]:
+    """Build the Polymarket live-data subscription payload.
+
+    The live-data WS appears sensitive to the exact `filters` string shape:
+    compact JSON matches the working Polymarket UI/probe subscription and
+    receives continuous updates, while default `json.dumps` spacing can receive
+    only an initial batch on some connections.
+    """
+    return {
+        "action": "subscribe",
+        "subscriptions": [{
+            "topic": "crypto_prices_chainlink",
+            "type": "update",
+            "filters": json.dumps({"symbol": symbol.lower()}, separators=(",", ":")),
+        }],
+    }
+
+
 def _parse_tick(raw: dict[str, Any]) -> tuple[float, float] | None:
     try:
         timestamp_ms = float(raw["timestamp"])
@@ -126,20 +144,17 @@ class PolymarketChainlinkBtcPriceFeed:
             self._history.insert(idx, (ts, price))
 
     async def _recv_loop(self) -> None:
-        subscribe = {
-            "action": "subscribe",
-            "subscriptions": [{
-                "topic": "crypto_prices_chainlink",
-                "type": "update",
-                "filters": json.dumps({"symbol": self._symbol}),
-            }],
-        }
+        subscribe = subscribe_message(self._symbol)
         backoff = 1.0
         while self._running:
             try:
                 if self._ws is None:
-                    self._ws = await websockets.connect(POLYMARKET_LIVE_DATA_WS_URL)
-                    await self._ws.send(json.dumps(subscribe))
+                    self._ws = await websockets.connect(
+                        POLYMARKET_LIVE_DATA_WS_URL,
+                        ping_interval=20,
+                        ping_timeout=20,
+                    )
+                    await self._ws.send(json.dumps(subscribe, separators=(",", ":")))
                     log.debug("PolymarketChainlinkBtcPriceFeed connected: %s %s", POLYMARKET_LIVE_DATA_WS_URL, self._symbol)
                     backoff = 1.0
 
