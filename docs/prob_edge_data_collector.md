@@ -29,8 +29,9 @@ The collector records:
 - Binance BTC/USDT trade WebSocket as the first backup proxy BTC price source.
 - Coinbase BTC-USD match WebSocket as the second backup proxy BTC price source
   when enabled.
-- Binance and, when enabled, Coinbase open prices inside the window boundary lookaround
-  `(window_start - 5s, window_start + 5s)`, used to compute `basis_bps`.
+- Binance and, when enabled, Coinbase open prices inside the window boundary
+  lookaround `(window_start - 5s, window_start + 5s)`, used to compute
+  fallback `basis_bps` after backup activation.
 - Polymarket CLOB WebSocket top/depth summaries for UP and DOWN tokens.
 - Deribit BTC DVOL snapshot as 30-day implied-volatility reference.
 

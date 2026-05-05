@@ -237,6 +237,16 @@ def test_backtest_treats_stale_volatility_as_missing_model_input() -> None:
     assert result.summary["skip_reason_counts"]["missing_model_inputs"] == 1
 
 
+def test_backtest_skips_polymarket_open_disagreement_rows() -> None:
+    rows = [_row("m1", 90, 100.10)]
+    rows[0]["warnings"] = ["polymarket_ws_open_disagrees_with_api"]
+
+    result = run_backtest(rows, BacktestConfig())
+
+    assert result.summary["entries"] == 0
+    assert result.summary["skip_reason_counts"]["missing_model_inputs"] == 1
+
+
 def test_scan_configs_filters_min_entries_and_can_sort_by_win_rate() -> None:
     rows = [
         _row("m1", 90, 100.10),

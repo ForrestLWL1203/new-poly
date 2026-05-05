@@ -39,14 +39,28 @@ The script prints JSON with:
 - `grid_top`: best parameter combinations from the configured scan.
 - `sample_trades`: first few simulated trades for sanity checking.
 
-Current default scan-derived strategy parameters are:
+Current MVP defaults are:
 
 ```text
 entry_start_age_sec = 90
-early_required_edge = 0.12
-core_required_edge = 0.08
+early_required_edge = 0.16
+core_required_edge = 0.14
 entry_end_age_sec = 270
 late_entry_enabled = false
+```
+
+The current aggressive/live-smoke profile is stricter on timing and allows more
+entries:
+
+```text
+entry_start_age_sec = 100
+entry_end_age_sec = 240
+early_required_edge = 0.16
+core_required_edge = 0.14
+max_entries_per_market = 4
+amount_usd = 1
+low_price_extra_edge_threshold = 0.30
+low_price_extra_edge = 0.02
 ```
 
 To simulate FAK execution drift, add slippage ticks:
@@ -98,8 +112,8 @@ python3 scripts/backtest_prob_edge.py \
   --min-fair-cap-margin-ticks 1 \
   --entry-tick-size 0.01 \
   --min-entry-model-prob 0.35 \
-  --low-price-extra-edge-threshold 0.25 \
-  --low-price-extra-edge 0.06 \
+  --low-price-extra-edge-threshold 0.30 \
+  --low-price-extra-edge 0.02 \
   --prob-drop-exit-window-sec 5 \
   --prob-drop-exit-threshold 0.06 \
   --slippage-ticks 3
@@ -198,8 +212,10 @@ fast probability-drop exit guard. The current aggressive profile uses `5` and
 `0.06`.
 
 If a position remains open after the final available row for a window, it is
-settled using the collected proxy direction. New collector/bot logs use
-Binance+Coinbase when both are available and fall back to Binance otherwise:
+settled using the final collected effective `s_price` for that window. Current
+collector/bot logs use Polymarket live-data `crypto_prices_chainlink` as the
+primary source and only fall back to the lazy Binance/Coinbase proxy after a
+configured Polymarket outage:
 
 ```text
 s_price > k_price => UP wins

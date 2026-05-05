@@ -227,8 +227,8 @@ def _parse_scalar(value: str) -> Any:
 def load_bot_config(path: Path) -> BotConfig:
     raw = _load_yaml(path)
     edge = EdgeConfig(
-        early_required_edge=float(_deep_get(raw, ("strategy", "early_required_edge"), 0.12)),
-        core_required_edge=float(_deep_get(raw, ("strategy", "core_required_edge"), 0.08)),
+        early_required_edge=float(_deep_get(raw, ("strategy", "early_required_edge"), 0.16)),
+        core_required_edge=float(_deep_get(raw, ("strategy", "core_required_edge"), 0.14)),
         model_decay_buffer=float(_deep_get(raw, ("strategy", "model_decay_buffer"), 0.02)),
         overprice_buffer=float(_deep_get(raw, ("strategy", "overprice_buffer"), 0.02)),
         entry_start_age_sec=float(_deep_get(raw, ("strategy", "entry_start_age_sec"), 90.0)),

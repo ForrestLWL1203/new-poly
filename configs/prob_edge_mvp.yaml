@@ -51,7 +51,6 @@ execution:
 runtime:
   interval_sec: 0.5
   warmup_timeout_sec: 8.0
-  paired_buffer: 0.01
   dvol_refresh_sec: 300
   max_dvol_age_sec: 900
   settlement_boundary_usd: 5

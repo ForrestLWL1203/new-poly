@@ -68,12 +68,16 @@ python3 scripts/run_prob_edge_bot.py \
 ## Default Rules
 
 - New entries use phase-specific edge thresholds:
-  `90 <= age < 120` requires `early_required_edge = 0.12`;
-  `120 <= age < 240` requires `core_required_edge = 0.08`;
+  `90 <= age < 120` requires `early_required_edge = 0.16`;
+  `120 <= age < 240` requires `core_required_edge = 0.14`;
   `240 <= age <= 270` is disabled by default with `late_entry_enabled = false`.
 - No new entries in the final 30 seconds.
-- Default notional is `$5`.
+- Default notional is `$5` in the MVP profile. The aggressive/live-smoke
+  profile uses `$1`.
 - Default max successful entries per market is `2`.
+- The default strategy loop interval is `0.5s`, so paper/live decisions run at
+  roughly 2Hz. Time-window guards such as `prob_drop_exit_window_sec=5` and
+  `prob_stagnation_window_sec=3` are wall-clock windows, not tick counts.
 - `sigma_eff` uses Deribit BTC DVOL divided by 100.
 - K is the Polymarket UI Price to Beat from the crypto price API.
 - Settlement/reporting in paper mode uses proxy direction; the bot does not wait
@@ -392,8 +396,6 @@ polymarket_price
 polymarket_price_age_sec
 polymarket_open_price
 polymarket_open_source
-
-# fallback mode only
 proxy_price
 proxy_open_price
 binance_price
@@ -405,6 +407,10 @@ coinbase_open_source
 source_spread_usd
 source_spread_bps
 ```
+
+Null and `"missing"` analysis values are omitted. Polymarket fields appear when
+the Polymarket feed has data; proxy/Binance/Coinbase fields appear only after
+lazy backup activation or when running with `--no-polymarket-price`.
 
 Analysis logs are enabled by default in paper mode, disabled by default in live
 mode, and can be explicitly toggled with `--analysis-logs` or
@@ -439,8 +445,9 @@ order books.
 By default, strategy JSONL files are pruned by row timestamp:
 
 - `--log-retention-hours 24` is the default.
-- Pruning runs when the logger opens and after each completed window.
-- Runtime pruning cadence is `--log-prune-every-windows 5` by default.
+- Pruning runs when the logger opens and then every
+  `--log-prune-every-windows` completed windows. The default runtime cadence is
+  `5`.
 - Rows without a parseable `ts` are kept to avoid accidental data loss.
 - Use `--log-retention-hours 0` to disable pruning for archival runs.
 - If dynamic parameters are enabled, keep retention long enough to cover the

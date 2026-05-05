@@ -26,8 +26,8 @@ FINAL_FORCE_SELL_BUFFER_TICKS = 5.0
 @dataclass(frozen=True)
 class BacktestConfig:
     amount_usd: float = 5.0
-    early_required_edge: float = 0.12
-    core_required_edge: float = 0.08
+    early_required_edge: float = 0.16
+    core_required_edge: float = 0.14
     entry_start_age_sec: float = 90.0
     entry_end_age_sec: float = 270.0
     max_book_age_ms: float = 1000.0
@@ -106,14 +106,23 @@ def _token(row: dict[str, Any], side: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _warnings(row: dict[str, Any]) -> set[str]:
+    value = row.get("warnings")
+    if isinstance(value, list):
+        return {str(item) for item in value}
+    return set()
+
+
 def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
     up = _token(row, "up")
     down = _token(row, "down")
+    warnings = _warnings(row)
+    s_price = None if "polymarket_ws_open_disagrees_with_api" in warnings else _float(row.get("s_price"))
     return MarketSnapshot(
         market_slug=str(row.get("market_slug") or ""),
         age_sec=float(row.get("age_sec") or 0.0),
         remaining_sec=float(row.get("remaining_sec") or 0.0),
-        s_price=_float(row.get("s_price")),
+        s_price=s_price,
         k_price=_float(row.get("k_price")),
         sigma_eff=_sigma(row),
         up_ask_avg=_float(up.get("ask_avg")),
