@@ -25,6 +25,7 @@ from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import fetch_dvol_snapshot
 from new_poly.market.deribit import DvolSnapshot
+from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
 from new_poly.backtest.prob_edge_replay import BacktestConfig
@@ -57,6 +58,7 @@ from scripts.collect_prob_edge_data import (
     refresh_binance_open,
     refresh_coinbase_open,
     refresh_k_price,
+    refresh_polymarket_open,
     token_state,
 )
 
@@ -76,6 +78,9 @@ class BotConfig:
     max_dvol_age_sec: float
     settlement_boundary_usd: float
     coinbase_enabled: bool = False
+    polymarket_price_enabled: bool = True
+    max_polymarket_price_age_sec: float = 3.0
+    polymarket_backup_after_sec: float = 180.0
 
 
 @dataclass(frozen=True)
@@ -279,6 +284,9 @@ def load_bot_config(path: Path) -> BotConfig:
         max_dvol_age_sec=float(_deep_get(raw, ("runtime", "max_dvol_age_sec"), 900.0)),
         settlement_boundary_usd=float(_deep_get(raw, ("runtime", "settlement_boundary_usd"), 5.0)),
         coinbase_enabled=bool(_deep_get(raw, ("market_data", "coinbase_enabled"), False)),
+        polymarket_price_enabled=bool(_deep_get(raw, ("market_data", "polymarket_price_enabled"), True)),
+        max_polymarket_price_age_sec=float(_deep_get(raw, ("market_data", "max_polymarket_price_age_sec"), 3.0)),
+        polymarket_backup_after_sec=float(_deep_get(raw, ("market_data", "polymarket_backup_after_sec"), 180.0)),
     )
 
 
@@ -301,6 +309,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-prune-every-windows", type=int, default=5, help="Run JSONL retention pruning every N completed windows")
     parser.add_argument("--coinbase", dest="coinbase_enabled", action="store_true", default=None)
     parser.add_argument("--no-coinbase", dest="coinbase_enabled", action="store_false")
+    parser.add_argument("--polymarket-price", dest="polymarket_price_enabled", action="store_true", default=None)
+    parser.add_argument("--no-polymarket-price", dest="polymarket_price_enabled", action="store_false")
+    parser.add_argument("--polymarket-backup-after-sec", type=float)
     return parser
 
 
@@ -319,11 +330,15 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
             sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
             sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
         )
-        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled)
+        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec)
     if args.interval_sec is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled)
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec)
     if args.coinbase_enabled is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, bool(args.coinbase_enabled))
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, bool(args.coinbase_enabled), cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec)
+    if args.polymarket_price_enabled is not None:
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, bool(args.polymarket_price_enabled), cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec)
+    if args.polymarket_backup_after_sec is not None:
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, max(0.0, float(args.polymarket_backup_after_sec)))
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
     if args.dynamic_params and args.jsonl is None:
@@ -356,6 +371,9 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
         "mode": options.mode,
         "analysis_logs": options.analysis_logs,
         "coinbase_enabled": cfg.coinbase_enabled,
+        "polymarket_price_enabled": cfg.polymarket_price_enabled,
+        "max_polymarket_price_age_sec": cfg.max_polymarket_price_age_sec,
+        "polymarket_backup_after_sec": cfg.polymarket_backup_after_sec,
         "windows": options.windows,
         "once": options.once,
         "strategy": asdict(cfg.edge),
@@ -446,6 +464,10 @@ PRICE_ANALYSIS_FIELDS = {
     "binance_open_source",
     "coinbase_open_price",
     "coinbase_open_source",
+    "polymarket_price",
+    "polymarket_price_age_sec",
+    "polymarket_open_price",
+    "polymarket_open_source",
     "proxy_open_price",
     "source_spread_usd",
     "source_spread_bps",
@@ -457,7 +479,43 @@ def _runtime_log_meta(meta: dict[str, Any]) -> dict[str, Any]:
 
 
 def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
-    return {key: meta.get(key) for key in sorted(PRICE_ANALYSIS_FIELDS) if key in meta}
+    source = str(meta.get("price_source") or "")
+    base_fields = ("price_source", "s_price", "k_price", "basis_bps")
+    if source == "polymarket_chainlink":
+        fields = base_fields + (
+            "polymarket_price",
+            "polymarket_price_age_sec",
+            "polymarket_open_price",
+            "polymarket_open_source",
+        )
+    elif source.startswith("proxy_"):
+        fields = base_fields + (
+            "polymarket_price",
+            "polymarket_price_age_sec",
+            "proxy_price",
+            "proxy_open_price",
+            "binance_price",
+            "binance_open_price",
+            "binance_open_source",
+            "coinbase_price",
+            "coinbase_open_price",
+            "coinbase_open_source",
+            "source_spread_usd",
+            "source_spread_bps",
+        )
+    else:
+        fields = base_fields + (
+            "polymarket_price",
+            "polymarket_price_age_sec",
+            "proxy_price",
+            "binance_price",
+            "coinbase_price",
+        )
+    return {
+        key: value
+        for key in fields
+        if key in meta and (value := meta.get(key)) is not None and value != "missing"
+    }
 
 
 def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str, str]]) -> bool:
@@ -516,6 +574,9 @@ def _bot_config_with_edge(cfg: BotConfig, edge: EdgeConfig) -> BotConfig:
         max_dvol_age_sec=cfg.max_dvol_age_sec,
         settlement_boundary_usd=cfg.settlement_boundary_usd,
         coinbase_enabled=cfg.coinbase_enabled,
+        polymarket_price_enabled=cfg.polymarket_price_enabled,
+        max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec,
+        polymarket_backup_after_sec=cfg.polymarket_backup_after_sec,
     )
 
 
@@ -579,8 +640,9 @@ async def _run_dynamic_analysis_task(
 def _snapshot(
     window,
     prices: WindowPrices,
-    feed: BinancePriceFeed,
+    feed: BinancePriceFeed | None,
     coinbase_feed: CoinbaseBtcPriceFeed | None,
+    polymarket_feed: PolymarketChainlinkBtcPriceFeed | None,
     stream: PriceStream,
     cfg: BotConfig,
     sigma_eff: float | None,
@@ -588,7 +650,15 @@ def _snapshot(
     now = dt.datetime.now(dt.timezone.utc)
     age_sec = (now - window.start_time).total_seconds()
     remaining_sec = (window.end_time - now).total_seconds()
-    price = effective_price(feed, coinbase_feed, prices, coinbase_enabled=cfg.coinbase_enabled)
+    price = effective_price(
+        feed,
+        coinbase_feed,
+        prices,
+        coinbase_enabled=cfg.coinbase_enabled,
+        polymarket_feed=polymarket_feed,
+        polymarket_enabled=cfg.polymarket_price_enabled,
+        max_polymarket_age_sec=cfg.max_polymarket_price_age_sec,
+    )
     price_source, s_price, basis_bps = price.source, price.effective, price.basis_bps
     up = token_state(stream, window.up_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     down = token_state(stream, window.down_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
@@ -617,7 +687,7 @@ def _snapshot(
         down_bid_depth_ok=bool(down["bid_depth_ok"]),
         up_book_age_ms=up["book_age_ms"],
         down_book_age_ms=down["book_age_ms"],
-        source_spread_bps=price.spread_bps,
+        source_spread_bps=None if price.source == "polymarket_chainlink" else price.spread_bps,
     )
     meta = {
         "ts": now.astimezone().isoformat(),
@@ -632,7 +702,11 @@ def _snapshot(
         "basis_bps": _compact(basis_bps, 3),
         "binance_price": _compact(price.binance, 2),
         "coinbase_price": _compact(price.coinbase, 2),
+        "polymarket_price": _compact(price.polymarket, 2),
+        "polymarket_price_age_sec": _compact(price.polymarket_age_sec, 3),
         "proxy_price": _compact(price.proxy, 2),
+        "polymarket_open_price": _compact(prices.polymarket_open_price, 2),
+        "polymarket_open_source": prices.polymarket_open_source,
         "binance_open_price": _compact(prices.binance_open_price, 2),
         "binance_open_source": prices.binance_open_source,
         "coinbase_open_price": _compact(prices.coinbase_open_price, 2),
@@ -650,15 +724,16 @@ async def _refresh_entry_retry_params(
     *,
     window,
     prices: WindowPrices,
-    feed: BinancePriceFeed,
+    feed: BinancePriceFeed | None,
     coinbase_feed: CoinbaseBtcPriceFeed | None,
+    polymarket_feed: PolymarketChainlinkBtcPriceFeed | None,
     stream: PriceStream,
     cfg: BotConfig,
     sigma_eff: float | None,
     state: StrategyState,
     original_side: str | None,
 ) -> BuyRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, stream, cfg, sigma_eff)
+    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
     decision = evaluate_entry(snap, state, cfg.edge)
     if decision.action != "enter" or decision.side != original_side:
         return None
@@ -673,8 +748,9 @@ async def _refresh_exit_retry_params(
     *,
     window,
     prices: WindowPrices,
-    feed: BinancePriceFeed,
+    feed: BinancePriceFeed | None,
     coinbase_feed: CoinbaseBtcPriceFeed | None,
+    polymarket_feed: PolymarketChainlinkBtcPriceFeed | None,
     stream: PriceStream,
     cfg: BotConfig,
     sigma_eff: float | None,
@@ -682,7 +758,7 @@ async def _refresh_exit_retry_params(
     position: PositionSnapshot,
     exit_reason: str | None = None,
 ) -> SellRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, stream, cfg, sigma_eff)
+    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
     decision = evaluate_exit(snap, position, cfg.edge, state)
     if decision.action == "exit" and decision.limit_price is not None:
         return SellRetryParams(min_price=decision.limit_price, exit_reason=decision.reason)
@@ -715,8 +791,9 @@ async def run(options: RuntimeOptions) -> int:
             dynamic_cfg = None
             dynamic_state = None
             dynamic_start_error = str(exc)
-    feed = BinancePriceFeed("btcusdt")
-    coinbase_feed = CoinbaseBtcPriceFeed() if cfg.coinbase_enabled else None
+    feed: BinancePriceFeed | None = None
+    coinbase_feed: CoinbaseBtcPriceFeed | None = None
+    polymarket_feed = PolymarketChainlinkBtcPriceFeed() if cfg.polymarket_price_enabled else None
     series = MarketSeries.from_known("btc-updown-5m")
     stream = PriceStream(on_price=_noop_price_update)
     volatility: DvolSnapshot | None = None
@@ -728,6 +805,19 @@ async def run(options: RuntimeOptions) -> int:
     state = StrategyState()
     completed_windows = 0
     seen_repetitive_skips: set[tuple[str, str]] = set()
+    backup_started = False
+    polymarket_unhealthy_since: float | None = time.monotonic() if polymarket_feed is not None else None
+
+    async def ensure_backup_started() -> None:
+        nonlocal feed, coinbase_feed, backup_started
+        if backup_started:
+            return
+        feed = BinancePriceFeed("btcusdt")
+        await feed.start()
+        if cfg.coinbase_enabled:
+            coinbase_feed = CoinbaseBtcPriceFeed()
+            await coinbase_feed.start()
+        backup_started = True
 
     gateway = (
         LiveFakExecutionGateway(
@@ -758,15 +848,21 @@ async def run(options: RuntimeOptions) -> int:
         window = find_initial_window(series)
         prices = WindowPrices()
         state.reset_for_market(window.slug)
-        await feed.start()
-        if coinbase_feed is not None:
-            await coinbase_feed.start()
+        if polymarket_feed is not None:
+            await polymarket_feed.start()
+        if polymarket_feed is None:
+            await ensure_backup_started()
         await stream.connect([window.up_token, window.down_token])
         if options.mode == "live":
             await asyncio.to_thread(prefetch_order_params, window.up_token)
             await asyncio.to_thread(prefetch_order_params, window.down_token)
         warmup_deadline = time.monotonic() + max(0.0, cfg.warmup_timeout_sec)
-        while time.monotonic() < warmup_deadline and feed.latest_price is None and (coinbase_feed is None or coinbase_feed.latest_price is None):
+        while time.monotonic() < warmup_deadline:
+            if polymarket_feed is not None:
+                if polymarket_feed.latest_price is not None:
+                    break
+            elif feed.latest_price is not None or (coinbase_feed is not None and coinbase_feed.latest_price is not None):
+                break
             await asyncio.sleep(0.1)
 
         while True:
@@ -795,7 +891,22 @@ async def run(options: RuntimeOptions) -> int:
             now = dt.datetime.now(dt.timezone.utc)
             age_sec = (now - window.start_time).total_seconds()
             await refresh_k_price(window, prices, age_sec)
-            await refresh_binance_open(feed, window, prices, age_sec)
+            if polymarket_feed is not None:
+                await refresh_polymarket_open(polymarket_feed, window, prices, age_sec)
+                pm_age = polymarket_feed.latest_age_sec()
+                pm_healthy = polymarket_feed.latest_price is not None and (pm_age is None or pm_age <= cfg.max_polymarket_price_age_sec)
+                if pm_healthy:
+                    polymarket_unhealthy_since = None
+                elif polymarket_unhealthy_since is None:
+                    polymarket_unhealthy_since = time.monotonic()
+                if (
+                    not backup_started
+                    and polymarket_unhealthy_since is not None
+                    and time.monotonic() - polymarket_unhealthy_since >= cfg.polymarket_backup_after_sec
+                ):
+                    await ensure_backup_started()
+            if feed is not None:
+                await refresh_binance_open(feed, window, prices, age_sec)
             if coinbase_feed is not None:
                 await refresh_coinbase_open(coinbase_feed, window, prices, age_sec)
             if time.monotonic() >= next_dvol_refresh:
@@ -806,7 +917,7 @@ async def run(options: RuntimeOptions) -> int:
                 next_dvol_refresh = time.monotonic() + cfg.dvol_refresh_sec
             dvol_stale = is_dvol_stale(volatility, now_monotonic=time.monotonic(), max_age_sec=cfg.max_dvol_age_sec)
             sigma_eff = None if dvol_stale or volatility is None else volatility.sigma
-            snap, meta = _snapshot(window, prices, feed, coinbase_feed, stream, cfg, sigma_eff)
+            snap, meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
             price_analysis = _price_analysis(meta)
 
             row: dict[str, Any] = {
@@ -815,13 +926,14 @@ async def run(options: RuntimeOptions) -> int:
                 "event": "tick",
                 "sigma_source": volatility.source if volatility is not None else "missing",
                 "sigma_eff": _compact(sigma_eff),
-                "volatility": volatility.to_json() if volatility is not None else None,
                 "volatility_stale": dvol_stale,
                 "position": state.open_position.__dict__ if state.open_position else None,
                 "realized_pnl": _compact(state.realized_pnl, 4),
             }
             if options.analysis_logs:
                 row["analysis"] = {"price_sources": price_analysis}
+                if volatility is not None:
+                    row["analysis"]["volatility"] = volatility.to_json()
 
             if state.has_position and state.open_position is not None:
                 decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
@@ -844,6 +956,7 @@ async def run(options: RuntimeOptions) -> int:
                             prices=prices,
                             feed=feed,
                             coinbase_feed=coinbase_feed,
+                            polymarket_feed=polymarket_feed,
                             stream=stream,
                             cfg=cfg,
                             sigma_eff=sigma_eff,
@@ -883,6 +996,7 @@ async def run(options: RuntimeOptions) -> int:
                             prices=prices,
                             feed=feed,
                             coinbase_feed=coinbase_feed,
+                            polymarket_feed=polymarket_feed,
                             stream=stream,
                             cfg=cfg,
                             sigma_eff=sigma_eff,
@@ -921,7 +1035,15 @@ async def run(options: RuntimeOptions) -> int:
             await asyncio.sleep(cfg.interval_sec)
             if dt.datetime.now(dt.timezone.utc) >= window.end_time:
                 if state.has_position and state.open_position is not None:
-                    settlement_price = effective_price(feed, coinbase_feed, prices, coinbase_enabled=cfg.coinbase_enabled).effective
+                    settlement_price = effective_price(
+                        feed,
+                        coinbase_feed,
+                        prices,
+                        coinbase_enabled=cfg.coinbase_enabled,
+                        polymarket_feed=polymarket_feed,
+                        polymarket_enabled=cfg.polymarket_price_enabled,
+                        max_polymarket_age_sec=cfg.max_polymarket_price_age_sec,
+                    ).effective
                     settlement = choose_settlement(prices, settlement_price, boundary_usd=cfg.settlement_boundary_usd)
                     settled_position = state.open_position
                     if settlement["winning_side"] is not None:
@@ -1048,7 +1170,11 @@ async def run(options: RuntimeOptions) -> int:
         logger.write({"ts": dt.datetime.now().astimezone().isoformat(), "event": "error", "error": str(exc)})
         return 1
     finally:
-        closers = [stream.close(), feed.stop()]
+        closers = [stream.close()]
+        if feed is not None:
+            closers.append(feed.stop())
+        if polymarket_feed is not None:
+            closers.append(polymarket_feed.stop())
         if coinbase_feed is not None:
             closers.append(coinbase_feed.stop())
         for closer in closers:

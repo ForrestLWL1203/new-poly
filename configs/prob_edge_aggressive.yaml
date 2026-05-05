@@ -57,4 +57,7 @@ runtime:
   settlement_boundary_usd: 5
 
 market_data:
-  coinbase_enabled: false
+  polymarket_price_enabled: true
+  max_polymarket_price_age_sec: 3.0
+  polymarket_backup_after_sec: 180.0
+  coinbase_enabled: true

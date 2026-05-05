@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "collect_prob_edge_data.py"
 sys.path.insert(0, str(SCRIPT.parents[1]))
 spec = importlib.util.spec_from_file_location("collect_prob_edge_data", SCRIPT)
@@ -208,6 +210,7 @@ def test_collector_row_is_strategy_neutral() -> None:
         prices=prices,
         feed=FakeFeed(),
         coinbase_feed=FakeCoinbaseFeed(),
+        polymarket_feed=None,
         stream=FakeStream(),
         now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
         depth_notional=5.0,
@@ -281,6 +284,7 @@ def test_collector_row_marks_stale_volatility() -> None:
         prices=collector.WindowPrices(k_price=100_000.0),
         feed=FakeFeed(),
         coinbase_feed=None,
+        polymarket_feed=None,
         stream=FakeStream(),
         now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
         depth_notional=5.0,
@@ -310,6 +314,134 @@ def test_effective_price_falls_back_to_binance_when_coinbase_missing() -> None:
     assert price.proxy == 100_120.0
     assert price.proxy_open == 100_050.0
     assert price.spread_usd is None
+
+
+def test_effective_price_prefers_fresh_polymarket_chainlink_source() -> None:
+    class FakeBinanceFeed:
+        latest_price = 100_120.0
+
+    class FakeCoinbaseFeed:
+        latest_price = 100_100.0
+
+    class FakePolymarketFeed:
+        latest_price = 100_080.0
+
+        def latest_age_sec(self):
+            return 0.25
+
+    prices = collector.WindowPrices(
+        k_price=100_000.0,
+        binance_open_price=100_050.0,
+        coinbase_open_price=100_030.0,
+        polymarket_open_price=100_000.0,
+    )
+
+    price = collector.effective_price(
+        FakeBinanceFeed(),
+        FakeCoinbaseFeed(),
+        prices,
+        polymarket_feed=FakePolymarketFeed(),
+        polymarket_enabled=True,
+        max_polymarket_age_sec=3.0,
+    )
+
+    assert price.source == "polymarket_chainlink"
+    assert price.effective == 100_080.0
+    assert price.basis_bps == 0.0
+    assert price.polymarket == 100_080.0
+    assert price.polymarket_open == 100_000.0
+    assert price.polymarket_age_sec == 0.25
+    assert price.proxy == 100_110.0
+    assert price.spread_usd == 20.0
+
+
+def test_effective_price_falls_back_when_polymarket_chainlink_is_stale() -> None:
+    class FakeBinanceFeed:
+        latest_price = 100_120.0
+
+    class FakeCoinbaseFeed:
+        latest_price = 100_100.0
+
+    class FakePolymarketFeed:
+        latest_price = 100_080.0
+
+        def latest_age_sec(self):
+            return 4.5
+
+    prices = collector.WindowPrices(
+        k_price=100_000.0,
+        binance_open_price=100_050.0,
+        coinbase_open_price=100_030.0,
+        polymarket_open_price=100_000.0,
+    )
+
+    price = collector.effective_price(
+        FakeBinanceFeed(),
+        FakeCoinbaseFeed(),
+        prices,
+        polymarket_feed=FakePolymarketFeed(),
+        polymarket_enabled=True,
+        max_polymarket_age_sec=3.0,
+    )
+
+    assert price.source == "proxy_multi_source_basis_adjusted"
+    assert price.effective == 100_070.0
+    assert price.polymarket == 100_080.0
+    assert price.polymarket_age_sec == 4.5
+
+
+def test_effective_price_waits_closed_when_polymarket_is_stale_before_backup_starts() -> None:
+    class FakePolymarketFeed:
+        latest_price = 100_080.0
+
+        def latest_age_sec(self):
+            return 4.5
+
+    prices = collector.WindowPrices(
+        k_price=100_000.0,
+        polymarket_open_price=100_000.0,
+    )
+
+    price = collector.effective_price(
+        None,
+        None,
+        prices,
+        polymarket_feed=FakePolymarketFeed(),
+        polymarket_enabled=True,
+        max_polymarket_age_sec=3.0,
+    )
+
+    assert price.source == "missing"
+    assert price.effective is None
+    assert price.polymarket == 100_080.0
+    assert price.polymarket_age_sec == 4.5
+
+
+@pytest.mark.asyncio
+async def test_polymarket_open_uses_ws_tick_at_window_boundary() -> None:
+    class FakePolymarketFeed:
+        latest_price = 100_010.0
+
+        def first_price_at_or_after(self, ts, max_forward_sec=30.0):
+            return 100_000.0
+
+        def price_at_or_before(self, ts, max_backward_sec=None):
+            return 99_999.0
+
+    window = collector.MarketWindow(
+        question="Bitcoin Up or Down",
+        up_token="up",
+        down_token="down",
+        start_time=collector.dt.datetime(2026, 5, 3, 0, 0, tzinfo=collector.dt.timezone.utc),
+        end_time=collector.dt.datetime(2026, 5, 3, 0, 5, tzinfo=collector.dt.timezone.utc),
+        slug="btc-updown-5m-1",
+    )
+    prices = collector.WindowPrices()
+
+    await collector.refresh_polymarket_open(FakePolymarketFeed(), window, prices, age_sec=1.0)
+
+    assert prices.polymarket_open_price == 100_000.0
+    assert prices.polymarket_open_source == "ws_first_after"
 
 
 def test_effective_price_ignores_coinbase_when_disabled() -> None:

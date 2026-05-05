@@ -37,7 +37,9 @@ def test_default_mode_is_paper() -> None:
     assert opts.analysis_logs is True
     assert opts.windows is None
     assert opts.config.amount_usd > 0
-    assert opts.config.coinbase_enabled is False
+    assert opts.config.polymarket_price_enabled is True
+    assert opts.config.polymarket_backup_after_sec == 180.0
+    assert opts.config.coinbase_enabled is True
 
 
 def test_live_mode_defaults_analysis_logs_off() -> None:
@@ -63,6 +65,20 @@ def test_coinbase_cli_overrides_config() -> None:
 
     assert build_runtime_options(enabled_args).config.coinbase_enabled is True
     assert build_runtime_options(disabled_args).config.coinbase_enabled is False
+
+
+def test_polymarket_price_cli_overrides_config() -> None:
+    enabled_args = build_arg_parser().parse_args(["--once", "--no-polymarket-price", "--polymarket-price"])
+    disabled_args = build_arg_parser().parse_args(["--once", "--no-polymarket-price"])
+
+    assert build_runtime_options(enabled_args).config.polymarket_price_enabled is True
+    assert build_runtime_options(disabled_args).config.polymarket_price_enabled is False
+
+
+def test_polymarket_backup_delay_cli_overrides_config() -> None:
+    args = build_arg_parser().parse_args(["--once", "--polymarket-backup-after-sec", "60"])
+
+    assert build_runtime_options(args).config.polymarket_backup_after_sec == 60.0
 
 
 def test_dynamic_params_cli_options_are_explicit() -> None:
@@ -235,6 +251,7 @@ def test_exit_retry_refresh_commits_to_sell_even_if_signal_no_longer_exits(monke
             prices=WindowPrices(),
             feed=object(),
             coinbase_feed=None,
+            polymarket_feed=None,
             stream=object(),
             cfg=opts.config,
             sigma_eff=0.6,
@@ -305,6 +322,64 @@ def test_runtime_log_meta_keeps_price_diagnostics_for_analysis_logs() -> None:
     assert analysis["binance_price"] == 100120.0
     assert analysis["coinbase_price"] == 100100.0
     assert analysis["source_spread_usd"] == 20.0
+
+
+def test_price_analysis_logs_only_active_polymarket_source_fields() -> None:
+    meta = {
+        "price_source": "polymarket_chainlink",
+        "s_price": 100080.0,
+        "k_price": 100000.0,
+        "basis_bps": 0.0,
+        "polymarket_price": 100080.0,
+        "polymarket_price_age_sec": 0.8,
+        "polymarket_open_price": 100000.0,
+        "polymarket_open_source": "ws_first_after",
+        "binance_price": None,
+        "coinbase_price": None,
+        "proxy_price": None,
+        "source_spread_usd": None,
+    }
+
+    analysis = _price_analysis(meta)
+
+    assert analysis == {
+        "price_source": "polymarket_chainlink",
+        "s_price": 100080.0,
+        "k_price": 100000.0,
+        "basis_bps": 0.0,
+        "polymarket_price": 100080.0,
+        "polymarket_price_age_sec": 0.8,
+        "polymarket_open_price": 100000.0,
+        "polymarket_open_source": "ws_first_after",
+    }
+
+
+def test_price_analysis_logs_only_backup_proxy_fields_when_fallback_active() -> None:
+    meta = {
+        "price_source": "proxy_multi_source_basis_adjusted",
+        "s_price": 100070.0,
+        "k_price": 100000.0,
+        "basis_bps": 4.0,
+        "polymarket_price": 100080.0,
+        "polymarket_price_age_sec": 4.5,
+        "binance_price": 100120.0,
+        "coinbase_price": 100100.0,
+        "proxy_price": 100110.0,
+        "binance_open_price": 100050.0,
+        "coinbase_open_price": 100030.0,
+        "proxy_open_price": 100040.0,
+        "source_spread_usd": 20.0,
+        "source_spread_bps": 1.998,
+    }
+
+    analysis = _price_analysis(meta)
+
+    assert analysis["price_source"] == "proxy_multi_source_basis_adjusted"
+    assert analysis["proxy_price"] == 100110.0
+    assert analysis["binance_price"] == 100120.0
+    assert analysis["coinbase_price"] == 100100.0
+    assert analysis["polymarket_price"] == 100080.0
+    assert "polymarket_open_price" not in analysis
 
 
 def test_config_log_row_contains_non_secret_runtime_shape() -> None:

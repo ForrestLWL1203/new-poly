@@ -24,8 +24,11 @@ The collector records:
 - Polymarket Gamma market slug/token metadata.
 - Polymarket crypto price API for the UI Price to Beat:
   `k_price = openPrice`.
-- Binance BTC/USDT trade WebSocket as one proxy BTC price source.
-- Optional Coinbase BTC-USD match WebSocket as a second proxy BTC price source.
+- Polymarket live-data WebSocket topic `crypto_prices_chainlink` as the primary
+  live BTC/USD `S` source.
+- Binance BTC/USDT trade WebSocket as the first backup proxy BTC price source.
+- Coinbase BTC-USD match WebSocket as the second backup proxy BTC price source
+  when enabled.
 - Binance and, when enabled, Coinbase open prices inside the window boundary lookaround
   `(window_start - 5s, window_start + 5s)`, used to compute `basis_bps`.
 - Polymarket CLOB WebSocket top/depth summaries for UP and DOWN tokens.
@@ -37,21 +40,30 @@ Polymarket crypto price API exposes `openPrice`. The collector does not fetch
 or log `closePrice`; simple post-run direction checks can compare Binance
 window open/close prices instead.
 
-Direct realtime Chainlink Data Streams access is not integrated yet, so:
+The primary live price is now the same Polymarket live-data stream observed by
+the event UI. In a three-window probe on 2026-05-06, the WS boundary ticks
+matched the crypto price API `openPrice`/`closePrice` exactly. When that stream
+is fresh, rows use:
 
 ```text
-settlement_aligned = false
-price_source = proxy_binance or proxy_binance_basis_adjusted by default
+price_source = polymarket_chainlink
+settlement_aligned = true
 ```
 
-Strategy code and backtests should treat this as proxy data unless a true
-settlement-aligned source is added.
+If the Polymarket live-data stream is missing or stale, the collector does not
+immediately trade through the backup proxy. It remains fail-closed first. Only
+after the source has been continuously unhealthy for
+`--polymarket-backup-after-sec` seconds does it lazily start Binance/Coinbase
+backup feeds and fall back to the previous basis-adjusted proxy. Rows emitted
+before backup activation have `s_price=null` or `price_source=missing`, so
+strategy replay will naturally skip them.
 
-Coinbase is off by default. Pass `--coinbase` when collecting data to start the
-Coinbase feed. When both Binance and Coinbase are live, the collector uses their
-arithmetic mean for `proxy_price`. Once `k_price` and at least one matching open
-price are known, it applies the open-basis adjustment using only sources that
-have both a live price and a same-window open price:
+Coinbase can be disabled with `--no-coinbase`. It is a backup feed only in the
+default setup; it is not started while Polymarket live-data is healthy. When
+both Binance and Coinbase backup feeds are live, the proxy uses their arithmetic
+mean for `proxy_price`. Once `k_price` and at least one matching open price are
+known, it applies the open-basis adjustment using only sources that have both a
+live price and a same-window open price:
 
 ```text
 proxy_live = mean(valid paired live prices)
@@ -98,6 +110,10 @@ Useful options:
 --warmup-timeout-sec 8
 --include-current-window
 --windows 12
+--polymarket-price / --no-polymarket-price
+--max-polymarket-price-age-sec 3
+--polymarket-backup-after-sec 180
+--coinbase / --no-coinbase
 --verbose
 ```
 
@@ -140,7 +156,12 @@ k_price
 k_source
 binance_price
 coinbase_price
+polymarket_price
+polymarket_price_age_sec
 proxy_price
+polymarket_open_price
+polymarket_open_source
+polymarket_open_delta_ms
 binance_open_price
 binance_open_source
 binance_open_delta_ms

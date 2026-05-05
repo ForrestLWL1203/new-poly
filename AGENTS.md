@@ -171,9 +171,10 @@ later strategy dry-run and backtest code:
 
 - market slug, start/end time, `window_bucket`, remaining seconds,
 - Polymarket resolution source,
-- Polymarket HTML-derived `k_price` / Price to Beat,
-- Binance basis-adjusted proxy `s_price`, with optional Binance+Coinbase paired
-  proxy when Coinbase is enabled,
+- Polymarket crypto price API `openPrice` as `k_price` / Price to Beat,
+- Polymarket live-data `crypto_prices_chainlink` price as primary `s_price`,
+- Binance/Coinbase basis-adjusted proxy prices as lazy backup after Polymarket
+  live-data remains missing or stale for the configured delay,
 - `basis_bps`,
 - Binance/Coinbase live spread diagnostics for source-divergence analysis when
   Coinbase is enabled,
@@ -222,12 +223,19 @@ Current status:
 
 - `k_price` is extracted from Polymarket crypto price API `openPrice`.
 - `k_source` is `polymarket_crypto_price_api`.
-- `S` is currently a Binance proxy adjusted by the window-start basis by
-  default. If Coinbase is explicitly enabled, code uses a Binance+Coinbase
-  paired proxy and falls back to Binance when Coinbase is unavailable.
-- Strategy entry can use `cross_source_max_bps` to skip new trades when Binance
-  and Coinbase live prices diverge too much; source disagreement is treated as
-  an input-quality warning, not something to average through blindly.
+- `S` normally comes from Polymarket live-data WebSocket:
+  `wss://ws-live-data.polymarket.com`, topic `crypto_prices_chainlink`, filter
+  `{"symbol":"btc/usd"}`.
+- A 2026-05-06 three-window probe showed Polymarket live-data boundary ticks
+  exactly matching the crypto price API `openPrice`/`closePrice`.
+- If Polymarket live-data is missing or stale, code does not immediately trade
+  through backup feeds. It stays fail-closed first. Only after
+  `polymarket_backup_after_sec` of continuous Polymarket outage does it lazily
+  start Binance/Coinbase and use the basis-adjusted proxy. Coinbase can still
+  be disabled by config/CLI, in which case fallback is Binance-only.
+- Strategy entry should use `cross_source_max_bps` only while operating on the
+  backup proxy. When Polymarket live-data is fresh, Binance/Coinbase spread is
+  diagnostic and should not block entries.
 
 ### Reusable Infrastructure Modules
 
@@ -236,6 +244,7 @@ Strategy-neutral modules migrated from the old project live under:
 ```text
 new_poly/market/binance.py
 new_poly/market/coinbase.py
+new_poly/market/polymarket_live.py
 new_poly/market/market.py
 new_poly/market/series.py
 new_poly/market/stream.py
@@ -243,22 +252,25 @@ new_poly/market/deribit.py
 new_poly/trading/fak_quotes.py
 ```
 
-Future strategy scripts should reuse these for Binance/Coinbase feeds,
-Polymarket window discovery, CLOB WebSocket book handling, Deribit DVOL
-snapshots, and FAK quote/depth selection. Do not reuse old `poly-bot` strategy
-modules or old thresholds.
+Future strategy scripts should reuse these for Polymarket live-data,
+Binance/Coinbase backup feeds, Polymarket window discovery, CLOB WebSocket book
+handling, Deribit DVOL snapshots, and FAK quote/depth selection. Do not reuse
+old `poly-bot` strategy modules or old thresholds.
 
 - Basis-adjusted proxy formula:
   use only sources that have both a live price and same-window open price;
   `proxy_live = mean(valid paired live prices)`;
   `proxy_open = mean(valid paired open prices)`;
   `s_price = proxy_live - (proxy_open - k_price)`.
-- `price_source` is normally `proxy_binance_basis_adjusted`; when Coinbase is
-  enabled and paired, it can become `proxy_multi_source_basis_adjusted`.
+- `price_source` is normally `polymarket_chainlink`. If that feed is stale or
+  missing, rows remain fail-closed until the lazy backup delay elapses; only
+  then fallback sources such as `proxy_binance_basis_adjusted` or
+  `proxy_multi_source_basis_adjusted` appear.
 - Deribit BTC DVOL is collected once at startup by default and written as
   `volatility`; use `--dvol-refresh-sec N` only when a run should refresh it.
-- `settlement_aligned` intentionally remains `false`, because this is not direct
-  Chainlink Data Streams realtime access.
+- `settlement_aligned` is `true` only when the row uses fresh Polymarket
+  live-data with a Chainlink BTC/USD resolution source; proxy fallback rows are
+  not settlement-aligned.
 - The script should be used for data collection and paper analysis, not live
   order decisions.
 
@@ -382,11 +394,11 @@ The market resolves Up if the BTC/USD price at the end of the five-minute
 window is greater than or equal to the price at the beginning of that window.
 
 Gamma market metadata does not directly expose `k_price`. The Polymarket event
-page UI shows the target price / Price to Beat, and the same value is present in
-the page HTML hydration data as `openPrice` under a query shaped like:
+page UI shows the target price / Price to Beat, and the same value is available
+from Polymarket's crypto price API:
 
-```json
-["crypto-prices", "price", "BTC", "<eventStartTime>", "fiveminute", "<endDate>"]
+```text
+GET https://polymarket.com/api/crypto/crypto-price?symbol=BTC&eventStartTime=<start>&variant=fiveminute&endDate=<end>
 ```
 
 Use that `openPrice` as the collector `K` value. Do not extract `K` from

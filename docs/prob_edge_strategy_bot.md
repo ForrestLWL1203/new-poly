@@ -78,9 +78,15 @@ python3 scripts/run_prob_edge_bot.py \
 - K is the Polymarket UI Price to Beat from the crypto price API.
 - Settlement/reporting in paper mode uses proxy direction; the bot does not wait
   for Polymarket `closePrice`.
-- S is Binance proxy price by default. With `--coinbase` or
-  `market_data.coinbase_enabled=true`, S becomes the Binance+Coinbase paired
-  proxy, basis-adjusted once K and proxy open are known.
+- S uses Polymarket live-data `crypto_prices_chainlink` by default. This is the
+  same live BTC/USD source observed by the Polymarket event UI and matched the
+  crypto price API open/close ticks in a three-window probe on 2026-05-06.
+- Binance and Coinbase are backup sources, but they are not started while
+  Polymarket live-data is healthy. If the Polymarket source is missing or stale
+  beyond `market_data.max_polymarket_price_age_sec`, the bot first stays
+  fail-closed and does not trade. Only after the source has been continuously
+  unhealthy for `market_data.polymarket_backup_after_sec` does it lazily start
+  Binance/Coinbase and fall back to the previous basis-adjusted proxy logic.
 - The old single `required_edge` field is no longer used.
 
 Config files:
@@ -122,6 +128,10 @@ market_disagrees_exit_min_age_sec
 market_disagrees_exit_max_profit
 retry_count
 retry_interval_sec
+polymarket_price_enabled
+max_polymarket_price_age_sec
+polymarket_backup_after_sec
+coinbase_enabled
 ```
 
 The current `0.16/0.14` edge thresholds and `0.35` model-probability floor came
@@ -130,11 +140,12 @@ from replaying the 120-window collector and dry-run datasets captured on
 thresholds admitted too many low-probability lottery-style entries and larger
 `logic_decay_exit` losses.
 
-Coinbase is opt-in. When enabled and both Binance/Coinbase live prices are
+Coinbase is now a lazy backup source, not the normal strategy baseline. When
+the bot is already in fallback mode and both Binance/Coinbase live prices are
 available, `cross_source_max_bps` acts as an entry quality gate. If the two
-sources disagree by more than the configured basis-point threshold, the bot
-skips new entries with `source_divergence`. This treats source disagreement as
-an input-quality problem instead of averaging through it and trading anyway.
+backup sources disagree by more than the configured basis-point threshold, the
+bot skips new entries with `source_divergence`. While Polymarket live-data is
+fresh, Binance/Coinbase are not needed for trading decisions.
 
 The initial `market_disagrees_exit_threshold` default is `0.30`. A looser
 `0.20` threshold caught more bid/model deterioration but over-exited in replay;
@@ -362,21 +373,43 @@ decision.prob_stagnant
 decision.prob_delta_3s
 ```
 
+Normal long-running logs intentionally keep price diagnostics minimal: only the
+effective `price_source`, `s_price`, `k_price`, and `basis_bps` stay in the
+runtime row. The full DVOL snapshot is also omitted from normal tick rows; keep
+`sigma_eff`, `sigma_source`, and `volatility_stale` for replay compatibility.
+
 When analysis logs are enabled, the bot first writes a `config` row containing
 the non-secret strategy, execution, and runtime parameters used for the run.
-Rows also include detailed BTC source diagnostics under
-`analysis.price_sources`:
+Rows also include BTC source diagnostics under `analysis.price_sources`, but
+only for the active pricing path:
 
 ```text
-binance_price
-coinbase_price
+price_source
+s_price
+k_price
+basis_bps
+polymarket_price
+polymarket_price_age_sec
+polymarket_open_price
+polymarket_open_source
+
+# fallback mode only
 proxy_price
-binance_open_price
-coinbase_open_price
 proxy_open_price
+binance_price
+binance_open_price
+binance_open_source
+coinbase_price
+coinbase_open_price
+coinbase_open_source
 source_spread_usd
 source_spread_bps
 ```
+
+Analysis logs are enabled by default in paper mode, disabled by default in live
+mode, and can be explicitly toggled with `--analysis-logs` or
+`--no-analysis-logs`. Use `--analysis-logs` for short live diagnostics only; it
+is intentionally not the quiet long-running live default.
 
 Entry/exit/order-no-fill rows also include strategy execution diagnostics in
 the same `analysis` object:
