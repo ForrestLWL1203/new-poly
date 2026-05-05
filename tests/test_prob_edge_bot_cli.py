@@ -152,6 +152,19 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.lead_signal_enabled is True
 
 
+def test_lead_signal_is_independent_from_analysis_logging() -> None:
+    args = build_arg_parser().parse_args([
+        "--config",
+        "configs/prob_edge_aggressive.yaml",
+        "--once",
+        "--no-analysis-logs",
+    ])
+    opts = build_runtime_options(args)
+
+    assert opts.analysis_logs is False
+    assert opts.config.lead_signal_enabled is True
+
+
 def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Path) -> None:
     path = tmp_path / "run.jsonl"
     path.write_text(

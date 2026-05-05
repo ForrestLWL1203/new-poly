@@ -1028,7 +1028,7 @@ async def run(options: RuntimeOptions) -> int:
         state.reset_for_market(window.slug)
         if polymarket_feed is not None:
             await polymarket_feed.start()
-        if cfg.lead_signal_enabled and options.analysis_logs:
+        if cfg.lead_signal_enabled:
             if feed is None:
                 feed = BinancePriceFeed("btcusdt")
                 await feed.start()
