@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 import datetime as dt
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from scripts.run_prob_edge_bot import (
     _entry_analysis,
     _exit_analysis,
     _price_analysis,
+    _refresh_exit_retry_params,
     _runtime_log_meta,
     _should_write_row,
     build_arg_parser,
@@ -22,7 +24,8 @@ from scripts.run_prob_edge_bot import (
     is_dvol_stale,
     prune_jsonl_by_retention,
 )
-from new_poly.strategy.prob_edge import StrategyDecision
+from new_poly.strategy.prob_edge import MarketSnapshot, PositionSnapshot, StrategyDecision
+from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import ExecutionResult
 
 
@@ -111,6 +114,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.buy_retry_price_buffer_ticks == 4.0
     assert opts.config.execution.sell_price_buffer_ticks == 4.0
     assert opts.config.execution.sell_retry_price_buffer_ticks == 5.0
+    assert opts.config.execution.paper_latency_sec == 0.0
     assert opts.config.execution.retry_interval_sec == 0.0
     assert opts.config.interval_sec == 0.5
     assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
@@ -119,6 +123,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.early_required_edge == 0.16
     assert opts.config.edge.core_required_edge == 0.14
     assert opts.config.edge.min_entry_model_prob == 0.35
+    assert opts.config.edge.low_price_extra_edge_threshold == 0.30
+    assert opts.config.edge.low_price_extra_edge == 0.02
     assert opts.config.edge.cross_source_max_bps == 5.0
     assert opts.config.edge.market_disagrees_exit_threshold == 0.30
     assert opts.config.edge.market_disagrees_exit_max_remaining_sec == 60.0
@@ -186,6 +192,61 @@ def test_amount_override_keeps_depth_check_same_notional() -> None:
     assert opts.config.execution.depth_notional == 12.5
     assert opts.config.execution.retry_count == 1
     assert opts.config.execution.retry_interval_sec == 0.0
+
+
+def test_exit_retry_refresh_commits_to_sell_even_if_signal_no_longer_exits(monkeypatch) -> None:
+    args = build_arg_parser().parse_args(["--once"])
+    opts = build_runtime_options(args)
+    position = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=120.0,
+        entry_avg_price=0.40,
+        filled_shares=2.5,
+        entry_model_prob=0.55,
+        entry_edge=0.15,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=150.0,
+        remaining_sec=150.0,
+        s_price=100.0,
+        k_price=100.0,
+        sigma_eff=0.6,
+        up_bid_avg=0.41,
+        up_bid_limit=0.41,
+        up_bid_depth_ok=True,
+        down_bid_avg=0.58,
+        down_bid_limit=0.58,
+        down_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    def fake_snapshot(*args, **kwargs):
+        return snap, {}
+
+    monkeypatch.setattr("scripts.run_prob_edge_bot._snapshot", fake_snapshot)
+
+    retry = asyncio.run(
+        _refresh_exit_retry_params(
+            window=object(),
+            prices=WindowPrices(),
+            feed=object(),
+            coinbase_feed=None,
+            stream=object(),
+            cfg=opts.config,
+            sigma_eff=0.6,
+            state=StrategyState(current_market_slug="m1"),
+            position=position,
+            exit_reason="prob_drop_exit",
+        )
+    )
+
+    assert retry is not None
+    assert retry.min_price == 0.41
+    assert retry.exit_reason == "prob_drop_exit"
 
 
 def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:

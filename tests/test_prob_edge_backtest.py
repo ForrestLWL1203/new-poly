@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import math
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -92,6 +93,50 @@ def test_backtest_applies_buy_slippage_and_uses_executable_bid_for_sell() -> Non
 
     assert result.trades[0]["entry_price"] == 0.41
     assert result.trades[0]["exit_price"] == 0.69
+
+
+def test_backtest_can_honor_paper_entry_no_fill_event() -> None:
+    rows = [
+        _row("m1", 90, 100.10),
+        _row("m1", 299, 101.00),
+    ]
+    rows[0]["event"] = "order_no_fill"
+    rows[0]["order_intent"] = "entry"
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=10.0, honor_order_events=True))
+
+    assert result.summary["entries"] == 0
+    assert result.summary["skip_reason_counts"]["entry_no_fill"] == 1
+
+
+def test_backtest_can_honor_paper_entry_and_exit_events() -> None:
+    rows = [
+        _row("m1", 90, 100.10),
+        _row("m1", 120, 100.10),
+    ]
+    rows[0]["event"] = "entry"
+    rows[0]["analysis"] = {
+        "entry_side": "up",
+        "entry_phase": "early",
+        "entry_price": 0.40,
+        "entry_model_prob": 0.70,
+        "entry_edge_signal": 0.30,
+    }
+    rows[0]["order"] = {"success": True, "filled_size": 25.0, "avg_price": 0.40}
+    rows[1]["event"] = "exit"
+    rows[1]["exit_reason"] = "market_overprice_exit"
+    rows[1]["exit_price"] = 0.69
+    rows[1]["order"] = {"success": True, "filled_size": 25.0, "avg_price": 0.69}
+    rows[0]["up"]["ask_avg"] = 0.39
+    rows[0]["up"]["ask_limit"] = 0.40
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=10.0, honor_order_events=True))
+
+    assert result.summary["entries"] == 1
+    assert result.summary["exits"] == 1
+    assert result.trades[0]["exit_reason"] == "market_overprice_exit"
+    assert result.trades[0]["exit_price"] == 0.69
+    assert math.isclose(result.trades[0]["pnl"], 7.25)
 
 
 def test_backtest_sell_slippage_is_clamped_by_fak_floor() -> None:

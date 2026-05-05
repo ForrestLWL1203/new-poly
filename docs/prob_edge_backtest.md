@@ -11,6 +11,22 @@ python3 scripts/backtest_prob_edge.py \
   --jsonl data/prob-edge-collector-96-20260503T162542Z.kprice-ok.jsonl
 ```
 
+When analyzing JSONL produced by `scripts/run_prob_edge_bot.py` in paper/live
+mode, add `--honor-order-events`:
+
+```bash
+python3 scripts/backtest_prob_edge.py \
+  --jsonl data/remote/prob-edge-paper-coinbase-48w-20260505T101937Z.jsonl \
+  --honor-order-events \
+  --no-grid
+```
+
+This mode replays actual `entry`, `exit`, and `order_no_fill` rows instead of
+idealizing fills from every tick. Use it for post-run audit and PnL attribution.
+Do not use it for parameter grid searches, because it intentionally follows the
+already-executed order path rather than generating a new one from candidate
+parameters.
+
 The script prints JSON with:
 
 - `summary`: default-parameter performance.
@@ -60,9 +76,12 @@ normal exits:      max(bid_avg - sell_slippage_ticks, bid_limit - 4 ticks)
 final_force_exit:  max(bid_avg - sell_slippage_ticks, bid_limit - 5 ticks)
 ```
 
-The retry ladder and the 400ms paper latency are not simulated in replay. Use
-paper mode when you need to observe retry behavior or post-signal book movement
-against the latest local book.
+The retry ladder and optional paper fill latency are not simulated in normal
+collector replay. Current strategy configs set `paper_latency_sec=0.0` because
+the observed CLOB latency is request/response time, not a full pre-match wait
+before the order reaches the matching engine. Use paper mode with a manually
+configured nonzero latency only when you want a stress test for post-signal book
+movement.
 
 To replay the current live/dry-run entry guard, pass the fair-cap margin used by
 the bot:
@@ -79,6 +98,8 @@ python3 scripts/backtest_prob_edge.py \
   --min-fair-cap-margin-ticks 1 \
   --entry-tick-size 0.01 \
   --min-entry-model-prob 0.35 \
+  --low-price-extra-edge-threshold 0.25 \
+  --low-price-extra-edge 0.06 \
   --prob-drop-exit-window-sec 5 \
   --prob-drop-exit-threshold 0.06 \
   --slippage-ticks 3
@@ -125,6 +146,8 @@ The backtest CLI exposes the live risk gates:
 --market-disagrees-exit-min-loss
 --market-disagrees-exit-min-age-sec
 --market-disagrees-exit-max-profit
+--low-price-extra-edge-threshold
+--low-price-extra-edge
 ```
 
 Older JSONL without Coinbase fields cannot evaluate cross-source divergence;
@@ -158,6 +181,11 @@ Trade fields keep both edge definitions:
 `--min-entry-model-prob` mirrors the live entry-quality gate. It rejects
 low-probability, lottery-style candidates even when their `model_prob - ask_avg`
 discount is large.
+
+`--low-price-extra-edge-threshold` and `--low-price-extra-edge` test the softer
+low-price guard. When the candidate `ask_avg` is below the threshold, replay
+adds the extra edge to the current phase edge and also tightens the BUY fair
+cap. The default values are `0`, which disables the guard.
 
 It reuses the production strategy functions:
 

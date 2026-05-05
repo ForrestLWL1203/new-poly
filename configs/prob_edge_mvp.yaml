@@ -26,6 +26,8 @@ strategy:
   min_fair_cap_margin_ticks: 1.0
   entry_tick_size: 0.01
   min_entry_model_prob: 0.35
+  low_price_extra_edge_threshold: 0.0
+  low_price_extra_edge: 0.0
   cross_source_max_bps: 5.0
   market_disagrees_exit_threshold: 0.30
   market_disagrees_exit_max_remaining_sec: 60.0
@@ -37,7 +39,7 @@ execution:
   amount_usd: 5.0
   depth_notional: 5.0
   depth_safety_multiplier: 1.5
-  paper_latency_sec: 0.4
+  paper_latency_sec: 0.0
   max_book_age_sec: 1.0
   retry_count: 1
   retry_interval_sec: 0.0

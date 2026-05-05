@@ -112,6 +112,8 @@ prob_stagnation_epsilon
 prob_drop_exit_window_sec
 prob_drop_exit_threshold
 min_entry_model_prob
+low_price_extra_edge_threshold
+low_price_extra_edge
 cross_source_max_bps
 market_disagrees_exit_threshold
 market_disagrees_exit_max_remaining_sec
@@ -170,6 +172,20 @@ This prevents an average-cheap book from passing when the deepest required ask
 level is already more expensive than the model allows.
 `min_entry_model_prob` is a separate quality gate: it rejects low-probability
 lottery-style entries even when their price discount is large.
+
+Low-priced tokens can be guarded without banning them outright:
+
+```text
+if ask_avg < low_price_extra_edge_threshold:
+    effective_required_edge = phase_required_edge + low_price_extra_edge
+```
+
+Both values default to `0` in code, which disables the guard. The current
+aggressive profile enables a light guard at `<0.30 + 0.02`, based on replaying
+the combined 168-window paper sample. This is intentionally softer than a
+minimum entry price: recent paper data showed low-priced tokens can contain both
+the largest losses and the largest winners, so the current preference is to
+require more edge rather than discard the whole bucket.
 
 Live-oriented configs add two extra FAK quality guards:
 
@@ -257,10 +273,13 @@ prioritize reducing expiry exposure over profile-level tuning. Sell floors are
 clamped at one tick; for very low-priced tokens, attempt 1 and attempt 2 may
 therefore collapse to the same one-tick floor.
 
-SELL retry follows the same shared policy: paper and live rebuild a fresh
-snapshot before retrying and only submit the second FAK if `evaluate_exit` still
-returns an exit signal for the open position. The refreshed `bid_limit` and exit
-reason are used to compute the retry floor.
+SELL retry is different from BUY retry. Once an exit signal has fired, paper and
+live enter an exit-commitment path: the retry still rebuilds a fresh snapshot,
+but it does not require `evaluate_exit` to return an exit again. If the open
+position still has fresh bid depth, the refreshed `bid_limit` is used as the new
+sell floor with the original exit reason. This is based on the 2026-05-05
+48-window paper run where 5 exit no-fills were observed and 4/5 became worse
+after the retry was skipped as "signal no longer valid".
 
 Live CLOB can return a `400` response such as `no orders found to match with FAK
 order`. That is normal FAK behavior when the local WS book has moved before the
@@ -269,12 +288,13 @@ POST reaches the matching engine. The live executor records it as
 it does not create a position and does not terminate the process.
 
 Paper and live share the same strategy decisions and retry refresh callbacks.
-The only intended mode difference is execution: paper simulates latency and
-local FAK fills without POSTing orders, while live posts real CLOB FAK orders.
-Paper applies `paper_latency_sec` once for the initial order signal, then only
-an optional `retry_interval_sec` before the retry. Current live-oriented
-profiles set that interval to `0`, so retry refresh happens without an
-intentional wait.
+The only intended mode difference is execution: paper simulates local FAK fills
+without POSTing orders, while live posts real CLOB FAK orders. Current configs
+set `paper_latency_sec=0.0`: the observed CLOB delay is request/response time,
+not a full pre-match sleep before the order reaches the matching engine. Keep
+`paper_latency_sec` available only for explicit stress tests. Current
+live-oriented profiles also set `retry_interval_sec=0`, so retry refresh happens
+without an intentional wait.
 
 ## Exit Logic
 

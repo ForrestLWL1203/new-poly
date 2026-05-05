@@ -35,6 +35,8 @@ class EdgeConfig:
     min_fair_cap_margin_ticks: float = 0.0
     entry_tick_size: float = 0.01
     min_entry_model_prob: float = 0.0
+    low_price_extra_edge_threshold: float = 0.0
+    low_price_extra_edge: float = 0.0
     cross_source_max_bps: float = 0.0
     market_disagrees_exit_threshold: float = 0.0
     market_disagrees_exit_max_remaining_sec: float = 0.0
@@ -151,6 +153,12 @@ def _entry_depth_ok(depth_limit: float, safety_limit: float | None, fair_cap: fl
     return (fair_cap - depth_limit) + 1e-12 >= cfg.min_fair_cap_margin_ticks * tick
 
 
+def _entry_required_edge(base_edge: float, ask_avg: float, cfg: EdgeConfig) -> float:
+    if cfg.low_price_extra_edge_threshold > 0.0 and cfg.low_price_extra_edge > 0.0 and ask_avg < cfg.low_price_extra_edge_threshold:
+        return base_edge + cfg.low_price_extra_edge
+    return base_edge
+
+
 def _source_divergent(snapshot: MarketSnapshot, cfg: EdgeConfig) -> bool:
     return (
         cfg.cross_source_max_bps > 0.0
@@ -200,26 +208,32 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
     candidates: list[StrategyDecision] = []
     rejected_low_model_prob = False
     assert phase.required_edge is not None
+    attempted_required_edges: list[float] = []
     if snapshot.up_ask_depth_ok and snapshot.up_ask_avg is not None and snapshot.up_ask_limit is not None:
         up_edge = probs.up - snapshot.up_ask_avg
-        up_fair_cap = probs.up - phase.required_edge
-        if up_edge >= phase.required_edge:
+        up_required_edge = _entry_required_edge(phase.required_edge, snapshot.up_ask_avg, cfg)
+        attempted_required_edges.append(up_required_edge)
+        up_fair_cap = probs.up - up_required_edge
+        if up_edge >= up_required_edge:
             if probs.up < cfg.min_entry_model_prob:
                 rejected_low_model_prob = True
             elif _entry_depth_ok(snapshot.up_ask_limit, snapshot.up_ask_safety_limit, up_fair_cap, cfg) and _spread_ok(snapshot, "up", cfg, phase):
-                candidates.append(StrategyDecision("enter", "edge", "up", model_prob=probs.up, price=snapshot.up_ask_avg, limit_price=up_fair_cap, depth_limit_price=snapshot.up_ask_limit, best_ask=snapshot.up_best_ask, edge=up_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge))
+                candidates.append(StrategyDecision("enter", "edge", "up", model_prob=probs.up, price=snapshot.up_ask_avg, limit_price=up_fair_cap, depth_limit_price=snapshot.up_ask_limit, best_ask=snapshot.up_best_ask, edge=up_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=up_required_edge))
     if snapshot.down_ask_depth_ok and snapshot.down_ask_avg is not None and snapshot.down_ask_limit is not None:
         down_edge = probs.down - snapshot.down_ask_avg
-        down_fair_cap = probs.down - phase.required_edge
-        if down_edge >= phase.required_edge:
+        down_required_edge = _entry_required_edge(phase.required_edge, snapshot.down_ask_avg, cfg)
+        attempted_required_edges.append(down_required_edge)
+        down_fair_cap = probs.down - down_required_edge
+        if down_edge >= down_required_edge:
             if probs.down < cfg.min_entry_model_prob:
                 rejected_low_model_prob = True
             elif _entry_depth_ok(snapshot.down_ask_limit, snapshot.down_ask_safety_limit, down_fair_cap, cfg) and _spread_ok(snapshot, "down", cfg, phase):
-                candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_ask_avg, limit_price=down_fair_cap, depth_limit_price=snapshot.down_ask_limit, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge))
+                candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_ask_avg, limit_price=down_fair_cap, depth_limit_price=snapshot.down_ask_limit, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=down_required_edge))
     if not candidates:
+        effective_required_edge = max(attempted_required_edges) if attempted_required_edges else phase.required_edge
         if rejected_low_model_prob:
-            return StrategyDecision(action="skip", reason="model_prob_too_low", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge)
-        return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=phase.required_edge)
+            return StrategyDecision(action="skip", reason="model_prob_too_low", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
+        return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
     return max(candidates, key=lambda item: item.edge or 0.0)
 
 

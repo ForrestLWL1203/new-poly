@@ -232,6 +232,40 @@ def test_entry_rejects_low_model_probability_even_when_edge_is_large() -> None:
     assert decision.up_prob is not None and decision.up_prob < 0.35
 
 
+def test_low_price_entry_requires_extra_edge_when_configured() -> None:
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.03,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_ask_avg=0.90,
+        up_ask_limit=0.90,
+        up_ask_depth_ok=True,
+        down_ask_avg=0.20,
+        down_ask_limit=0.20,
+        down_ask_safety_limit=0.20,
+        down_best_ask=0.20,
+        down_ask_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+    loose = EdgeConfig(core_required_edge=0.14, low_price_extra_edge_threshold=0.25, low_price_extra_edge=0.04)
+    strict = EdgeConfig(core_required_edge=0.14, low_price_extra_edge_threshold=0.25, low_price_extra_edge=0.08)
+
+    loose_decision = evaluate_entry(snap, state, loose)
+    strict_decision = evaluate_entry(snap, state, strict)
+
+    assert loose_decision.action == "enter"
+    assert loose_decision.side == "down"
+    assert math.isclose(loose_decision.required_edge or 0.0, 0.18)
+    assert strict_decision.action == "skip"
+    assert strict_decision.reason == "edge_too_small"
+    assert math.isclose(strict_decision.required_edge or 0.0, 0.22)
+
+
 def test_entry_rejects_cross_source_divergence() -> None:
     cfg = EdgeConfig(core_required_edge=0.05, cross_source_max_bps=5.0)
     state = StrategyState(current_market_slug="m1")

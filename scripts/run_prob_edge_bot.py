@@ -247,6 +247,8 @@ def load_bot_config(path: Path) -> BotConfig:
         min_fair_cap_margin_ticks=float(_deep_get(raw, ("strategy", "min_fair_cap_margin_ticks"), 0.0)),
         entry_tick_size=float(_deep_get(raw, ("strategy", "entry_tick_size"), 0.01)),
         min_entry_model_prob=float(_deep_get(raw, ("strategy", "min_entry_model_prob"), 0.0)),
+        low_price_extra_edge_threshold=float(_deep_get(raw, ("strategy", "low_price_extra_edge_threshold"), 0.0)),
+        low_price_extra_edge=float(_deep_get(raw, ("strategy", "low_price_extra_edge"), 0.0)),
         cross_source_max_bps=float(_deep_get(raw, ("strategy", "cross_source_max_bps"), 0.0)),
         market_disagrees_exit_threshold=float(_deep_get(raw, ("strategy", "market_disagrees_exit_threshold"), 0.0)),
         market_disagrees_exit_max_remaining_sec=float(_deep_get(raw, ("strategy", "market_disagrees_exit_max_remaining_sec"), 0.0)),
@@ -255,7 +257,7 @@ def load_bot_config(path: Path) -> BotConfig:
         market_disagrees_exit_max_profit=float(_deep_get(raw, ("strategy", "market_disagrees_exit_max_profit"), 0.01)),
     )
     execution = ExecutionConfig(
-        paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.4)),
+        paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.0)),
         depth_notional=float(_deep_get(raw, ("execution", "depth_notional"), 5.0)),
         depth_safety_multiplier=float(_deep_get(raw, ("execution", "depth_safety_multiplier"), 1.0)),
         max_book_age_sec=float(_deep_get(raw, ("execution", "max_book_age_sec"), 1.0)),
@@ -533,8 +535,13 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
         prob_drop_exit_window_sec=cfg.edge.prob_drop_exit_window_sec,
         prob_drop_exit_threshold=cfg.edge.prob_drop_exit_threshold,
+        final_force_exit_remaining_sec=cfg.edge.final_force_exit_remaining_sec,
         settlement_boundary_usd=cfg.settlement_boundary_usd,
+        min_fair_cap_margin_ticks=cfg.edge.min_fair_cap_margin_ticks,
+        entry_tick_size=cfg.edge.entry_tick_size,
         min_entry_model_prob=cfg.edge.min_entry_model_prob,
+        low_price_extra_edge_threshold=cfg.edge.low_price_extra_edge_threshold,
+        low_price_extra_edge=cfg.edge.low_price_extra_edge,
         cross_source_max_bps=cfg.edge.cross_source_max_bps,
         market_disagrees_exit_threshold=cfg.edge.market_disagrees_exit_threshold,
         market_disagrees_exit_max_remaining_sec=cfg.edge.market_disagrees_exit_max_remaining_sec,
@@ -673,12 +680,19 @@ async def _refresh_exit_retry_params(
     sigma_eff: float | None,
     state: StrategyState,
     position: PositionSnapshot,
+    exit_reason: str | None = None,
 ) -> SellRetryParams | None:
     snap, _meta = _snapshot(window, prices, feed, coinbase_feed, stream, cfg, sigma_eff)
     decision = evaluate_exit(snap, position, cfg.edge, state)
-    if decision.action != "exit" or decision.limit_price is None:
+    if decision.action == "exit" and decision.limit_price is not None:
+        return SellRetryParams(min_price=decision.limit_price, exit_reason=decision.reason)
+    if position.token_side == "up":
+        min_price = snap.up_bid_limit if snap.up_bid_depth_ok else None
+    else:
+        min_price = snap.down_bid_limit if snap.down_bid_depth_ok else None
+    if min_price is None:
         return None
-    return SellRetryParams(min_price=decision.limit_price, exit_reason=decision.reason)
+    return SellRetryParams(min_price=min_price, exit_reason=exit_reason or decision.reason)
 
 
 async def run(options: RuntimeOptions) -> int:
@@ -835,6 +849,7 @@ async def run(options: RuntimeOptions) -> int:
                             sigma_eff=sigma_eff,
                             state=state,
                             position=position,
+                            exit_reason=decision.reason,
                         ),
                     )
                     row["order"] = result.__dict__

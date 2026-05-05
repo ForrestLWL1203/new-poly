@@ -524,6 +524,8 @@ def candidate_results_from_rows(rows: Iterable[dict[str, Any]], cfg: DynamicConf
                 final_force_exit_remaining_sec=base.final_force_exit_remaining_sec,
                 settlement_boundary_usd=base.settlement_boundary_usd,
                 min_entry_model_prob=base.min_entry_model_prob,
+                low_price_extra_edge_threshold=base.low_price_extra_edge_threshold,
+                low_price_extra_edge=base.low_price_extra_edge,
                 cross_source_max_bps=base.cross_source_max_bps,
                 market_disagrees_exit_threshold=base.market_disagrees_exit_threshold,
                 market_disagrees_exit_max_remaining_sec=base.market_disagrees_exit_max_remaining_sec,
