@@ -114,8 +114,10 @@ python3 scripts/collect_prob_edge_data.py \
 
 The script extracts the Polymarket UI Price to Beat from Polymarket's crypto
 price API as `k_price`, then uses a Binance open-basis-adjusted proxy for
-current `s_price`. It does not fetch or log Polymarket `closePrice`; simple
-post-run direction checks should compare Binance window open/close prices.
+current `s_price` by default. Pass `--coinbase` to also start the Coinbase feed
+and use the Binance+Coinbase paired proxy.
+It does not fetch or log Polymarket `closePrice`; simple post-run direction
+checks should compare proxy window open/close prices.
 It intentionally keeps `settlement_aligned=false` until a true
 settlement-aligned realtime price source is available. It also fetches Deribit
 BTC DVOL once at startup by default and records it under `volatility`.
@@ -137,31 +139,38 @@ and `--i-understand-live-risk` are provided.
 Current default strategy behavior:
 
 - The tuned live-oriented profile evaluates the strategy loop every `0.5s`.
+- S is the Binance proxy price by default. With `--coinbase` or
+  `market_data.coinbase_enabled=true`, S becomes the Binance+Coinbase paired
+  proxy, basis-adjusted once K and proxy open are known.
 - Entry thresholds are time phased: `0.16` for `100 <= age < 120`, `0.14` for
   `120 <= age < 240`, and late entry is disabled from `240s` onward.
 - FAK entry decisions use size-aware `ask_avg` for edge, require
   `ask_limit <= model_prob - required_edge`, require the formula cap to leave
   at least one tick of executable margin, and send BUY hints as
   `min(ask_limit + configured_tick_buffer, model_prob - required_edge)`.
+- If Coinbase is enabled and both sources have live prices that disagree beyond
+  `cross_source_max_bps`, the bot treats the proxy input as unreliable and skips
+  new entries with `source_divergence`.
 - Entry depth uses a safety multiplier in live-oriented configs: the bot may
   buy `amount_usd`, but requires enough ask depth for
   `amount_usd * depth_safety_multiplier` inside the same formula cap.
 - FAK BUY gets one capped retry. The default live BUY hint ladder is
   `+2 ticks` then `+4 ticks`, always capped by formula fair cap. FAK SELL also
   retries once, but the sell floor
-  depends on exit urgency: normal profit/stop exits use `-3 ticks` then
+  depends on exit urgency: normal profit/stop exits use `-4 ticks` then
   `-5 ticks`, and `final_force_exit` uses a fixed `-5/-10 tick` emergency
   ladder. Paper mode uses the same SELL floors, clamped at one tick for very
   low-priced tokens.
 - After a no-fill, paper and live immediately rebuild a fresh strategy snapshot
-  from current Binance price and in-memory CLOB WS book, and retry only if the
+  from current proxy price and in-memory CLOB WS book, and retry only if the
   same entry/exit signal is still valid. Current live-oriented configs set
   `retry_interval_sec=0.0`.
 - A live CLOB `FAK no match` response is treated as `order_no_fill`, not a
   fatal bot error, and records the failed POST latency for later diagnostics.
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
-- Exits include logic decay, market-overprice exits, final-60s defensive
-  take-profit, final-30s profit protection, and final-15s forced risk exit.
+- Exits include logic decay, market-overprice exits, market-disagrees exits for
+  late losing positions whose bid/model ratio deteriorates, final-60s defensive
+  take-profit, and final-30s forced risk exit.
 - Live CLOB auth uses one cached `ClobClient` and configures the SDK HTTP
   client with `http2`, a larger keep-alive pool, and explicit timeouts to avoid
   waiting on connection setup during FAK posting.

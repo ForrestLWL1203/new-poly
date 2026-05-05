@@ -168,6 +168,9 @@ def test_collector_row_is_strategy_neutral() -> None:
     class FakeFeed:
         latest_price = 100_120.0
 
+    class FakeCoinbaseFeed:
+        latest_price = 100_100.0
+
     class FakeStream:
         def get_latest_ask_levels_with_size(self, token_id):
             return [(0.51, 100.0)] if token_id == "up" else [(0.49, 100.0)]
@@ -193,12 +196,18 @@ def test_collector_row_is_strategy_neutral() -> None:
         slug="btc-updown-5m-1",
         resolution_source="https://data.chain.link/streams/btc-usd",
     )
-    prices = collector.WindowPrices(k_price=100_000.0, binance_open_price=100_050.0, k_source="polymarket_crypto_price_api")
+    prices = collector.WindowPrices(
+        k_price=100_000.0,
+        binance_open_price=100_050.0,
+        coinbase_open_price=100_030.0,
+        k_source="polymarket_crypto_price_api",
+    )
 
     row = collector.build_row(
         window=window,
         prices=prices,
         feed=FakeFeed(),
+        coinbase_feed=FakeCoinbaseFeed(),
         stream=FakeStream(),
         now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
         depth_notional=5.0,
@@ -217,10 +226,15 @@ def test_collector_row_is_strategy_neutral() -> None:
         ),
     )
 
-    assert row["price_source"] == "proxy_binance_basis_adjusted"
+    assert row["price_source"] == "proxy_multi_source_basis_adjusted"
     assert row["resolution_source"] == "https://data.chain.link/streams/btc-usd"
+    assert row["binance_price"] == 100120.0
+    assert row["coinbase_price"] == 100100.0
+    assert row["proxy_price"] == 100110.0
+    assert row["proxy_open_price"] == 100040.0
     assert row["s_price"] == 100070.0
-    assert row["basis_bps"] == 5.0
+    assert row["basis_bps"] == 4.0
+    assert row["source_spread_usd"] == 20.0
     assert row["volatility"]["sigma"] == 0.4
     assert row["volatility_stale"] is False
     assert row["up"]["ask_limit"] == 0.51
@@ -266,6 +280,7 @@ def test_collector_row_marks_stale_volatility() -> None:
         window=window,
         prices=collector.WindowPrices(k_price=100_000.0),
         feed=FakeFeed(),
+        coinbase_feed=None,
         stream=FakeStream(),
         now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),
         depth_notional=5.0,
@@ -280,3 +295,82 @@ def test_collector_row_marks_stale_volatility() -> None:
     assert row["sigma_source"] == "missing"
     assert row["sigma_eff"] is None
     assert row["volatility_stale"] is True
+
+
+def test_effective_price_falls_back_to_binance_when_coinbase_missing() -> None:
+    class FakeBinanceFeed:
+        latest_price = 100_120.0
+
+    prices = collector.WindowPrices(k_price=100_000.0, binance_open_price=100_050.0)
+
+    price = collector.effective_price(FakeBinanceFeed(), None, prices)
+
+    assert price.source == "proxy_binance_basis_adjusted"
+    assert price.effective == 100_070.0
+    assert price.proxy == 100_120.0
+    assert price.proxy_open == 100_050.0
+    assert price.spread_usd is None
+
+
+def test_effective_price_ignores_coinbase_when_disabled() -> None:
+    class FakeBinanceFeed:
+        latest_price = 100_120.0
+
+    class FakeCoinbaseFeed:
+        latest_price = 100_100.0
+
+    prices = collector.WindowPrices(
+        k_price=100_000.0,
+        binance_open_price=100_050.0,
+        coinbase_open_price=100_030.0,
+    )
+
+    price = collector.effective_price(FakeBinanceFeed(), FakeCoinbaseFeed(), prices, coinbase_enabled=False)
+
+    assert price.source == "proxy_binance_basis_adjusted"
+    assert price.effective == 100_070.0
+    assert price.proxy == 100_120.0
+    assert price.proxy_open == 100_050.0
+    assert price.coinbase is None
+    assert price.spread_usd is None
+
+
+def test_effective_price_uses_multi_source_basis_adjustment() -> None:
+    class FakeBinanceFeed:
+        latest_price = 100_120.0
+
+    class FakeCoinbaseFeed:
+        latest_price = 100_100.0
+
+    prices = collector.WindowPrices(
+        k_price=100_000.0,
+        binance_open_price=100_050.0,
+        coinbase_open_price=100_030.0,
+    )
+
+    price = collector.effective_price(FakeBinanceFeed(), FakeCoinbaseFeed(), prices)
+
+    assert price.source == "proxy_multi_source_basis_adjusted"
+    assert price.proxy == 100_110.0
+    assert price.proxy_open == 100_040.0
+    assert price.effective == 100_070.0
+    assert price.basis_bps == 4.0
+    assert price.spread_usd == 20.0
+
+
+def test_effective_price_basis_adjustment_uses_only_sources_with_open_prices() -> None:
+    class FakeBinanceFeed:
+        latest_price = 100_120.0
+
+    class FakeCoinbaseFeed:
+        latest_price = 100_100.0
+
+    prices = collector.WindowPrices(k_price=100_000.0, binance_open_price=100_050.0)
+
+    price = collector.effective_price(FakeBinanceFeed(), FakeCoinbaseFeed(), prices)
+
+    assert price.source == "proxy_binance_basis_adjusted"
+    assert price.proxy == 100_120.0
+    assert price.proxy_open == 100_050.0
+    assert price.effective == 100_070.0
+    assert price.spread_usd == 20.0

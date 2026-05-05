@@ -76,9 +76,11 @@ python3 scripts/run_prob_edge_bot.py \
 - Default max successful entries per market is `2`.
 - `sigma_eff` uses Deribit BTC DVOL divided by 100.
 - K is the Polymarket UI Price to Beat from the crypto price API.
-- Settlement/reporting in paper mode uses Binance proxy direction; the bot does
-  not wait for Polymarket `closePrice`.
-- S is Binance proxy price, basis-adjusted once K and Binance open are known.
+- Settlement/reporting in paper mode uses proxy direction; the bot does not wait
+  for Polymarket `closePrice`.
+- S is Binance proxy price by default. With `--coinbase` or
+  `market_data.coinbase_enabled=true`, S becomes the Binance+Coinbase paired
+  proxy, basis-adjusted once K and proxy open are known.
 - The old single `required_edge` field is no longer used.
 
 Config files:
@@ -110,6 +112,12 @@ prob_stagnation_epsilon
 prob_drop_exit_window_sec
 prob_drop_exit_threshold
 min_entry_model_prob
+cross_source_max_bps
+market_disagrees_exit_threshold
+market_disagrees_exit_max_remaining_sec
+market_disagrees_exit_min_loss
+market_disagrees_exit_min_age_sec
+market_disagrees_exit_max_profit
 retry_count
 retry_interval_sec
 ```
@@ -119,6 +127,16 @@ from replaying the 120-window collector and dry-run datasets captured on
 2026-05-04. They replace the earlier `0.12/0.08` defaults because those looser
 thresholds admitted too many low-probability lottery-style entries and larger
 `logic_decay_exit` losses.
+
+Coinbase is opt-in. When enabled and both Binance/Coinbase live prices are
+available, `cross_source_max_bps` acts as an entry quality gate. If the two
+sources disagree by more than the configured basis-point threshold, the bot
+skips new entries with `source_divergence`. This treats source disagreement as
+an input-quality problem instead of averaging through it and trading anyway.
+
+The initial `market_disagrees_exit_threshold` default is `0.30`. A looser
+`0.20` threshold caught more bid/model deterioration but over-exited in replay;
+`0.30` is the current dry-run candidate.
 
 ## FAK Price Logic
 
@@ -205,7 +223,7 @@ retry_interval_sec = 0.0
 ```
 
 BUY gets at most one retry. After a no-fill, both paper and live immediately
-rebuild a fresh strategy snapshot from the current Binance price, current
+rebuild a fresh strategy snapshot from the current proxy price, current
 remaining time, and current in-memory CLOB WS book. The retry is posted only if
 the same side still passes `evaluate_entry`; otherwise it is skipped instead of
 chasing a stale signal. The default hint ladder is configurable:
@@ -223,7 +241,7 @@ profit-taking and stop-loss exits use the same configurable aggressive floor:
 normal exits:
   market_overprice_exit / defensive_take_profit / profit_protection_exit
   logic_decay_exit / risk_exit
-  attempt 1: bid_limit - 3 ticks
+  attempt 1: bid_limit - 4 ticks
   attempt 2: bid_limit - 5 ticks
 
 final_force_exit:
@@ -233,7 +251,7 @@ final_force_exit:
 
 Earlier versions used separate profit/stop floors. Live testing showed that even
 profit exits can hit FAK no-match when the local book moves between WS snapshot
-and POST, so normal exits now share a `3/5 tick` ladder. `final_force_exit`
+and POST, so normal exits now share a `4/5 tick` ladder. `final_force_exit`
 keeps its hardcoded `5/10 tick` emergency ladder because the final seconds
 prioritize reducing expiry exposure over profile-level tuning. Sell floors are
 clamped at one tick; for very low-priced tokens, attempt 1 and attempt 2 may
@@ -277,14 +295,23 @@ late-window profit protection:
   while still better than the original model probability. Because probability
   history is cleared at entry, this guard cannot fire until the position has
   been open for at least `prob_drop_exit_window_sec`.
-- `profit_protection_exit`: when `15 < remaining_sec <= 30`, profit is at least
-  `protection_profit_min`.
-- `final_force_exit`: when `remaining_sec <= 15`, sell if depth exists unless
+- `market_disagrees_exit`: when enabled, the Polymarket executable bid becomes
+  materially cheaper relative to the model than it was at entry. It is
+  intentionally constrained to late, already-losing positions:
+  `remaining_sec <= market_disagrees_exit_max_remaining_sec`, loss at least
+  `market_disagrees_exit_min_loss`, position age at least
+  `market_disagrees_exit_min_age_sec`, and no meaningful current profit. This
+  catches cases where the model probability stays high but the market is
+  increasingly unwilling to pay for that outcome.
+- `profit_protection_exit`: legacy configurable profit guard; the current
+  30-second final-force boundary normally supersedes it.
+- `final_force_exit`: when `remaining_sec <= final_force_exit_remaining_sec`
+  (`30s` in current configs), sell if depth exists unless
   `model_prob`, `bid_avg`, and `bid_limit` all exceed their final-hold
   thresholds.
 
-Exit decisions log `profit_now`, `prob_stagnant`, `prob_delta_3s`, and
-`prob_drop_delta` for post-run analysis.
+Exit decisions log `profit_now`, `prob_stagnant`, `prob_delta_3s`,
+`prob_drop_delta`, and `market_disagreement` for post-run analysis.
 
 If the probability history is too short to compare against the configured
 stagnation window, `prob_stagnant=false` and `defensive_take_profit` does not
@@ -317,7 +344,22 @@ decision.prob_delta_3s
 
 When analysis logs are enabled, the bot first writes a `config` row containing
 the non-secret strategy, execution, and runtime parameters used for the run.
-Entry/exit/order-no-fill rows also include an `analysis` object:
+Rows also include detailed BTC source diagnostics under
+`analysis.price_sources`:
+
+```text
+binance_price
+coinbase_price
+proxy_price
+binance_open_price
+coinbase_open_price
+proxy_open_price
+source_spread_usd
+source_spread_bps
+```
+
+Entry/exit/order-no-fill rows also include strategy execution diagnostics in
+the same `analysis` object:
 
 ```text
 order_intent

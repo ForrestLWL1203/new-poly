@@ -16,6 +16,7 @@ NORMAL_SELL_EXIT_REASONS = {
     "logic_decay_exit",
     "risk_exit",
     "market_overprice_exit",
+    "market_disagrees_exit",
     "defensive_take_profit",
     "profit_protection_exit",
 }
@@ -35,14 +36,21 @@ class BacktestConfig:
     tick_size: float = 0.01
     buy_slippage_ticks: float = 0.0
     sell_slippage_ticks: float = 0.0
-    sell_price_buffer_ticks: float = 3.0
+    sell_price_buffer_ticks: float = 4.0
     sell_retry_price_buffer_ticks: float = 5.0
     prob_drop_exit_window_sec: float = 0.0
     prob_drop_exit_threshold: float = 0.0
+    final_force_exit_remaining_sec: float = 30.0
     settlement_boundary_usd: float = 5.0
     min_fair_cap_margin_ticks: float = 0.0
     entry_tick_size: float = 0.01
     min_entry_model_prob: float = 0.0
+    cross_source_max_bps: float = 0.0
+    market_disagrees_exit_threshold: float = 0.0
+    market_disagrees_exit_max_remaining_sec: float = 0.0
+    market_disagrees_exit_min_loss: float = 0.0
+    market_disagrees_exit_min_age_sec: float = 0.0
+    market_disagrees_exit_max_profit: float = 0.01
 
     def edge_config(self) -> EdgeConfig:
         return EdgeConfig(
@@ -55,9 +63,16 @@ class BacktestConfig:
             late_entry_enabled=self.late_entry_enabled,
             prob_drop_exit_window_sec=self.prob_drop_exit_window_sec,
             prob_drop_exit_threshold=self.prob_drop_exit_threshold,
+            final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
             min_fair_cap_margin_ticks=self.min_fair_cap_margin_ticks,
             entry_tick_size=self.entry_tick_size,
             min_entry_model_prob=self.min_entry_model_prob,
+            cross_source_max_bps=self.cross_source_max_bps,
+            market_disagrees_exit_threshold=self.market_disagrees_exit_threshold,
+            market_disagrees_exit_max_remaining_sec=self.market_disagrees_exit_max_remaining_sec,
+            market_disagrees_exit_min_loss=self.market_disagrees_exit_min_loss,
+            market_disagrees_exit_min_age_sec=self.market_disagrees_exit_min_age_sec,
+            market_disagrees_exit_max_profit=self.market_disagrees_exit_max_profit,
         )
 
 
@@ -114,6 +129,7 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
         down_bid_depth_ok=bool(down.get("bid_depth_ok")),
         up_book_age_ms=_float(up.get("book_age_ms")),
         down_book_age_ms=_float(down.get("book_age_ms")),
+        source_spread_bps=_float(row.get("source_spread_bps") or (row.get("analysis") or {}).get("price_sources", {}).get("source_spread_bps")),
     )
 
 
@@ -350,6 +366,12 @@ def scan_configs(
             min_fair_cap_margin_ticks=base.min_fair_cap_margin_ticks,
             entry_tick_size=base.entry_tick_size,
             min_entry_model_prob=base.min_entry_model_prob,
+            cross_source_max_bps=base.cross_source_max_bps,
+            market_disagrees_exit_threshold=base.market_disagrees_exit_threshold,
+            market_disagrees_exit_max_remaining_sec=base.market_disagrees_exit_max_remaining_sec,
+            market_disagrees_exit_min_loss=base.market_disagrees_exit_min_loss,
+            market_disagrees_exit_min_age_sec=base.market_disagrees_exit_min_age_sec,
+            market_disagrees_exit_max_profit=base.market_disagrees_exit_max_profit,
         )
         result = run_backtest(materialized, cfg)
         if result.summary["entries"] < min_entries:

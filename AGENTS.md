@@ -172,8 +172,11 @@ later strategy dry-run and backtest code:
 - market slug, start/end time, `window_bucket`, remaining seconds,
 - Polymarket resolution source,
 - Polymarket HTML-derived `k_price` / Price to Beat,
-- Binance basis-adjusted proxy `s_price`,
+- Binance basis-adjusted proxy `s_price`, with optional Binance+Coinbase paired
+  proxy when Coinbase is enabled,
 - `basis_bps`,
+- Binance/Coinbase live spread diagnostics for source-divergence analysis when
+  Coinbase is enabled,
 - compact UP/DOWN book summaries,
 - YES+NO sum monitoring,
 - data-quality `warnings`.
@@ -217,10 +220,14 @@ scp -i /Users/forrestliao/workspace/new-poly/docs/LightsailDefaultKey-eu-west-1.
 
 Current status:
 
-- `k_price` is extracted from Polymarket event-page HTML hydration data:
-  `["crypto-prices", "price", "BTC", <start>, "fiveminute", <end>]`.
-- `k_source` is `polymarket_html_crypto_prices`.
-- `S` is currently a Binance proxy adjusted by the window-start basis.
+- `k_price` is extracted from Polymarket crypto price API `openPrice`.
+- `k_source` is `polymarket_crypto_price_api`.
+- `S` is currently a Binance proxy adjusted by the window-start basis by
+  default. If Coinbase is explicitly enabled, code uses a Binance+Coinbase
+  paired proxy and falls back to Binance when Coinbase is unavailable.
+- Strategy entry can use `cross_source_max_bps` to skip new trades when Binance
+  and Coinbase live prices diverge too much; source disagreement is treated as
+  an input-quality warning, not something to average through blindly.
 
 ### Reusable Infrastructure Modules
 
@@ -228,6 +235,7 @@ Strategy-neutral modules migrated from the old project live under:
 
 ```text
 new_poly/market/binance.py
+new_poly/market/coinbase.py
 new_poly/market/market.py
 new_poly/market/series.py
 new_poly/market/stream.py
@@ -235,14 +243,18 @@ new_poly/market/deribit.py
 new_poly/trading/fak_quotes.py
 ```
 
-Future strategy scripts should reuse these for Binance feeds, Polymarket window
-discovery, CLOB WebSocket book handling, Deribit DVOL snapshots, and FAK
-quote/depth selection. Do not reuse old `poly-bot` strategy modules or old
-thresholds.
+Future strategy scripts should reuse these for Binance/Coinbase feeds,
+Polymarket window discovery, CLOB WebSocket book handling, Deribit DVOL
+snapshots, and FAK quote/depth selection. Do not reuse old `poly-bot` strategy
+modules or old thresholds.
 
 - Basis-adjusted proxy formula:
-  `s_price = latest_binance_price - (binance_open_at_start - k_price)`.
-- `price_source` is `proxy_binance_basis_adjusted`.
+  use only sources that have both a live price and same-window open price;
+  `proxy_live = mean(valid paired live prices)`;
+  `proxy_open = mean(valid paired open prices)`;
+  `s_price = proxy_live - (proxy_open - k_price)`.
+- `price_source` is normally `proxy_binance_basis_adjusted`; when Coinbase is
+  enabled and paired, it can become `proxy_multi_source_basis_adjusted`.
 - Deribit BTC DVOL is collected once at startup by default and written as
   `volatility`; use `--dvol-refresh-sec N` only when a run should refresh it.
 - `settlement_aligned` intentionally remains `false`, because this is not direct
@@ -282,6 +294,17 @@ pytest-asyncio>=0.23
   - `GET https://api.binance.com/api/v3/klines`
   - params: `symbol=BTCUSDT`, `interval=1m`, `startTime=<epoch_ms>`, `limit=1`
   - open price is response item `[0][1]`
+
+### Coinbase BTC Trade Feed
+
+- WebSocket URL: `wss://ws-feed.exchange.coinbase.com`
+- Product: `BTC-USD`
+- Subscribe with `{"type":"subscribe","product_ids":["BTC-USD"],"channels":["matches"]}`.
+- Match payload price field is `price`.
+- REST fallback for a missing open price uses:
+  - `GET https://api.exchange.coinbase.com/products/BTC-USD/candles`
+  - params: `granularity=60`, `start=<ISO>`, `end=<ISO+60s>`
+  - candle shape is `[time, low, high, open, close, volume]`; open is item `[3]`.
 
 ### Polymarket API Systems
 

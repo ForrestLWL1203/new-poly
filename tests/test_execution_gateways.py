@@ -103,16 +103,16 @@ def test_paper_sell_uses_live_style_exit_floor(monkeypatch) -> None:
 
     async def scenario() -> None:
         stream = FakeStream()
-        stream.bids["up"] = [(0.38, 10.0)]
+        stream.bids["up"] = [(0.36, 10.0)]
         gateway = PaperExecutionGateway(
             stream=stream,
-            config=ExecutionConfig(paper_latency_sec=0.0, sell_price_buffer_ticks=3, sell_retry_price_buffer_ticks=5),
+            config=ExecutionConfig(paper_latency_sec=0.0, sell_price_buffer_ticks=4, sell_retry_price_buffer_ticks=5),
         )
 
         result = await gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="logic_decay_exit")
 
         assert result.success is True
-        assert result.avg_price == 0.38
+        assert result.avg_price == 0.36
 
     asyncio.run(scenario())
 
@@ -283,7 +283,7 @@ def test_live_sell_profit_exit_uses_small_aggressive_retry(monkeypatch) -> None:
     result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="defensive_take_profit"))
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.37
+    assert gateway.calls[0][3] == 0.36
     assert gateway.calls[1][3] == 0.35
 
 
@@ -292,13 +292,13 @@ def test_live_sell_logic_decay_starts_below_bid_limit(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
-        ExecutionResult(True, filled_size=10.0, avg_price=0.37, message="MATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.36, message="MATCHED", mode="live"),
     ])
 
     result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="logic_decay_exit"))
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.37
+    assert gateway.calls[0][3] == 0.36
     assert gateway.calls[1][3] == 0.35
 
 
@@ -325,7 +325,7 @@ def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) ->
     )
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.37
+    assert gateway.calls[0][3] == 0.36
     assert gateway.calls[1][3] == 0.45
 
 

@@ -27,7 +27,7 @@ class ExecutionConfig:
     retry_interval_sec: float = 0.0
     buy_price_buffer_ticks: float = 2.0
     buy_retry_price_buffer_ticks: float = 4.0
-    sell_price_buffer_ticks: float = 3.0
+    sell_price_buffer_ticks: float = 4.0
     sell_retry_price_buffer_ticks: float = 5.0
 
 
@@ -140,6 +140,7 @@ def _sell_aggression_ticks(
         "logic_decay_exit",
         "risk_exit",
         "market_overprice_exit",
+        "market_disagrees_exit",
         "defensive_take_profit",
         "profit_protection_exit",
     }:
@@ -153,7 +154,7 @@ def _sell_price_hint(
     exit_reason: str | None,
     attempt: int,
     *,
-    sell_price_buffer_ticks: float = 3.0,
+    sell_price_buffer_ticks: float = 4.0,
     sell_retry_price_buffer_ticks: float = 5.0,
 ) -> float | None:
     if min_price is None:
@@ -368,7 +369,7 @@ class LiveFakExecutionGateway:
         retry_interval_sec: float = 0.0,
         buy_price_buffer_ticks: float = 2.0,
         buy_retry_price_buffer_ticks: float = 4.0,
-        sell_price_buffer_ticks: float = 3.0,
+        sell_price_buffer_ticks: float = 4.0,
         sell_retry_price_buffer_ticks: float = 5.0,
     ) -> None:
         if not live_risk_ack:

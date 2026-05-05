@@ -13,6 +13,8 @@ from scripts.run_prob_edge_bot import (
     _config_log_row,
     _entry_analysis,
     _exit_analysis,
+    _price_analysis,
+    _runtime_log_meta,
     _should_write_row,
     build_arg_parser,
     build_runtime_options,
@@ -32,6 +34,7 @@ def test_default_mode_is_paper() -> None:
     assert opts.analysis_logs is True
     assert opts.windows is None
     assert opts.config.amount_usd > 0
+    assert opts.config.coinbase_enabled is False
 
 
 def test_live_mode_defaults_analysis_logs_off() -> None:
@@ -49,6 +52,14 @@ def test_analysis_log_flags_override_mode_defaults() -> None:
 
     assert build_runtime_options(paper_args).analysis_logs is False
     assert build_runtime_options(live_args).analysis_logs is True
+
+
+def test_coinbase_cli_overrides_config() -> None:
+    enabled_args = build_arg_parser().parse_args(["--once", "--coinbase"])
+    disabled_args = build_arg_parser().parse_args(["--once", "--coinbase", "--no-coinbase"])
+
+    assert build_runtime_options(enabled_args).config.coinbase_enabled is True
+    assert build_runtime_options(disabled_args).config.coinbase_enabled is False
 
 
 def test_dynamic_params_cli_options_are_explicit() -> None:
@@ -98,7 +109,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.depth_safety_multiplier == 1.5
     assert opts.config.execution.buy_price_buffer_ticks == 2.0
     assert opts.config.execution.buy_retry_price_buffer_ticks == 4.0
-    assert opts.config.execution.sell_price_buffer_ticks == 3.0
+    assert opts.config.execution.sell_price_buffer_ticks == 4.0
     assert opts.config.execution.sell_retry_price_buffer_ticks == 5.0
     assert opts.config.execution.retry_interval_sec == 0.0
     assert opts.config.interval_sec == 0.5
@@ -108,6 +119,11 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.early_required_edge == 0.16
     assert opts.config.edge.core_required_edge == 0.14
     assert opts.config.edge.min_entry_model_prob == 0.35
+    assert opts.config.edge.cross_source_max_bps == 5.0
+    assert opts.config.edge.market_disagrees_exit_threshold == 0.30
+    assert opts.config.edge.market_disagrees_exit_max_remaining_sec == 60.0
+    assert opts.config.edge.market_disagrees_exit_min_loss == 0.03
+    assert opts.config.edge.final_force_exit_remaining_sec == 30.0
 
 
 def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Path) -> None:
@@ -196,8 +212,38 @@ def test_proxy_settlement_flags_boundary_uncertain() -> None:
     result = choose_settlement(prices, latest_proxy_price=102.0, boundary_usd=5.0)
 
     assert result["winning_side"] == "up"
-    assert result["settlement_source"] == "binance_proxy"
+    assert result["settlement_source"] == "multi_source_proxy"
     assert result["settlement_uncertain"] is True
+
+
+def test_runtime_log_meta_keeps_price_diagnostics_for_analysis_logs() -> None:
+    meta = {
+        "price_source": "proxy_multi_source_basis_adjusted",
+        "s_price": 100070.0,
+        "k_price": 100000.0,
+        "basis_bps": 4.0,
+        "binance_price": 100120.0,
+        "coinbase_price": 100100.0,
+        "proxy_price": 100110.0,
+        "binance_open_price": 100050.0,
+        "coinbase_open_price": 100030.0,
+        "proxy_open_price": 100040.0,
+        "source_spread_usd": 20.0,
+        "source_spread_bps": 1.998,
+    }
+
+    runtime = _runtime_log_meta(meta)
+    analysis = _price_analysis(meta)
+
+    assert runtime == {
+        "price_source": "proxy_multi_source_basis_adjusted",
+        "s_price": 100070.0,
+        "k_price": 100000.0,
+        "basis_bps": 4.0,
+    }
+    assert analysis["binance_price"] == 100120.0
+    assert analysis["coinbase_price"] == 100100.0
+    assert analysis["source_spread_usd"] == 20.0
 
 
 def test_config_log_row_contains_non_secret_runtime_shape() -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.market.binance import BinancePriceFeed
+from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
@@ -30,6 +31,24 @@ def test_binance_price_feed_history_lookup_helpers() -> None:
     assert feed.price_at_or_before(104.0, max_backward_sec=3.0) is None
     assert feed.first_price_at_or_after(101.0, max_forward_sec=10.0) == 10.5
     assert feed.first_price_at_or_after(101.0, max_forward_sec=1.0) is None
+
+
+def test_coinbase_price_feed_parses_match_messages() -> None:
+    feed = CoinbaseBtcPriceFeed()
+
+    assert feed._price_from_message({"type": "match", "price": "101234.56"}) == 101234.56
+    assert feed._price_from_message({"type": "subscriptions", "channels": []}) is None
+
+
+def test_coinbase_price_feed_history_lookup_helpers() -> None:
+    feed = CoinbaseBtcPriceFeed()
+
+    feed._inject(100.0, 10.0)
+    feed._inject(105.0, 10.5)
+
+    assert feed.latest_price == 10.5
+    assert feed.price_at_or_before(102.0) == 10.0
+    assert feed.first_price_at_or_after(101.0, max_forward_sec=10.0) == 10.5
 
 
 def test_price_stream_updates_order_book_from_events() -> None:

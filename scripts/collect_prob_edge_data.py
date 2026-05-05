@@ -19,6 +19,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.market.binance import BinancePriceFeed
+from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import DvolSnapshot, fetch_dvol_snapshot
 from new_poly.market.market import MarketWindow, find_next_window, find_window_after
 from new_poly.market.series import MarketSeries
@@ -41,10 +42,27 @@ class WindowPrices:
     binance_open_source: str = "missing"
     binance_open_delta_ms: int | None = None
     binance_open_rest_attempted: bool = False
+    coinbase_open_price: float | None = None
+    coinbase_open_source: str = "missing"
+    coinbase_open_delta_ms: int | None = None
+    coinbase_open_rest_attempted: bool = False
 
     def __post_init__(self) -> None:
         if self.attempted_slots is None:
             self.attempted_slots = set()
+
+
+@dataclass(frozen=True)
+class EffectivePrice:
+    source: str
+    effective: float | None
+    basis_bps: float | None
+    proxy: float | None = None
+    proxy_open: float | None = None
+    binance: float | None = None
+    coinbase: float | None = None
+    spread_usd: float | None = None
+    spread_bps: float | None = None
 
 
 class JsonlWriter:
@@ -190,14 +208,99 @@ async def refresh_binance_open(feed: BinancePriceFeed, window: MarketWindow, pri
             prices.binance_open_source = "rest_kline"
 
 
-def effective_price(feed: BinancePriceFeed, prices: WindowPrices) -> tuple[str, float | None, float | None]:
-    latest = feed.latest_price
-    if latest is None:
-        return "missing", None, None
-    if prices.k_price is not None and prices.binance_open_price is not None:
-        basis = prices.binance_open_price - prices.k_price
-        return "proxy_binance_basis_adjusted", latest - basis, (basis / prices.k_price) * 10_000.0
-    return "proxy_binance", latest, None
+async def refresh_coinbase_open(feed: CoinbaseBtcPriceFeed, window: MarketWindow, prices: WindowPrices, age_sec: float) -> None:
+    if prices.coinbase_open_price is not None:
+        return
+    if age_sec < -BTC_OPEN_LOOKAROUND_SEC:
+        return
+    start = float(window.start_epoch)
+    first_after = feed.first_price_at_or_after(start, max_forward_sec=BTC_OPEN_LOOKAROUND_SEC)
+    if first_after is not None:
+        prices.coinbase_open_price = first_after
+        prices.coinbase_open_source = "ws_first_after"
+        prices.coinbase_open_delta_ms = None
+        return
+    last_before = feed.price_at_or_before(start, max_backward_sec=BTC_OPEN_LOOKAROUND_SEC)
+    if last_before is not None:
+        prices.coinbase_open_price = last_before
+        prices.coinbase_open_source = "ws_last_before"
+        prices.coinbase_open_delta_ms = None
+        return
+    if age_sec >= 10.0 and not prices.coinbase_open_rest_attempted:
+        prices.coinbase_open_rest_attempted = True
+        rest_open = await feed.fetch_open_at(start)
+        if rest_open is not None:
+            prices.coinbase_open_price = rest_open
+            prices.coinbase_open_source = "rest_candle"
+
+
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _source_name(*, has_binance: bool, has_coinbase: bool, basis_adjusted: bool) -> str:
+    if has_binance and has_coinbase:
+        return "proxy_multi_source_basis_adjusted" if basis_adjusted else "proxy_multi_source"
+    if has_binance:
+        return "proxy_binance_basis_adjusted" if basis_adjusted else "proxy_binance"
+    if has_coinbase:
+        return "proxy_coinbase_basis_adjusted" if basis_adjusted else "proxy_coinbase"
+    return "missing"
+
+
+def effective_price(
+    feed: BinancePriceFeed,
+    coinbase_feed: CoinbaseBtcPriceFeed | None,
+    prices: WindowPrices,
+    *,
+    coinbase_enabled: bool = True,
+) -> EffectivePrice:
+    binance_latest = feed.latest_price
+    coinbase_latest = coinbase_feed.latest_price if coinbase_enabled and coinbase_feed is not None else None
+    all_latest_values = [value for value in (binance_latest, coinbase_latest) if value is not None]
+    all_proxy = _mean(all_latest_values)
+    if all_proxy is None:
+        return EffectivePrice("missing", None, None, binance=binance_latest, coinbase=coinbase_latest)
+
+    paired_sources = [
+        (binance_latest, prices.binance_open_price),
+        (coinbase_latest, prices.coinbase_open_price if coinbase_enabled else None),
+    ]
+    basis_pairs = [(latest, open_price) for latest, open_price in paired_sources if latest is not None and open_price is not None]
+    has_paired_binance = binance_latest is not None and prices.binance_open_price is not None
+    has_paired_coinbase = coinbase_enabled and coinbase_latest is not None and prices.coinbase_open_price is not None
+    spread_usd = abs(binance_latest - coinbase_latest) if binance_latest is not None and coinbase_latest is not None else None
+    spread_bps = (spread_usd / all_proxy) * 10_000.0 if spread_usd is not None and all_proxy else None
+
+    if prices.k_price is not None and basis_pairs:
+        proxy = _mean([latest for latest, _open in basis_pairs])
+        proxy_open = _mean([open_price for _latest, open_price in basis_pairs])
+        assert proxy is not None
+        assert proxy_open is not None
+        basis = proxy_open - prices.k_price
+        effective = proxy - basis
+        return EffectivePrice(
+            _source_name(has_binance=has_paired_binance, has_coinbase=has_paired_coinbase, basis_adjusted=True),
+            effective,
+            (basis / prices.k_price) * 10_000.0,
+            proxy=proxy,
+            proxy_open=proxy_open,
+            binance=binance_latest,
+            coinbase=coinbase_latest,
+            spread_usd=spread_usd,
+            spread_bps=spread_bps,
+        )
+    return EffectivePrice(
+        _source_name(has_binance=binance_latest is not None, has_coinbase=coinbase_latest is not None, basis_adjusted=False),
+        all_proxy,
+        None,
+        proxy=all_proxy,
+        proxy_open=None,
+        binance=binance_latest,
+        coinbase=coinbase_latest,
+        spread_usd=spread_usd,
+        spread_bps=spread_bps,
+    )
 
 
 def avg_price_for_notional(levels: list[tuple[float, float]], target_notional: float) -> tuple[float | None, bool, float, float | None]:
@@ -245,6 +348,7 @@ def build_row(
     window: MarketWindow,
     prices: WindowPrices,
     feed: BinancePriceFeed,
+    coinbase_feed: CoinbaseBtcPriceFeed | None,
     stream: PriceStream,
     now: dt.datetime,
     depth_notional: float,
@@ -254,10 +358,12 @@ def build_row(
     volatility_stale: bool,
     paired_buffer: float,
     volatility: DvolSnapshot | None,
+    coinbase_enabled: bool = True,
 ) -> dict[str, Any]:
     age_sec = (now - window.start_time).total_seconds()
     remaining_sec = (window.end_time - now).total_seconds()
-    price_source, s_price, basis_bps = effective_price(feed, prices)
+    price = effective_price(feed, coinbase_feed, prices, coinbase_enabled=coinbase_enabled)
+    price_source, s_price, basis_bps = price.source, price.effective, price.basis_bps
     good_resolution = is_chainlink_btc_resolution(window.resolution_source, window.description)
     up = token_state(stream, window.up_token, depth_notional, depth_safety_multiplier)
     down = token_state(stream, window.down_token, depth_notional, depth_safety_multiplier)
@@ -278,6 +384,8 @@ def build_row(
         warnings.append("depth_below_target_notional")
     if prices.binance_open_source == "rest_kline":
         warnings.append("binance_open_rest_fallback")
+    if prices.coinbase_open_source == "rest_candle":
+        warnings.append("coinbase_open_rest_fallback")
     if not good_resolution:
         warnings.append("unexpected_resolution_source")
     row = {
@@ -298,10 +406,19 @@ def build_row(
         "s_price": compact_float(s_price, 2),
         "k_price": compact_float(prices.k_price, 2),
         "k_source": prices.k_source,
+        "binance_price": compact_float(price.binance, 2),
+        "coinbase_price": compact_float(price.coinbase, 2),
+        "proxy_price": compact_float(price.proxy, 2),
         "binance_open_price": compact_float(prices.binance_open_price, 2),
         "binance_open_source": prices.binance_open_source,
         "binance_open_delta_ms": prices.binance_open_delta_ms,
+        "coinbase_open_price": compact_float(prices.coinbase_open_price, 2),
+        "coinbase_open_source": prices.coinbase_open_source,
+        "coinbase_open_delta_ms": prices.coinbase_open_delta_ms,
+        "proxy_open_price": compact_float(price.proxy_open, 2),
         "basis_bps": compact_float(basis_bps, 3),
+        "source_spread_usd": compact_float(price.spread_usd, 2),
+        "source_spread_bps": compact_float(price.spread_bps, 3),
         "depth_notional": compact_float(depth_notional, 2),
         "depth_safety_multiplier": compact_float(depth_safety_multiplier, 3),
         "up": up,
@@ -359,6 +476,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-timeout-sec", type=float, default=8.0)
     parser.add_argument("--windows", type=int, default=None)
     parser.add_argument("--include-current-window", action="store_true", help="Start from the in-progress window instead of waiting for the next full one.")
+    parser.add_argument("--coinbase", dest="coinbase_enabled", action="store_true", default=False)
+    parser.add_argument("--no-coinbase", dest="coinbase_enabled", action="store_false")
     return parser
 
 
@@ -369,6 +488,7 @@ async def _noop_price_update(_update) -> None:
 async def run(args: argparse.Namespace) -> int:
     writer = JsonlWriter(args.jsonl)
     feed = BinancePriceFeed("btcusdt")
+    coinbase_feed = CoinbaseBtcPriceFeed() if args.coinbase_enabled else None
     series = MarketSeries.from_known("btc-updown-5m")
     stream = PriceStream(on_price=_noop_price_update)
     tracker = WindowLimitTracker(args.windows)
@@ -378,13 +498,15 @@ async def run(args: argparse.Namespace) -> int:
         window = find_initial_window(series, include_current=args.include_current_window)
         prices = WindowPrices()
         await feed.start()
+        if coinbase_feed is not None:
+            await coinbase_feed.start()
         await stream.connect([window.up_token, window.down_token])
         first = True
         deadline = time.monotonic() + max(0.0, args.warmup_timeout_sec)
         while True:
             if first:
                 while time.monotonic() < deadline:
-                    if feed.latest_price is not None:
+                    if feed.latest_price is not None or (coinbase_feed is not None and coinbase_feed.latest_price is not None):
                         break
                     await asyncio.sleep(0.1)
                 first = False
@@ -392,6 +514,8 @@ async def run(args: argparse.Namespace) -> int:
             age_sec = (now - window.start_time).total_seconds()
             await refresh_k_price(window, prices, age_sec)
             await refresh_binance_open(feed, window, prices, age_sec)
+            if coinbase_feed is not None:
+                await refresh_coinbase_open(coinbase_feed, window, prices, age_sec)
             if next_dvol_refresh is not None and time.monotonic() >= next_dvol_refresh:
                 volatility = await asyncio.to_thread(fetch_dvol_snapshot)
                 next_dvol_refresh = time.monotonic() + args.dvol_refresh_sec
@@ -411,6 +535,7 @@ async def run(args: argparse.Namespace) -> int:
                 window=window,
                 prices=prices,
                 feed=feed,
+                coinbase_feed=coinbase_feed,
                 stream=stream,
                 now=now,
                 depth_notional=args.depth_notional,
@@ -420,6 +545,7 @@ async def run(args: argparse.Namespace) -> int:
                 volatility_stale=volatility_stale,
                 paired_buffer=args.paired_buffer,
                 volatility=volatility,
+                coinbase_enabled=args.coinbase_enabled,
             )
             if args.verbose:
                 row["tokens"] = {"up": window.up_token, "down": window.down_token}
@@ -439,7 +565,10 @@ async def run(args: argparse.Namespace) -> int:
         writer.write({"ts": dt.datetime.now().astimezone().isoformat(), "error": str(exc), "settlement_aligned": False})
         return 1
     finally:
-        for closer in (stream.close(), feed.stop()):
+        closers = [stream.close(), feed.stop()]
+        if coinbase_feed is not None:
+            closers.append(coinbase_feed.stop())
+        for closer in closers:
             try:
                 await asyncio.wait_for(closer, timeout=5.0)
             except Exception:

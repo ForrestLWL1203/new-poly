@@ -24,6 +24,7 @@ class EdgeConfig:
     late_max_spread: float = 0.02
     defensive_profit_min: float = 0.03
     protection_profit_min: float = 0.01
+    final_force_exit_remaining_sec: float = 30.0
     final_hold_min_prob: float = 0.98
     final_hold_min_bid_avg: float = 0.97
     final_hold_min_bid_limit: float = 0.95
@@ -34,6 +35,12 @@ class EdgeConfig:
     min_fair_cap_margin_ticks: float = 0.0
     entry_tick_size: float = 0.01
     min_entry_model_prob: float = 0.0
+    cross_source_max_bps: float = 0.0
+    market_disagrees_exit_threshold: float = 0.0
+    market_disagrees_exit_max_remaining_sec: float = 0.0
+    market_disagrees_exit_min_loss: float = 0.0
+    market_disagrees_exit_min_age_sec: float = 0.0
+    market_disagrees_exit_max_profit: float = 0.01
 
 
 @dataclass(frozen=True)
@@ -69,6 +76,7 @@ class MarketSnapshot:
     down_bid_depth_ok: bool = False
     up_book_age_ms: float | None = None
     down_book_age_ms: float | None = None
+    source_spread_bps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +99,7 @@ class StrategyDecision:
     prob_stagnant: bool | None = None
     prob_delta_3s: float | None = None
     prob_drop_delta: float | None = None
+    market_disagreement: float | None = None
 
 
 def _missing_model_inputs(snapshot: MarketSnapshot) -> bool:
@@ -142,6 +151,33 @@ def _entry_depth_ok(depth_limit: float, safety_limit: float | None, fair_cap: fl
     return (fair_cap - depth_limit) + 1e-12 >= cfg.min_fair_cap_margin_ticks * tick
 
 
+def _source_divergent(snapshot: MarketSnapshot, cfg: EdgeConfig) -> bool:
+    return (
+        cfg.cross_source_max_bps > 0.0
+        and snapshot.source_spread_bps is not None
+        and snapshot.source_spread_bps > cfg.cross_source_max_bps
+    )
+
+
+def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, model_prob: float, bid: float, profit_now: float, cfg: EdgeConfig) -> float | None:
+    if cfg.market_disagrees_exit_threshold <= 0.0:
+        return None
+    if cfg.market_disagrees_exit_max_remaining_sec > 0.0 and snapshot.remaining_sec > cfg.market_disagrees_exit_max_remaining_sec:
+        return None
+    if profit_now > cfg.market_disagrees_exit_max_profit:
+        return None
+    if cfg.market_disagrees_exit_min_loss > 0.0 and profit_now > -cfg.market_disagrees_exit_min_loss:
+        return None
+    if cfg.market_disagrees_exit_min_age_sec > 0.0 and snapshot.age_sec - position.entry_time < cfg.market_disagrees_exit_min_age_sec:
+        return None
+    if position.entry_model_prob <= 0.0 or model_prob <= 0.0:
+        return None
+    entry_ratio = position.entry_avg_price / position.entry_model_prob
+    current_ratio = bid / model_prob
+    disagreement = entry_ratio - current_ratio
+    return disagreement if disagreement >= cfg.market_disagrees_exit_threshold else None
+
+
 def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConfig) -> StrategyDecision:
     if state.has_position:
         return StrategyDecision(action="skip", reason="already_holding")
@@ -157,6 +193,8 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
         return StrategyDecision(action="skip", reason="missing_model_inputs", phase=phase.phase, required_edge=phase.required_edge)
     if _stale_books(snapshot, cfg):
         return StrategyDecision(action="skip", reason="stale_book", phase=phase.phase, required_edge=phase.required_edge)
+    if _source_divergent(snapshot, cfg):
+        return StrategyDecision(action="skip", reason="source_divergence", phase=phase.phase, required_edge=phase.required_edge)
 
     probs = _probs(snapshot)
     candidates: list[StrategyDecision] = []
@@ -209,18 +247,21 @@ def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: Edg
     prob_delta_3s = state.prob_delta(snapshot.age_sec, model_prob, window_sec=cfg.prob_stagnation_window_sec) if state is not None else None
     prob_stagnant = False if prob_delta_3s is None else prob_delta_3s <= cfg.prob_stagnation_epsilon
     prob_drop_delta = state.prob_delta(snapshot.age_sec, model_prob, window_sec=cfg.prob_drop_exit_window_sec) if state is not None and cfg.prob_drop_exit_window_sec > 0.0 and cfg.prob_drop_exit_threshold > 0.0 else None
-    if snapshot.remaining_sec <= 15.0:
+    market_disagreement = _market_disagreement(snapshot, position, model_prob, bid, profit_now, cfg)
+    if snapshot.remaining_sec <= cfg.final_force_exit_remaining_sec:
         strong_hold = model_prob >= cfg.final_hold_min_prob and bid >= cfg.final_hold_min_bid_avg and bid_limit >= cfg.final_hold_min_bid_limit
         if not strong_hold:
-            return StrategyDecision(action="exit", reason="final_force_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta)
+            return StrategyDecision(action="exit", reason="final_force_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement)
     if 15.0 < snapshot.remaining_sec <= 30.0 and profit_now >= cfg.protection_profit_min:
-        return StrategyDecision(action="exit", reason="profit_protection_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta)
+        return StrategyDecision(action="exit", reason="profit_protection_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement)
     if 30.0 < snapshot.remaining_sec <= 60.0 and profit_now >= cfg.defensive_profit_min and prob_stagnant:
-        return StrategyDecision(action="exit", reason="defensive_take_profit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta)
+        return StrategyDecision(action="exit", reason="defensive_take_profit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement)
     if prob_drop_delta is not None and prob_drop_delta <= -cfg.prob_drop_exit_threshold and model_prob < position.entry_model_prob:
-        return StrategyDecision(action="exit", reason="prob_drop_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta)
+        return StrategyDecision(action="exit", reason="prob_drop_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement)
+    if market_disagreement is not None:
+        return StrategyDecision(action="exit", reason="market_disagrees_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement)
     if model_prob < position.entry_avg_price - cfg.model_decay_buffer:
-        return StrategyDecision(action="exit", reason="logic_decay_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta)
+        return StrategyDecision(action="exit", reason="logic_decay_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement)
     if bid > model_prob + cfg.overprice_buffer:
-        return StrategyDecision(action="exit", reason="market_overprice_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta)
-    return StrategyDecision(action="hold", reason="edge_intact", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta)
+        return StrategyDecision(action="exit", reason="market_overprice_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement)
+    return StrategyDecision(action="hold", reason="edge_intact", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement)

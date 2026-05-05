@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from new_poly.market.binance import BinancePriceFeed
+from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import fetch_dvol_snapshot
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.series import MarketSeries
@@ -54,6 +55,7 @@ from scripts.collect_prob_edge_data import (
     find_following_window,
     find_initial_window,
     refresh_binance_open,
+    refresh_coinbase_open,
     refresh_k_price,
     token_state,
 )
@@ -73,6 +75,7 @@ class BotConfig:
     dvol_refresh_sec: float
     max_dvol_age_sec: float
     settlement_boundary_usd: float
+    coinbase_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -233,6 +236,7 @@ def load_bot_config(path: Path) -> BotConfig:
         late_max_spread=float(_deep_get(raw, ("strategy", "late_max_spread"), 0.02)),
         defensive_profit_min=float(_deep_get(raw, ("strategy", "defensive_profit_min"), 0.03)),
         protection_profit_min=float(_deep_get(raw, ("strategy", "protection_profit_min"), 0.01)),
+        final_force_exit_remaining_sec=float(_deep_get(raw, ("strategy", "final_force_exit_remaining_sec"), 30.0)),
         final_hold_min_prob=float(_deep_get(raw, ("strategy", "final_hold_min_prob"), 0.98)),
         final_hold_min_bid_avg=float(_deep_get(raw, ("strategy", "final_hold_min_bid_avg"), 0.97)),
         final_hold_min_bid_limit=float(_deep_get(raw, ("strategy", "final_hold_min_bid_limit"), 0.95)),
@@ -243,6 +247,12 @@ def load_bot_config(path: Path) -> BotConfig:
         min_fair_cap_margin_ticks=float(_deep_get(raw, ("strategy", "min_fair_cap_margin_ticks"), 0.0)),
         entry_tick_size=float(_deep_get(raw, ("strategy", "entry_tick_size"), 0.01)),
         min_entry_model_prob=float(_deep_get(raw, ("strategy", "min_entry_model_prob"), 0.0)),
+        cross_source_max_bps=float(_deep_get(raw, ("strategy", "cross_source_max_bps"), 0.0)),
+        market_disagrees_exit_threshold=float(_deep_get(raw, ("strategy", "market_disagrees_exit_threshold"), 0.0)),
+        market_disagrees_exit_max_remaining_sec=float(_deep_get(raw, ("strategy", "market_disagrees_exit_max_remaining_sec"), 0.0)),
+        market_disagrees_exit_min_loss=float(_deep_get(raw, ("strategy", "market_disagrees_exit_min_loss"), 0.0)),
+        market_disagrees_exit_min_age_sec=float(_deep_get(raw, ("strategy", "market_disagrees_exit_min_age_sec"), 0.0)),
+        market_disagrees_exit_max_profit=float(_deep_get(raw, ("strategy", "market_disagrees_exit_max_profit"), 0.01)),
     )
     execution = ExecutionConfig(
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.4)),
@@ -253,7 +263,7 @@ def load_bot_config(path: Path) -> BotConfig:
         retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.0)),
         buy_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_price_buffer_ticks"), 2.0)),
         buy_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_retry_price_buffer_ticks"), 4.0)),
-        sell_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_price_buffer_ticks"), 3.0)),
+        sell_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_price_buffer_ticks"), 4.0)),
         sell_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_retry_price_buffer_ticks"), 5.0)),
     )
     amount_usd = float(_deep_get(raw, ("execution", "amount_usd"), 5.0))
@@ -266,6 +276,7 @@ def load_bot_config(path: Path) -> BotConfig:
         dvol_refresh_sec=float(_deep_get(raw, ("runtime", "dvol_refresh_sec"), 300.0)),
         max_dvol_age_sec=float(_deep_get(raw, ("runtime", "max_dvol_age_sec"), 900.0)),
         settlement_boundary_usd=float(_deep_get(raw, ("runtime", "settlement_boundary_usd"), 5.0)),
+        coinbase_enabled=bool(_deep_get(raw, ("market_data", "coinbase_enabled"), False)),
     )
 
 
@@ -286,6 +297,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dynamic-state", type=Path, default=DEFAULT_DYNAMIC_STATE)
     parser.add_argument("--log-retention-hours", type=float, default=24.0, help="Prune JSONL rows older than this many hours; <=0 disables pruning")
     parser.add_argument("--log-prune-every-windows", type=int, default=5, help="Run JSONL retention pruning every N completed windows")
+    parser.add_argument("--coinbase", dest="coinbase_enabled", action="store_true", default=None)
+    parser.add_argument("--no-coinbase", dest="coinbase_enabled", action="store_false")
     return parser
 
 
@@ -304,9 +317,11 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
             sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
             sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
         )
-        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
+        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled)
     if args.interval_sec is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd)
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled)
+    if args.coinbase_enabled is not None:
+        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, bool(args.coinbase_enabled))
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
     if args.dynamic_params and args.jsonl is None:
@@ -338,6 +353,7 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
         "event": "config",
         "mode": options.mode,
         "analysis_logs": options.analysis_logs,
+        "coinbase_enabled": cfg.coinbase_enabled,
         "windows": options.windows,
         "once": options.once,
         "strategy": asdict(cfg.edge),
@@ -419,6 +435,29 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
     return row
 
 
+PRICE_RUNTIME_FIELDS = {"price_source", "s_price", "k_price", "basis_bps"}
+PRICE_ANALYSIS_FIELDS = {
+    "binance_price",
+    "coinbase_price",
+    "proxy_price",
+    "binance_open_price",
+    "binance_open_source",
+    "coinbase_open_price",
+    "coinbase_open_source",
+    "proxy_open_price",
+    "source_spread_usd",
+    "source_spread_bps",
+}
+
+
+def _runtime_log_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in meta.items() if key not in PRICE_ANALYSIS_FIELDS}
+
+
+def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
+    return {key: meta.get(key) for key in sorted(PRICE_ANALYSIS_FIELDS) if key in meta}
+
+
 def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str, str]]) -> bool:
     decision = row.get("decision")
     if not isinstance(decision, dict):
@@ -458,7 +497,7 @@ def choose_settlement(
         return {"winning_side": None, "settlement_source": "missing_proxy_price", "settlement_uncertain": True}
     return {
         "winning_side": "up" if latest_proxy_price > prices.k_price else "down",
-        "settlement_source": "binance_proxy",
+        "settlement_source": "multi_source_proxy",
         "settlement_price": latest_proxy_price,
         "settlement_uncertain": abs(latest_proxy_price - prices.k_price) < boundary_usd,
     }
@@ -474,6 +513,7 @@ def _bot_config_with_edge(cfg: BotConfig, edge: EdgeConfig) -> BotConfig:
         dvol_refresh_sec=cfg.dvol_refresh_sec,
         max_dvol_age_sec=cfg.max_dvol_age_sec,
         settlement_boundary_usd=cfg.settlement_boundary_usd,
+        coinbase_enabled=cfg.coinbase_enabled,
     )
 
 
@@ -495,6 +535,12 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         prob_drop_exit_threshold=cfg.edge.prob_drop_exit_threshold,
         settlement_boundary_usd=cfg.settlement_boundary_usd,
         min_entry_model_prob=cfg.edge.min_entry_model_prob,
+        cross_source_max_bps=cfg.edge.cross_source_max_bps,
+        market_disagrees_exit_threshold=cfg.edge.market_disagrees_exit_threshold,
+        market_disagrees_exit_max_remaining_sec=cfg.edge.market_disagrees_exit_max_remaining_sec,
+        market_disagrees_exit_min_loss=cfg.edge.market_disagrees_exit_min_loss,
+        market_disagrees_exit_min_age_sec=cfg.edge.market_disagrees_exit_min_age_sec,
+        market_disagrees_exit_max_profit=cfg.edge.market_disagrees_exit_max_profit,
     )
 
 
@@ -523,11 +569,20 @@ async def _run_dynamic_analysis_task(
     )
 
 
-def _snapshot(window, prices: WindowPrices, feed: BinancePriceFeed, stream: PriceStream, cfg: BotConfig, sigma_eff: float | None) -> tuple[MarketSnapshot, dict[str, Any]]:
+def _snapshot(
+    window,
+    prices: WindowPrices,
+    feed: BinancePriceFeed,
+    coinbase_feed: CoinbaseBtcPriceFeed | None,
+    stream: PriceStream,
+    cfg: BotConfig,
+    sigma_eff: float | None,
+) -> tuple[MarketSnapshot, dict[str, Any]]:
     now = dt.datetime.now(dt.timezone.utc)
     age_sec = (now - window.start_time).total_seconds()
     remaining_sec = (window.end_time - now).total_seconds()
-    price_source, s_price, basis_bps = effective_price(feed, prices)
+    price = effective_price(feed, coinbase_feed, prices, coinbase_enabled=cfg.coinbase_enabled)
+    price_source, s_price, basis_bps = price.source, price.effective, price.basis_bps
     up = token_state(stream, window.up_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     down = token_state(stream, window.down_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     snap = MarketSnapshot(
@@ -555,6 +610,7 @@ def _snapshot(window, prices: WindowPrices, feed: BinancePriceFeed, stream: Pric
         down_bid_depth_ok=bool(down["bid_depth_ok"]),
         up_book_age_ms=up["book_age_ms"],
         down_book_age_ms=down["book_age_ms"],
+        source_spread_bps=price.spread_bps,
     )
     meta = {
         "ts": now.astimezone().isoformat(),
@@ -567,8 +623,16 @@ def _snapshot(window, prices: WindowPrices, feed: BinancePriceFeed, stream: Pric
         "s_price": _compact(s_price, 2),
         "k_price": _compact(prices.k_price, 2),
         "basis_bps": _compact(basis_bps, 3),
+        "binance_price": _compact(price.binance, 2),
+        "coinbase_price": _compact(price.coinbase, 2),
+        "proxy_price": _compact(price.proxy, 2),
         "binance_open_price": _compact(prices.binance_open_price, 2),
         "binance_open_source": prices.binance_open_source,
+        "coinbase_open_price": _compact(prices.coinbase_open_price, 2),
+        "coinbase_open_source": prices.coinbase_open_source,
+        "proxy_open_price": _compact(price.proxy_open, 2),
+        "source_spread_usd": _compact(price.spread_usd, 2),
+        "source_spread_bps": _compact(price.spread_bps, 3),
         "up": up,
         "down": down,
     }
@@ -580,13 +644,14 @@ async def _refresh_entry_retry_params(
     window,
     prices: WindowPrices,
     feed: BinancePriceFeed,
+    coinbase_feed: CoinbaseBtcPriceFeed | None,
     stream: PriceStream,
     cfg: BotConfig,
     sigma_eff: float | None,
     state: StrategyState,
     original_side: str | None,
 ) -> BuyRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, stream, cfg, sigma_eff)
+    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, stream, cfg, sigma_eff)
     decision = evaluate_entry(snap, state, cfg.edge)
     if decision.action != "enter" or decision.side != original_side:
         return None
@@ -602,13 +667,14 @@ async def _refresh_exit_retry_params(
     window,
     prices: WindowPrices,
     feed: BinancePriceFeed,
+    coinbase_feed: CoinbaseBtcPriceFeed | None,
     stream: PriceStream,
     cfg: BotConfig,
     sigma_eff: float | None,
     state: StrategyState,
     position: PositionSnapshot,
 ) -> SellRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, stream, cfg, sigma_eff)
+    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, stream, cfg, sigma_eff)
     decision = evaluate_exit(snap, position, cfg.edge, state)
     if decision.action != "exit" or decision.limit_price is None:
         return None
@@ -636,6 +702,7 @@ async def run(options: RuntimeOptions) -> int:
             dynamic_state = None
             dynamic_start_error = str(exc)
     feed = BinancePriceFeed("btcusdt")
+    coinbase_feed = CoinbaseBtcPriceFeed() if cfg.coinbase_enabled else None
     series = MarketSeries.from_known("btc-updown-5m")
     stream = PriceStream(on_price=_noop_price_update)
     volatility: DvolSnapshot | None = None
@@ -678,12 +745,14 @@ async def run(options: RuntimeOptions) -> int:
         prices = WindowPrices()
         state.reset_for_market(window.slug)
         await feed.start()
+        if coinbase_feed is not None:
+            await coinbase_feed.start()
         await stream.connect([window.up_token, window.down_token])
         if options.mode == "live":
             await asyncio.to_thread(prefetch_order_params, window.up_token)
             await asyncio.to_thread(prefetch_order_params, window.down_token)
         warmup_deadline = time.monotonic() + max(0.0, cfg.warmup_timeout_sec)
-        while time.monotonic() < warmup_deadline and feed.latest_price is None:
+        while time.monotonic() < warmup_deadline and feed.latest_price is None and (coinbase_feed is None or coinbase_feed.latest_price is None):
             await asyncio.sleep(0.1)
 
         while True:
@@ -713,6 +782,8 @@ async def run(options: RuntimeOptions) -> int:
             age_sec = (now - window.start_time).total_seconds()
             await refresh_k_price(window, prices, age_sec)
             await refresh_binance_open(feed, window, prices, age_sec)
+            if coinbase_feed is not None:
+                await refresh_coinbase_open(coinbase_feed, window, prices, age_sec)
             if time.monotonic() >= next_dvol_refresh:
                 try:
                     volatility = await asyncio.to_thread(fetch_dvol_snapshot)
@@ -721,10 +792,11 @@ async def run(options: RuntimeOptions) -> int:
                 next_dvol_refresh = time.monotonic() + cfg.dvol_refresh_sec
             dvol_stale = is_dvol_stale(volatility, now_monotonic=time.monotonic(), max_age_sec=cfg.max_dvol_age_sec)
             sigma_eff = None if dvol_stale or volatility is None else volatility.sigma
-            snap, meta = _snapshot(window, prices, feed, stream, cfg, sigma_eff)
+            snap, meta = _snapshot(window, prices, feed, coinbase_feed, stream, cfg, sigma_eff)
+            price_analysis = _price_analysis(meta)
 
             row: dict[str, Any] = {
-                **meta,
+                **_runtime_log_meta(meta),
                 "mode": options.mode,
                 "event": "tick",
                 "sigma_source": volatility.source if volatility is not None else "missing",
@@ -734,6 +806,8 @@ async def run(options: RuntimeOptions) -> int:
                 "position": state.open_position.__dict__ if state.open_position else None,
                 "realized_pnl": _compact(state.realized_pnl, 4),
             }
+            if options.analysis_logs:
+                row["analysis"] = {"price_sources": price_analysis}
 
             if state.has_position and state.open_position is not None:
                 decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
@@ -755,6 +829,7 @@ async def run(options: RuntimeOptions) -> int:
                             window=window,
                             prices=prices,
                             feed=feed,
+                            coinbase_feed=coinbase_feed,
                             stream=stream,
                             cfg=cfg,
                             sigma_eff=sigma_eff,
@@ -764,7 +839,7 @@ async def run(options: RuntimeOptions) -> int:
                     )
                     row["order"] = result.__dict__
                     if options.analysis_logs:
-                        row["analysis"] = _exit_analysis(decision, result)
+                        row["analysis"] = {**row.get("analysis", {}), **_exit_analysis(decision, result)}
                     if result.success:
                         pnl = state.record_exit(result.avg_price, decision.reason)
                         row["event"] = "exit"
@@ -792,6 +867,7 @@ async def run(options: RuntimeOptions) -> int:
                             window=window,
                             prices=prices,
                             feed=feed,
+                            coinbase_feed=coinbase_feed,
                             stream=stream,
                             cfg=cfg,
                             sigma_eff=sigma_eff,
@@ -801,13 +877,13 @@ async def run(options: RuntimeOptions) -> int:
                     )
                     row["order"] = result.__dict__
                     if options.analysis_logs:
-                        row["analysis"] = _entry_analysis(decision, result)
+                        row["analysis"] = {**row.get("analysis", {}), **_entry_analysis(decision, result)}
                     if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
                         state.record_entry(PositionSnapshot(
                             market_slug=window.slug,
                             token_side=decision.side,
                             token_id=token_id,
-                            entry_time=time.time(),
+                            entry_time=snap.age_sec,
                             entry_avg_price=result.avg_price,
                             filled_shares=result.filled_size,
                             entry_model_prob=decision.model_prob,
@@ -830,7 +906,8 @@ async def run(options: RuntimeOptions) -> int:
             await asyncio.sleep(cfg.interval_sec)
             if dt.datetime.now(dt.timezone.utc) >= window.end_time:
                 if state.has_position and state.open_position is not None:
-                    settlement = choose_settlement(prices, feed.latest_price, boundary_usd=cfg.settlement_boundary_usd)
+                    settlement_price = effective_price(feed, coinbase_feed, prices, coinbase_enabled=cfg.coinbase_enabled).effective
+                    settlement = choose_settlement(prices, settlement_price, boundary_usd=cfg.settlement_boundary_usd)
                     settled_position = state.open_position
                     if settlement["winning_side"] is not None:
                         pnl = state.record_settlement(settlement["winning_side"])
@@ -843,7 +920,7 @@ async def run(options: RuntimeOptions) -> int:
                         "market_slug": window.slug,
                         **settlement,
                         "settlement_price": _compact(settlement.get("settlement_price"), 2),
-                        "settlement_proxy_price": _compact(feed.latest_price, 2),
+                        "settlement_proxy_price": _compact(settlement_price, 2),
                         "k_price": _compact(prices.k_price, 2),
                         "position": settled_position.__dict__,
                         "settlement_pnl": _compact(pnl, 4),
@@ -956,7 +1033,10 @@ async def run(options: RuntimeOptions) -> int:
         logger.write({"ts": dt.datetime.now().astimezone().isoformat(), "event": "error", "error": str(exc)})
         return 1
     finally:
-        for closer in (stream.close(), feed.stop()):
+        closers = [stream.close(), feed.stop()]
+        if coinbase_feed is not None:
+            closers.append(coinbase_feed.stop())
+        for closer in closers:
             try:
                 await asyncio.wait_for(closer, timeout=5.0)
             except Exception:

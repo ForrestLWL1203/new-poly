@@ -51,10 +51,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
     parser.add_argument("--buy-slippage-ticks", type=float)
     parser.add_argument("--sell-slippage-ticks", type=float)
-    parser.add_argument("--sell-price-buffer-ticks", type=float, default=3.0)
+    parser.add_argument("--sell-price-buffer-ticks", type=float, default=4.0)
     parser.add_argument("--sell-retry-price-buffer-ticks", type=float, default=5.0)
     parser.add_argument("--prob-drop-exit-window-sec", type=float, default=0.0)
     parser.add_argument("--prob-drop-exit-threshold", type=float, default=0.0)
+    parser.add_argument("--final-force-exit-remaining-sec", type=float, default=30.0)
+    parser.add_argument("--cross-source-max-bps", type=float, default=0.0)
+    parser.add_argument("--market-disagrees-exit-threshold", type=float, default=0.0)
+    parser.add_argument("--market-disagrees-exit-max-remaining-sec", type=float, default=0.0)
+    parser.add_argument("--market-disagrees-exit-min-loss", type=float, default=0.0)
+    parser.add_argument("--market-disagrees-exit-min-age-sec", type=float, default=0.0)
+    parser.add_argument("--market-disagrees-exit-max-profit", type=float, default=0.01)
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
     parser.add_argument("--early-grid", default="0.08,0.10,0.12")
@@ -86,6 +93,13 @@ def main() -> int:
         sell_retry_price_buffer_ticks=args.sell_retry_price_buffer_ticks,
         prob_drop_exit_window_sec=args.prob_drop_exit_window_sec,
         prob_drop_exit_threshold=args.prob_drop_exit_threshold,
+        final_force_exit_remaining_sec=args.final_force_exit_remaining_sec,
+        cross_source_max_bps=args.cross_source_max_bps,
+        market_disagrees_exit_threshold=args.market_disagrees_exit_threshold,
+        market_disagrees_exit_max_remaining_sec=args.market_disagrees_exit_max_remaining_sec,
+        market_disagrees_exit_min_loss=args.market_disagrees_exit_min_loss,
+        market_disagrees_exit_min_age_sec=args.market_disagrees_exit_min_age_sec,
+        market_disagrees_exit_max_profit=args.market_disagrees_exit_max_profit,
         settlement_boundary_usd=args.settlement_boundary_usd,
         min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,
         entry_tick_size=args.entry_tick_size,

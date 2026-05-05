@@ -8,6 +8,7 @@ strategy-neutral modules that are useful here. They were migrated into
 
 ```text
 new_poly/market/binance.py
+new_poly/market/coinbase.py
 new_poly/market/series.py
 new_poly/market/market.py
 new_poly/market/stream.py
@@ -27,6 +28,15 @@ new_poly/logging_utils.py
 - `price_at_or_before`.
 - `first_price_at_or_after`.
 - Binance 1-minute kline REST fallback through the standard library.
+
+`new_poly.market.coinbase.CoinbaseBtcPriceFeed`
+
+- Persistent Coinbase BTC-USD match WebSocket.
+- Rolling price history.
+- `latest_price`.
+- `price_at_or_before`.
+- `first_price_at_or_after`.
+- Coinbase 1-minute candle REST fallback through the standard library.
 
 `new_poly.market.market`
 

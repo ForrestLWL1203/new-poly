@@ -15,6 +15,7 @@ strategy:
   late_max_spread: 0.02
   defensive_profit_min: 0.03
   protection_profit_min: 0.01
+  final_force_exit_remaining_sec: 30.0
   final_hold_min_prob: 0.98
   final_hold_min_bid_avg: 0.97
   final_hold_min_bid_limit: 0.95
@@ -25,6 +26,12 @@ strategy:
   min_fair_cap_margin_ticks: 1.0
   entry_tick_size: 0.01
   min_entry_model_prob: 0.35
+  cross_source_max_bps: 5.0
+  market_disagrees_exit_threshold: 0.30
+  market_disagrees_exit_max_remaining_sec: 60.0
+  market_disagrees_exit_min_loss: 0.03
+  market_disagrees_exit_min_age_sec: 3.0
+  market_disagrees_exit_max_profit: 0.01
 
 execution:
   amount_usd: 5.0
@@ -36,7 +43,7 @@ execution:
   retry_interval_sec: 0.0
   buy_price_buffer_ticks: 2
   buy_retry_price_buffer_ticks: 4
-  sell_price_buffer_ticks: 3
+  sell_price_buffer_ticks: 4
   sell_retry_price_buffer_ticks: 5
 
 runtime:
@@ -46,3 +53,6 @@ runtime:
   dvol_refresh_sec: 300
   max_dvol_age_sec: 900
   settlement_boundary_usd: 5
+
+market_data:
+  coinbase_enabled: false

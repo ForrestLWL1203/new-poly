@@ -521,8 +521,15 @@ def candidate_results_from_rows(rows: Iterable[dict[str, Any]], cfg: DynamicConf
                 sell_retry_price_buffer_ticks=base.sell_retry_price_buffer_ticks,
                 prob_drop_exit_window_sec=base.prob_drop_exit_window_sec,
                 prob_drop_exit_threshold=base.prob_drop_exit_threshold,
+                final_force_exit_remaining_sec=base.final_force_exit_remaining_sec,
                 settlement_boundary_usd=base.settlement_boundary_usd,
                 min_entry_model_prob=base.min_entry_model_prob,
+                cross_source_max_bps=base.cross_source_max_bps,
+                market_disagrees_exit_threshold=base.market_disagrees_exit_threshold,
+                market_disagrees_exit_max_remaining_sec=base.market_disagrees_exit_max_remaining_sec,
+                market_disagrees_exit_min_loss=base.market_disagrees_exit_min_loss,
+                market_disagrees_exit_min_age_sec=base.market_disagrees_exit_min_age_sec,
+                market_disagrees_exit_max_profit=base.market_disagrees_exit_max_profit,
             ),
         )
         summary = result.summary

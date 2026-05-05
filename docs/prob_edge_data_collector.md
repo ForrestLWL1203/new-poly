@@ -24,8 +24,9 @@ The collector records:
 - Polymarket Gamma market slug/token metadata.
 - Polymarket crypto price API for the UI Price to Beat:
   `k_price = openPrice`.
-- Binance BTC/USDT trade WebSocket as the current proxy BTC price.
-- Binance open price inside the window boundary lookaround
+- Binance BTC/USDT trade WebSocket as one proxy BTC price source.
+- Optional Coinbase BTC-USD match WebSocket as a second proxy BTC price source.
+- Binance and, when enabled, Coinbase open prices inside the window boundary lookaround
   `(window_start - 5s, window_start + 5s)`, used to compute `basis_bps`.
 - Polymarket CLOB WebSocket top/depth summaries for UP and DOWN tokens.
 - Deribit BTC DVOL snapshot as 30-day implied-volatility reference.
@@ -40,11 +41,29 @@ Direct realtime Chainlink Data Streams access is not integrated yet, so:
 
 ```text
 settlement_aligned = false
-price_source = proxy_binance or proxy_binance_basis_adjusted
+price_source = proxy_binance or proxy_binance_basis_adjusted by default
 ```
 
 Strategy code and backtests should treat this as proxy data unless a true
 settlement-aligned source is added.
+
+Coinbase is off by default. Pass `--coinbase` when collecting data to start the
+Coinbase feed. When both Binance and Coinbase are live, the collector uses their
+arithmetic mean for `proxy_price`. Once `k_price` and at least one matching open
+price are known, it applies the open-basis adjustment using only sources that
+have both a live price and a same-window open price:
+
+```text
+proxy_live = mean(valid paired live prices)
+proxy_open = mean(valid paired open prices)
+basis = proxy_open - k_price
+s_price = proxy_live - basis
+```
+
+If Coinbase is disabled or unavailable, the collector uses the existing Binance
+single-source proxy. `source_spread_usd` and `source_spread_bps` show the live
+Binance/Coinbase disagreement only when Coinbase is enabled and both sources are
+available.
 
 ## Usage
 
@@ -119,10 +138,19 @@ price_source
 s_price
 k_price
 k_source
+binance_price
+coinbase_price
+proxy_price
 binance_open_price
 binance_open_source
 binance_open_delta_ms
+coinbase_open_price
+coinbase_open_source
+coinbase_open_delta_ms
+proxy_open_price
 basis_bps
+source_spread_usd
+source_spread_bps
 depth_notional
 up
 down

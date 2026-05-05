@@ -56,7 +56,7 @@ position can sell into current bid depth, replay fills from `bid_avg` and only
 uses the floor as a lower bound:
 
 ```text
-normal exits:      max(bid_avg - sell_slippage_ticks, bid_limit - 3 ticks)
+normal exits:      max(bid_avg - sell_slippage_ticks, bid_limit - 4 ticks)
 final_force_exit:  max(bid_avg - sell_slippage_ticks, bid_limit - 5 ticks)
 ```
 
@@ -109,13 +109,29 @@ The replay uses:
 - `up/down.ask_avg` and `up/down.ask_limit` for entry
 - `up/down.bid_avg` and `up/down.bid_limit` for exit
 - `volatility_stale=true` as missing sigma, matching live behavior
+- `source_spread_bps` when present, so `cross_source_max_bps` can reproduce the
+  live source-divergence entry skip
 
 Entry decisions still use size-aware `ask_avg` for edge screening, but simulated
 fills use the worse executable depth limit. If slippage pushes BUY above the
 fair cap (`model_prob - required_edge`), the fill is skipped.
 
+The backtest CLI exposes the live risk gates:
+
+```text
+--cross-source-max-bps
+--market-disagrees-exit-threshold
+--market-disagrees-exit-max-remaining-sec
+--market-disagrees-exit-min-loss
+--market-disagrees-exit-min-age-sec
+--market-disagrees-exit-max-profit
+```
+
+Older JSONL without Coinbase fields cannot evaluate cross-source divergence;
+those rows behave as if the source-spread gate has no signal.
+
 SELL replay uses the same floor semantics as paper/live. Normal profit and stop
-exits default to a `3 tick` first floor, while final-force exits use `5 ticks`.
+exits default to a `4 tick` first floor, while final-force exits use `5 ticks`.
 The fill price comes from `bid_avg` unless explicit sell slippage is requested;
 the floor is only a minimum acceptable FAK price. The floor is clamped at one
 tick, matching the live executor behavior on very low-priced tokens.
@@ -154,7 +170,8 @@ fast probability-drop exit guard. The current aggressive profile uses `5` and
 `0.06`.
 
 If a position remains open after the final available row for a window, it is
-settled using Binance proxy direction:
+settled using the collected proxy direction. New collector/bot logs use
+Binance+Coinbase when both are available and fall back to Binance otherwise:
 
 ```text
 s_price > k_price => UP wins
