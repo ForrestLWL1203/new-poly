@@ -16,6 +16,8 @@ from new_poly.strategy.dynamic_params import (
     recent_completed_window_rows,
     summarize_actual_results,
 )
+from new_poly.bot_dynamic import DynamicParamController
+from new_poly.bot_runtime import build_arg_parser, build_runtime_options
 
 
 def _profiles() -> list[SignalProfile]:
@@ -217,3 +219,51 @@ def test_profile_risk_rank_not_yaml_order_controls_de_risking() -> None:
     rejected = {candidate.profile: candidate.rejection_reason for candidate in decision.candidate_results}
     assert rejected["aggressive"] == "more_aggressive_than_active"
     assert decision.selected_profile == "conservative"
+
+
+def test_dynamic_controller_applies_pending_profile_at_window_boundary(tmp_path) -> None:
+    options = build_runtime_options(build_arg_parser().parse_args([
+        "--mode",
+        "paper",
+        "--dynamic-state",
+        str(tmp_path / "dynamic-state.json"),
+    ]))
+    controller = DynamicParamController(
+        cfg=_config(),
+        state=DynamicState(
+            active_profile="aggressive",
+            pending_profile="balanced",
+            last_check_result={
+                "health": {"healthy": False},
+                "candidate_results": [{"profile": "balanced"}],
+            },
+        ),
+    )
+
+    class Logger:
+        def __init__(self) -> None:
+            self.rows = []
+
+        def write(self, row) -> None:
+            self.rows.append(row)
+
+    logger = Logger()
+
+    new_cfg, new_state = controller.apply_pending_profile(
+        next_window_slug="m-next",
+        cfg=options.config,
+        logger=logger,
+        options=options,
+    )
+
+    assert new_state is not None
+    assert new_state.active_profile == "balanced"
+    assert new_state.pending_profile is None
+    assert new_state.switched_at_window_id == "m-next"
+    assert new_cfg.edge.entry_start_age_sec == 105
+    assert new_cfg.edge.core_required_edge == 0.16
+    assert logger.rows[0]["event"] == "config_update"
+    assert logger.rows[0]["from_profile"] == "aggressive"
+    assert logger.rows[0]["to_profile"] == "balanced"
+    assert logger.rows[0]["health_check"] == {"healthy": False}
+    assert logger.rows[0]["candidate_results"] == [{"profile": "balanced"}]

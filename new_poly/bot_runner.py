@@ -304,6 +304,12 @@ class BotRunner:
             dynamic_cfg=self.dynamic.cfg,
             dynamic_state=self.dynamic.state,
             dynamic_task=self.dynamic.task,
+            apply_pending_dynamic_profile=lambda next_window_slug, cfg: self.dynamic.apply_pending_profile(
+                next_window_slug=next_window_slug,
+                cfg=cfg,
+                logger=self.logger,
+                options=self.options,
+            ),
         )
         self.dynamic.update_after_window_close(state=dynamic_state, task=dynamic_task)
         self.set_window_context(WindowContext(window=window, prices=prices))

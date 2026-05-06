@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import time
-from dataclasses import dataclass, replace
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from new_poly.bot_runtime import (
     BotConfig,
@@ -15,10 +15,7 @@ from new_poly.bot_runtime import (
     RuntimeOptions,
     WindowPrices,
     _backtest_base_config,
-    _bot_config_with_edge,
     _compact,
-    _dynamic_candidate_payload,
-    _dynamic_health_payload,
     _polymarket_reference_recovered_row,
     _polymarket_reference_unhealthy_row,
     _run_dynamic_analysis_task,
@@ -292,6 +289,7 @@ async def _handle_window_close(
     dynamic_cfg: DynamicConfig | None,
     dynamic_state: DynamicState | None,
     dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None,
+    apply_pending_dynamic_profile: Callable[[str, BotConfig], tuple[BotConfig, DynamicState | None]] | None = None,
 ) -> tuple[Any, WindowPrices, BotConfig, DynamicState | None, asyncio.Task[tuple[DynamicDecision, DynamicState]] | None, bool]:
     _settle_open_position_if_needed(
         window=window,
@@ -336,59 +334,8 @@ async def _handle_window_close(
         return window, prices, cfg, dynamic_state, dynamic_task, True
 
     next_window = find_following_window(window, series)
-    if dynamic_cfg is not None and dynamic_state is not None and dynamic_state.pending_profile is not None:
-        try:
-            old_profile = dynamic_state.active_profile
-            old_edge = cfg.edge
-            profile = dynamic_cfg.profile(dynamic_state.pending_profile)
-            cfg = _bot_config_with_edge(cfg, profile.apply_to(cfg.edge))
-            now_ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat()
-            history = list(dynamic_state.switch_history)
-            history.append({
-                "from_profile": old_profile,
-                "to_profile": profile.name,
-                "applied_at_window": next_window.slug,
-                "switched_at_ts": now_ts,
-                "health_check": dynamic_state.last_check_result,
-            })
-            dynamic_state = replace(
-                dynamic_state,
-                active_profile=profile.name,
-                pending_profile=None,
-                switched_at_window_id=next_window.slug,
-                switched_at_ts=now_ts,
-                switch_history=history,
-            )
-            save_dynamic_state(options.dynamic_state, dynamic_state)
-            logger.write({
-                "ts": now_ts,
-                "event": "config_update",
-                "mode": options.mode,
-                "from_profile": old_profile,
-                "to_profile": profile.name,
-                "applied_at_window": next_window.slug,
-                "reason": "dynamic_params",
-                "health_check": _dynamic_health_payload(dynamic_state.last_check_result),
-                "candidate_results": _dynamic_candidate_payload(dynamic_state.last_check_result),
-                "old_signal_params": {
-                    "entry_start_age_sec": old_edge.entry_start_age_sec,
-                    "entry_end_age_sec": old_edge.entry_end_age_sec,
-                    "early_required_edge": old_edge.early_required_edge,
-                    "core_required_edge": old_edge.core_required_edge,
-                    "max_entries_per_market": old_edge.max_entries_per_market,
-                },
-                "new_signal_params": profile.signal_params(),
-            })
-        except Exception as exc:
-            logger.write({
-                "ts": dt.datetime.now().astimezone().isoformat(),
-                "event": "dynamic_error",
-                "mode": options.mode,
-                "market_slug": next_window.slug,
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "action": "keep_current",
-            })
+    if apply_pending_dynamic_profile is not None:
+        cfg, dynamic_state = apply_pending_dynamic_profile(next_window.slug, cfg)
 
     window = next_window
     prices = WindowPrices()

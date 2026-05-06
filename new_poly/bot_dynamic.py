@@ -7,7 +7,14 @@ import datetime as dt
 from dataclasses import dataclass, replace
 
 from new_poly.bot_loop import _drain_dynamic_task
-from new_poly.bot_runtime import BotConfig, JsonlLogger, RuntimeOptions, _bot_config_with_edge
+from new_poly.bot_runtime import (
+    BotConfig,
+    JsonlLogger,
+    RuntimeOptions,
+    _bot_config_with_edge,
+    _dynamic_candidate_payload,
+    _dynamic_health_payload,
+)
 from new_poly.strategy.dynamic_params import (
     DynamicConfig,
     DynamicDecision,
@@ -74,3 +81,68 @@ class DynamicParamController:
     ) -> None:
         self.state = state
         self.task = task
+
+    def apply_pending_profile(
+        self,
+        *,
+        next_window_slug: str,
+        cfg: BotConfig,
+        logger: JsonlLogger,
+        options: RuntimeOptions,
+    ) -> tuple[BotConfig, DynamicState | None]:
+        if self.cfg is None or self.state is None or self.state.pending_profile is None:
+            return cfg, self.state
+        try:
+            old_profile = self.state.active_profile
+            old_edge = cfg.edge
+            profile = self.cfg.profile(self.state.pending_profile)
+            new_cfg = _bot_config_with_edge(cfg, profile.apply_to(cfg.edge))
+            now_ts = dt.datetime.now(dt.timezone.utc).astimezone().isoformat()
+            history = list(self.state.switch_history)
+            history.append({
+                "from_profile": old_profile,
+                "to_profile": profile.name,
+                "applied_at_window": next_window_slug,
+                "switched_at_ts": now_ts,
+                "health_check": self.state.last_check_result,
+            })
+            self.state = replace(
+                self.state,
+                active_profile=profile.name,
+                pending_profile=None,
+                switched_at_window_id=next_window_slug,
+                switched_at_ts=now_ts,
+                switch_history=history,
+            )
+            save_dynamic_state(options.dynamic_state, self.state)
+            logger.write({
+                "ts": now_ts,
+                "event": "config_update",
+                "mode": options.mode,
+                "from_profile": old_profile,
+                "to_profile": profile.name,
+                "applied_at_window": next_window_slug,
+                "reason": "dynamic_params",
+                "health_check": _dynamic_health_payload(self.state.last_check_result),
+                "candidate_results": _dynamic_candidate_payload(self.state.last_check_result),
+                "old_signal_params": {
+                    "entry_start_age_sec": old_edge.entry_start_age_sec,
+                    "entry_end_age_sec": old_edge.entry_end_age_sec,
+                    "early_required_edge": old_edge.early_required_edge,
+                    "core_required_edge": old_edge.core_required_edge,
+                    "max_entries_per_market": old_edge.max_entries_per_market,
+                },
+                "new_signal_params": profile.signal_params(),
+            })
+            return new_cfg, self.state
+        except Exception as exc:
+            logger.write({
+                "ts": dt.datetime.now().astimezone().isoformat(),
+                "event": "dynamic_error",
+                "mode": options.mode,
+                "market_slug": next_window_slug,
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "action": "keep_current",
+            })
+            return cfg, self.state
