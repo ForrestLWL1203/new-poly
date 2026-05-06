@@ -257,6 +257,27 @@ def _settle_open_position_if_needed(
     })
 
 
+def _prune_logs_after_window_if_needed(
+    *,
+    loop: LoopRuntime,
+    logger: JsonlLogger,
+    options: RuntimeOptions,
+) -> None:
+    if loop.completed_windows <= 0 or loop.completed_windows % options.log_prune_every_windows != 0:
+        return
+    removed_log_rows = logger.prune()
+    if not removed_log_rows:
+        return
+    logger.write({
+        "ts": dt.datetime.now().astimezone().isoformat(),
+        "event": "log_retention",
+        "mode": options.mode,
+        "retention_hours": options.log_retention_hours,
+        "prune_every_windows": options.log_prune_every_windows,
+        "removed_rows": removed_log_rows,
+    })
+
+
 async def _handle_window_close(
     *,
     window: Any,
@@ -283,17 +304,7 @@ async def _handle_window_close(
     )
     if prices.k_price is not None:
         loop.completed_windows += 1
-    if loop.completed_windows > 0 and loop.completed_windows % options.log_prune_every_windows == 0:
-        removed_log_rows = logger.prune()
-        if removed_log_rows:
-            logger.write({
-                "ts": dt.datetime.now().astimezone().isoformat(),
-                "event": "log_retention",
-                "mode": options.mode,
-                "retention_hours": options.log_retention_hours,
-                "prune_every_windows": options.log_prune_every_windows,
-                "removed_rows": removed_log_rows,
-            })
+    _prune_logs_after_window_if_needed(loop=loop, logger=logger, options=options)
     if (
         dynamic_cfg is not None
         and dynamic_state is not None

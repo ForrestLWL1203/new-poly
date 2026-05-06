@@ -17,12 +17,15 @@ from new_poly.strategy.dynamic_params import DynamicConfig, DynamicState, Signal
 class DummyLogger:
     def __init__(self) -> None:
         self.rows = []
+        self.prune_result = 0
+        self.prune_calls = 0
 
     def write(self, row) -> None:
         self.rows.append(row)
 
     def prune(self) -> int:
-        return 0
+        self.prune_calls += 1
+        return self.prune_result
 
     def close(self) -> None:
         pass
@@ -226,3 +229,23 @@ def test_settle_open_position_writes_settlement_row(monkeypatch) -> None:
     assert row["winning_side"] == "up"
     assert row["settlement_proxy_price"] == 105.0
     assert row["settlement_pnl"] == 1.2
+
+
+def test_prune_logs_after_window_writes_retention_row() -> None:
+    from new_poly.bot_loop import LoopRuntime, _prune_logs_after_window_if_needed
+
+    options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+    logger = DummyLogger()
+    logger.prune_result = 7
+    loop = LoopRuntime(completed_windows=10)
+
+    _prune_logs_after_window_if_needed(loop=loop, logger=logger, options=options)
+
+    assert logger.prune_calls == 1
+    assert len(logger.rows) == 1
+    row = logger.rows[0]
+    assert row["event"] == "log_retention"
+    assert row["mode"] == "paper"
+    assert row["retention_hours"] == options.log_retention_hours
+    assert row["prune_every_windows"] == options.log_prune_every_windows
+    assert row["removed_rows"] == 7
