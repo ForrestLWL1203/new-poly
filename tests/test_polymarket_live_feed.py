@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import asyncio
+import logging
 from pathlib import Path
 
 import pytest
@@ -78,7 +79,7 @@ def test_feed_defaults_to_fast_stale_reconnect() -> None:
 
 
 @pytest.mark.asyncio
-async def test_feed_reconnects_when_messages_have_no_valid_ticks(monkeypatch) -> None:
+async def test_feed_reconnects_when_messages_have_no_valid_ticks(monkeypatch, caplog) -> None:
     instances = []
 
     class EmptyPriceWs:
@@ -99,6 +100,7 @@ async def test_feed_reconnects_when_messages_have_no_valid_ticks(monkeypatch) ->
     async def fake_connect(*_args, **_kwargs):
         return EmptyPriceWs()
 
+    caplog.set_level(logging.WARNING, logger="new_poly.market.polymarket_live")
     monkeypatch.setattr(polymarket_live.websockets, "connect", fake_connect)
     feed = PolymarketChainlinkBtcPriceFeed(stale_reconnect_sec=1.0)
 
@@ -111,3 +113,4 @@ async def test_feed_reconnects_when_messages_have_no_valid_ticks(monkeypatch) ->
         await feed.stop()
 
     assert instances[0].closed is True
+    assert not [record for record in caplog.records if "reconnecting" in record.getMessage()]

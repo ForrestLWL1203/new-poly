@@ -174,7 +174,7 @@ class PolymarketChainlinkBtcPriceFeed:
                     try:
                         msg = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
                     except asyncio.TimeoutError:
-                        log.warning("PolymarketChainlinkBtcPriceFeed stale for %.1fs, reconnecting...", self._stale_reconnect_sec)
+                        log.debug("PolymarketChainlinkBtcPriceFeed stale for %.1fs, reconnecting...", self._stale_reconnect_sec)
                         try:
                             await asyncio.wait_for(self._ws.close(), timeout=3.0)
                         except Exception:
@@ -192,7 +192,7 @@ class PolymarketChainlinkBtcPriceFeed:
                         last_tick_monotonic = time.monotonic()
                         self._prune(time.time())
                     elif time.monotonic() - last_tick_monotonic >= self._stale_reconnect_sec:
-                        log.warning("PolymarketChainlinkBtcPriceFeed received no valid ticks for %.1fs, reconnecting...", self._stale_reconnect_sec)
+                        log.debug("PolymarketChainlinkBtcPriceFeed received no valid ticks for %.1fs, reconnecting...", self._stale_reconnect_sec)
                         try:
                             await asyncio.wait_for(self._ws.close(), timeout=3.0)
                         except Exception:
@@ -202,7 +202,7 @@ class PolymarketChainlinkBtcPriceFeed:
             except asyncio.CancelledError:
                 raise
             except websockets.ConnectionClosed:
-                log.warning("PolymarketChainlinkBtcPriceFeed WS closed, reconnecting...")
+                log.debug("PolymarketChainlinkBtcPriceFeed WS closed, reconnecting...")
                 self._ws = None
             except Exception as e:
                 log.warning("PolymarketChainlinkBtcPriceFeed error: %s", e)
