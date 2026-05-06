@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from new_poly.bot_dynamic import DynamicParamController
+from new_poly.bot_execution_flow import handle_flat_tick, handle_open_position_tick
 from new_poly.bot_logging import build_tick_row, write_tick_row
 from new_poly.bot_loop import (
     DvolRuntime,
@@ -15,8 +16,6 @@ from new_poly.bot_loop import (
     LoopRuntime,
     WindowContext,
     _advance_dvol_refresh,
-    _handle_flat_tick,
-    _handle_open_position_tick,
     _handle_window_close,
     _refresh_window_inputs,
 )
@@ -54,6 +53,17 @@ class StartedContext:
     gateway: Gateway
     window: MarketWindow
     prices: WindowPrices
+
+
+@dataclass(slots=True)
+class TickContext:
+    sigma_eff: float | None
+    dvol_stale: bool
+    snap: MarketSnapshot
+    meta: dict[str, Any]
+    price_analysis: dict[str, Any]
+    reference_meta: dict[str, Any]
+    row: dict[str, Any]
 
 
 class BotRunner:
@@ -150,6 +160,17 @@ class BotRunner:
 
     async def run_tick(self) -> bool:
         await self.drain_dynamic_task()
+        tick = await self.prepare_tick_context()
+        decision = await self.handle_strategy_tick(
+            row=tick.row,
+            snap=tick.snap,
+            sigma_eff=tick.sigma_eff,
+            price_analysis=tick.price_analysis,
+        )
+        self.write_tick_context(tick, decision)
+        return self.options.once
+
+    async def prepare_tick_context(self) -> TickContext:
         await self.refresh_window_inputs()
         sigma_eff, dvol_stale = await self.advance_dvol()
         snap, meta = self.build_snapshot(sigma_eff)
@@ -163,22 +184,26 @@ class BotRunner:
             sigma_eff=sigma_eff,
             dvol_stale=dvol_stale,
         )
-        decision = await self.handle_strategy_tick(
-            row=row,
-            snap=snap,
+        return TickContext(
             sigma_eff=sigma_eff,
+            dvol_stale=dvol_stale,
+            snap=snap,
+            meta=meta,
             price_analysis=price_analysis,
+            reference_meta=reference_meta,
+            row=row,
         )
+
+    def write_tick_context(self, tick: TickContext, decision: StrategyDecision) -> None:
         write_tick_row(
             logger=self.logger,
             loop=self.loop,
             options=self.options,
             state=self.state,
-            row=row,
-            reference_meta=reference_meta,
+            row=tick.row,
+            reference_meta=tick.reference_meta,
             decision=decision,
         )
-        return self.options.once
 
     async def drain_dynamic_task(self) -> None:
         await self.dynamic.drain(
@@ -231,7 +256,7 @@ class BotRunner:
         price_analysis: dict[str, Any],
     ) -> StrategyDecision:
         if self.state.has_position and self.state.open_position is not None:
-            return await _handle_open_position_tick(
+            return await handle_open_position_tick(
                 row=row,
                 snap=snap,
                 window=self.active.window,
@@ -244,7 +269,7 @@ class BotRunner:
                 sigma_eff=sigma_eff,
                 price_analysis=price_analysis,
             )
-        return await _handle_flat_tick(
+        return await handle_flat_tick(
             row=row,
             snap=snap,
             window=self.active.window,

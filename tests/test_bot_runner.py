@@ -4,10 +4,12 @@ import asyncio
 import datetime as dt
 from dataclasses import replace
 
-from new_poly.bot_loop import FeedContext
+from new_poly.bot_loop import DvolRuntime, FeedContext
 from new_poly.bot_runner import BotRunner, StartedContext, StartupContext
-from new_poly.bot_runtime import WindowPrices, build_arg_parser, build_runtime_options
+from new_poly.bot_runtime import DvolRefreshState, WindowPrices, build_arg_parser, build_runtime_options
+from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.market import MarketWindow
+from new_poly.strategy.prob_edge import MarketSnapshot
 from new_poly.strategy.dynamic_params import DynamicConfig, DynamicState, SignalProfile
 
 
@@ -110,5 +112,69 @@ def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
         assert runner.active.gateway is gateway
 
         await asyncio.gather(initial_dynamic_task, dynamic_task, runner.dynamic.task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_prepare_tick_context_collects_snapshot_and_row(monkeypatch) -> None:
+    async def scenario() -> None:
+        options = build_runtime_options(build_arg_parser().parse_args(["--once"]))
+        runner = BotRunner(options)
+        runner.logger = DummyLogger()
+        feeds = FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream())
+        window = _window("m1")
+        runner.startup_context = StartupContext(feeds=feeds, gateway=object())
+        runner.context = StartedContext(feeds=feeds, gateway=object(), window=window, prices=WindowPrices(k_price=100.0))
+        runner.dvol = DvolRuntime(
+            state=DvolRefreshState(DvolSnapshot(
+                source="test_dvol",
+                currency="BTC",
+                dvol=60.0,
+                sigma=0.6,
+                timestamp_ms=1,
+                fetched_at=1.0,
+            )),
+            refresh_task=None,
+            refresh_market_slug=None,
+            next_refresh=999999999.0,
+        )
+        snap = MarketSnapshot(
+            market_slug=window.slug,
+            age_sec=1.0,
+            remaining_sec=299.0,
+            s_price=101.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        meta = {
+            "ts": "2026-05-06T00:00:01+00:00",
+            "market_slug": window.slug,
+            "age_sec": 1.0,
+            "remaining_sec": 299.0,
+            "s_price": 101.0,
+            "k_price": 100.0,
+        }
+
+        async def fake_refresh_window_inputs():
+            runner.active.prices.k_price = 100.0
+
+        async def fake_advance_dvol():
+            return 0.6, False
+
+        monkeypatch.setattr(runner, "refresh_window_inputs", fake_refresh_window_inputs)
+        monkeypatch.setattr(runner, "advance_dvol", fake_advance_dvol)
+        monkeypatch.setattr(runner, "build_snapshot", lambda sigma_eff: (snap, meta))
+
+        tick = await runner.prepare_tick_context()
+
+        assert tick.snap is snap
+        assert tick.meta is meta
+        assert tick.sigma_eff == 0.6
+        assert tick.dvol_stale is False
+        assert tick.row["event"] == "tick"
+        assert tick.row["market_slug"] == window.slug
+        assert tick.row["sigma_source"] == "test_dvol"
+        assert tick.price_analysis == {"s_price": 101.0, "k_price": 100.0}
+        assert tick.reference_meta == {}
 
     asyncio.run(scenario())
