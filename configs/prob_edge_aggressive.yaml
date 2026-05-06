@@ -4,7 +4,7 @@
 strategy:
   early_required_edge: 0.16
   core_required_edge: 0.14
-  model_decay_buffer: 0.02
+  model_decay_buffer: 0.03
   overprice_buffer: 0.02
   entry_start_age_sec: 100
   entry_end_age_sec: 240
@@ -22,8 +22,8 @@ strategy:
   final_hold_min_bid_limit: 0.95
   prob_stagnation_window_sec: 3.0
   prob_stagnation_epsilon: 0.002
-  prob_drop_exit_window_sec: 5.0
-  prob_drop_exit_threshold: 0.06
+  prob_drop_exit_window_sec: 0.0
+  prob_drop_exit_threshold: 0.0
   min_fair_cap_margin_ticks: 1.0
   entry_tick_size: 0.01
   min_entry_model_prob: 0.35
@@ -35,6 +35,8 @@ strategy:
   market_disagrees_exit_min_loss: 0.03
   market_disagrees_exit_min_age_sec: 3.0
   market_disagrees_exit_max_profit: 0.01
+  polymarket_divergence_exit_bps: 3.0
+  polymarket_divergence_exit_min_age_sec: 3.0
 
 execution:
   amount_usd: 1.0
@@ -46,8 +48,13 @@ execution:
   retry_interval_sec: 0.0
   buy_price_buffer_ticks: 2
   buy_retry_price_buffer_ticks: 4
-  sell_price_buffer_ticks: 4
-  sell_retry_price_buffer_ticks: 5
+  sell_price_buffer_ticks: 5
+  sell_retry_price_buffer_ticks: 6
+  batch_exit_enabled: true
+  batch_exit_min_shares: 20
+  batch_exit_min_notional_usd: 5
+  batch_exit_slices: [0.4, 0.3, 1.0]
+  batch_exit_extra_buffer_ticks: [0, 3, 6]
 
 runtime:
   interval_sec: 0.5
@@ -59,6 +66,6 @@ runtime:
 market_data:
   polymarket_price_enabled: true
   max_polymarket_price_age_sec: 4.0
-  polymarket_backup_after_sec: 180.0
-  coinbase_enabled: true
-  lead_signal_enabled: true
+  polymarket_stale_reconnect_sec: 5.0
+  polymarket_unhealthy_log_after_sec: 10.0
+  coinbase_enabled: false

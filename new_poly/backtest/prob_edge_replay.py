@@ -17,6 +17,7 @@ NORMAL_SELL_EXIT_REASONS = {
     "risk_exit",
     "market_overprice_exit",
     "market_disagrees_exit",
+    "polymarket_divergence_exit",
     "defensive_take_profit",
     "profit_protection_exit",
 }
@@ -28,6 +29,7 @@ class BacktestConfig:
     amount_usd: float = 5.0
     early_required_edge: float = 0.16
     core_required_edge: float = 0.14
+    model_decay_buffer: float = 0.03
     entry_start_age_sec: float = 90.0
     entry_end_age_sec: float = 270.0
     max_book_age_ms: float = 1000.0
@@ -36,8 +38,8 @@ class BacktestConfig:
     tick_size: float = 0.01
     buy_slippage_ticks: float = 0.0
     sell_slippage_ticks: float = 0.0
-    sell_price_buffer_ticks: float = 4.0
-    sell_retry_price_buffer_ticks: float = 5.0
+    sell_price_buffer_ticks: float = 5.0
+    sell_retry_price_buffer_ticks: float = 6.0
     prob_drop_exit_window_sec: float = 0.0
     prob_drop_exit_threshold: float = 0.0
     final_force_exit_remaining_sec: float = 30.0
@@ -53,12 +55,15 @@ class BacktestConfig:
     market_disagrees_exit_min_loss: float = 0.0
     market_disagrees_exit_min_age_sec: float = 0.0
     market_disagrees_exit_max_profit: float = 0.01
+    polymarket_divergence_exit_bps: float = 3.0
+    polymarket_divergence_exit_min_age_sec: float = 3.0
     honor_order_events: bool = False
 
     def edge_config(self) -> EdgeConfig:
         return EdgeConfig(
             early_required_edge=self.early_required_edge,
             core_required_edge=self.core_required_edge,
+            model_decay_buffer=self.model_decay_buffer,
             entry_start_age_sec=self.entry_start_age_sec,
             entry_end_age_sec=self.entry_end_age_sec,
             max_book_age_ms=self.max_book_age_ms,
@@ -78,6 +83,8 @@ class BacktestConfig:
             market_disagrees_exit_min_loss=self.market_disagrees_exit_min_loss,
             market_disagrees_exit_min_age_sec=self.market_disagrees_exit_min_age_sec,
             market_disagrees_exit_max_profit=self.market_disagrees_exit_max_profit,
+            polymarket_divergence_exit_bps=self.polymarket_divergence_exit_bps,
+            polymarket_divergence_exit_min_age_sec=self.polymarket_divergence_exit_min_age_sec,
         )
 
 
@@ -93,6 +100,14 @@ def _float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _first_float(*values: Any) -> float | None:
+    for value in values:
+        parsed = _float(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _sigma(row: dict[str, Any]) -> float | None:
@@ -118,6 +133,7 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
     down = _token(row, "down")
     warnings = _warnings(row)
     s_price = None if "polymarket_ws_open_disagrees_with_api" in warnings else _float(row.get("s_price"))
+    analysis_sources = (row.get("analysis") or {}).get("price_sources", {})
     return MarketSnapshot(
         market_slug=str(row.get("market_slug") or ""),
         age_sec=float(row.get("age_sec") or 0.0),
@@ -143,7 +159,13 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
         down_bid_depth_ok=bool(down.get("bid_depth_ok")),
         up_book_age_ms=_float(up.get("book_age_ms")),
         down_book_age_ms=_float(down.get("book_age_ms")),
-        source_spread_bps=_float(row.get("source_spread_bps") or (row.get("analysis") or {}).get("price_sources", {}).get("source_spread_bps")),
+        source_spread_bps=_first_float(row.get("source_spread_bps"), analysis_sources.get("source_spread_bps")),
+        polymarket_divergence_bps=_first_float(
+            row.get("polymarket_divergence_bps"),
+            row.get("lead_binance_vs_polymarket_bps"),
+            analysis_sources.get("polymarket_divergence_bps"),
+            analysis_sources.get("lead_binance_vs_polymarket_bps"),
+        ),
     )
 
 
@@ -294,6 +316,8 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
         "entry_edge": edge,
         "entry_edge_at_fill": model_prob - entry_price,
         "shares": shares,
+        "partial_exits": [],
+        "partial_pnl": 0.0,
     }
     return position, trade
 
@@ -339,20 +363,35 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         state.record_entry(position)
                         entries += 1
                         continue
-                elif row.get("event") == "exit" and _order_success(row) and active_trade is not None:
+                elif row.get("event") in {"exit", "partial_exit"} and _order_success(row) and active_trade is not None:
                     exit_price = _event_exit_price(row)
                     if exit_price is not None:
                         reason = str(row.get("exit_reason") or _analysis(row).get("exit_reason") or (row.get("decision") or {}).get("reason") or "event_exit")
-                        pnl = state.record_exit(exit_price, reason)
+                        filled = _float(_order(row).get("filled_size"))
+                        if row.get("event") == "partial_exit" and filled is not None:
+                            pnl, closed = state.record_partial_exit(exit_price, filled, reason)
+                            active_trade["partial_pnl"] = round(float(active_trade.get("partial_pnl") or 0.0) + pnl, 6)
+                            active_trade.setdefault("partial_exits", []).append({
+                                "age_sec": float(row.get("age_sec") or 0.0),
+                                "reason": reason,
+                                "price": exit_price,
+                                "shares": filled,
+                                "pnl": pnl,
+                            })
+                            if not closed:
+                                continue
+                        else:
+                            pnl = state.record_exit(exit_price, reason)
                         exit_age = float(row.get("age_sec") or 0.0)
+                        total_pnl = round(float(active_trade.get("partial_pnl") or 0.0) + pnl, 6)
                         active_trade.update({
                             "exit_age_sec": exit_age,
                             "exit_reason": reason,
                             "exit_price": exit_price,
-                            "pnl": pnl,
+                            "pnl": total_pnl,
                             "hold_sec": exit_age - active_trade["entry_age_sec"],
                         })
-                        equity += pnl
+                        equity += total_pnl
                         equity_points.append(equity)
                         trades.append(active_trade)
                         active_trade = None
@@ -448,19 +487,20 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
             winning_side = settlement.get("winning_side")
             if winning_side is not None:
                 pnl = state.record_settlement(winning_side)
+                total_pnl = round(float(active_trade.get("partial_pnl") or 0.0) + pnl, 6)
                 is_uncertain = bool(settlement.get("settlement_uncertain"))
                 active_trade.update({
                     "exit_age_sec": 300.0,
                     "exit_reason": "settlement",
                     "exit_price": 1.0 if active_trade["entry_side"] == winning_side else 0.0,
-                    "pnl": pnl,
+                    "pnl": total_pnl,
                     "hold_sec": 300.0 - active_trade["entry_age_sec"],
                     "winning_side": winning_side,
                     "settlement_uncertain": is_uncertain,
                     "settlement_price": settlement.get("settlement_price"),
                     "settlement_k_price": settlement.get("settlement_k_price"),
                 })
-                equity += pnl
+                equity += total_pnl
                 equity_points.append(equity)
                 trades.append(active_trade)
                 settlements += 1
@@ -468,15 +508,16 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     settlement_uncertain += 1
             else:
                 pnl = state.record_exit(state.open_position.entry_avg_price, "unsettled_no_settlement_side")
+                total_pnl = round(float(active_trade.get("partial_pnl") or 0.0) + pnl, 6)
                 active_trade.update({
                     "exit_age_sec": 300.0,
                     "exit_reason": "unsettled_no_settlement_side",
                     "exit_price": active_trade["entry_price"],
-                    "pnl": pnl,
+                    "pnl": total_pnl,
                     "hold_sec": 300.0 - active_trade["entry_age_sec"],
                     "settlement_uncertain": True,
                 })
-                equity += pnl
+                equity += total_pnl
                 equity_points.append(equity)
                 trades.append(active_trade)
                 unsettled += 1
@@ -520,6 +561,7 @@ def scan_configs(
             amount_usd=base.amount_usd,
             early_required_edge=float(early),
             core_required_edge=float(core),
+            model_decay_buffer=base.model_decay_buffer,
             entry_start_age_sec=float(start),
             entry_end_age_sec=float(end),
             max_book_age_ms=base.max_book_age_ms,
@@ -545,6 +587,8 @@ def scan_configs(
             market_disagrees_exit_min_loss=base.market_disagrees_exit_min_loss,
             market_disagrees_exit_min_age_sec=base.market_disagrees_exit_min_age_sec,
             market_disagrees_exit_max_profit=base.market_disagrees_exit_max_profit,
+            polymarket_divergence_exit_bps=base.polymarket_divergence_exit_bps,
+            polymarket_divergence_exit_min_age_sec=base.polymarket_divergence_exit_min_age_sec,
             honor_order_events=base.honor_order_events,
         )
         result = run_backtest(materialized, cfg)

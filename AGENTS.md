@@ -172,9 +172,11 @@ later strategy dry-run and backtest code:
 - market slug, start/end time, `window_bucket`, remaining seconds,
 - Polymarket resolution source,
 - Polymarket crypto price API `openPrice` as `k_price` / Price to Beat,
-- Polymarket live-data `crypto_prices_chainlink` price as primary `s_price`,
-- Binance/Coinbase basis-adjusted proxy prices as lazy backup after Polymarket
-  live-data remains missing or stale for the configured delay,
+- Binance BTC/USDT trade price as the primary model `s_price`,
+- Polymarket live-data `crypto_prices_chainlink` price as settlement-source
+  reference / divergence diagnostic, not the normal model `S`,
+- Coinbase price only when explicitly enabled for backup or multi-source
+  diagnostics,
 - `basis_bps`,
 - Binance/Coinbase live spread diagnostics for source-divergence analysis when
   Coinbase is enabled,
@@ -223,19 +225,27 @@ Current status:
 
 - `k_price` is extracted from Polymarket crypto price API `openPrice`.
 - `k_source` is `polymarket_crypto_price_api`.
-- `S` normally comes from Polymarket live-data WebSocket:
+- `S` normally comes from Binance BTC/USDT WebSocket. This is intentional: the
+  current strategy is testing whether CEX price movement leads Polymarket CLOB
+  repricing.
+- Polymarket live-data WebSocket is still started as a reference source:
   `wss://ws-live-data.polymarket.com`, topic `crypto_prices_chainlink`, filter
   `{"symbol":"btc/usd"}`.
+- The strategy can use Binance-vs-Polymarket reference divergence as a
+  position risk exit. Current configs use `polymarket_divergence_exit_bps=3.0`
+  and `polymarket_divergence_exit_min_age_sec=3.0`; this is an exit guard, not
+  an entry gate.
 - A 2026-05-06 three-window probe showed Polymarket live-data boundary ticks
   exactly matching the crypto price API `openPrice`/`closePrice`.
-- If Polymarket live-data is missing or stale, code does not immediately trade
-  through backup feeds. It stays fail-closed first. Only after
-  `polymarket_backup_after_sec` of continuous Polymarket outage does it lazily
-  start Binance/Coinbase and use the basis-adjusted proxy. Coinbase can still
-  be disabled by config/CLI, in which case fallback is Binance-only.
-- Strategy entry should use `cross_source_max_bps` only while operating on the
-  backup proxy. When Polymarket live-data is fresh, Binance/Coinbase spread is
-  diagnostic and should not block entries.
+- The Polymarket reference feed stores a short rolling history, currently about
+  15 seconds. That is enough for latest-price and short-horizon divergence
+  checks.
+- If Polymarket live-data is missing or stale, the Polymarket WS feed closes and
+  reconnects after `polymarket_stale_reconnect_sec` without a valid price tick,
+  currently `5s`. Binance can continue to supply the model price, but the
+  missing/stale Polymarket reference should be visible in logs.
+- Coinbase is disabled by default in current configs. Do not enable it unless a
+  run explicitly needs multi-source diagnostics.
 
 ### Reusable Infrastructure Modules
 
@@ -252,25 +262,24 @@ new_poly/market/deribit.py
 new_poly/trading/fak_quotes.py
 ```
 
-Future strategy scripts should reuse these for Polymarket live-data,
-Binance/Coinbase backup feeds, Polymarket window discovery, CLOB WebSocket book
-handling, Deribit DVOL snapshots, and FAK quote/depth selection. Do not reuse
-old `poly-bot` strategy modules or old thresholds.
+Future strategy scripts should reuse these for Binance model pricing,
+Polymarket live-data reference pricing, optional Coinbase diagnostics,
+Polymarket window discovery, CLOB WebSocket book handling, Deribit DVOL
+snapshots, and FAK quote/depth selection. Do not reuse old `poly-bot` strategy
+modules or old thresholds.
 
 - Basis-adjusted proxy formula:
   use only sources that have both a live price and same-window open price;
   `proxy_live = mean(valid paired live prices)`;
   `proxy_open = mean(valid paired open prices)`;
   `s_price = proxy_live - (proxy_open - k_price)`.
-- `price_source` is normally `polymarket_chainlink`. If that feed is stale or
-  missing, rows remain fail-closed until the lazy backup delay elapses; only
-  then fallback sources such as `proxy_binance_basis_adjusted` or
-  `proxy_multi_source_basis_adjusted` appear.
+- `price_source` is normally `proxy_binance` or
+  `proxy_binance_basis_adjusted`. `polymarket_price` is a reference field.
 - Deribit BTC DVOL is collected once at startup by default and written as
   `volatility`; use `--dvol-refresh-sec N` only when a run should refresh it.
-- `settlement_aligned` is `true` only when the row uses fresh Polymarket
-  live-data with a Chainlink BTC/USD resolution source; proxy fallback rows are
-  not settlement-aligned.
+- `settlement_aligned` means the Polymarket reference source is available and
+  the resolution source looks like Chainlink BTC/USD; it does not mean the model
+  `S` came from Polymarket.
 - The script should be used for data collection and paper analysis, not live
   order decisions.
 

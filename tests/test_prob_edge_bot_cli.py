@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import asyncio
 import datetime as dt
+import math
 from pathlib import Path
 
 import pytest
@@ -11,11 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.run_prob_edge_bot import (
     WindowPrices,
-    _backup_feed_started_row,
     _config_log_row,
     _entry_analysis,
     _exit_analysis,
+    _polymarket_reference_unhealthy_row,
     _price_analysis,
+    _should_attach_reference_meta,
     _refresh_exit_retry_params,
     _runtime_log_meta,
     _snapshot,
@@ -41,8 +43,9 @@ def test_default_mode_is_paper() -> None:
     assert opts.windows is None
     assert opts.config.amount_usd > 0
     assert opts.config.polymarket_price_enabled is True
-    assert opts.config.polymarket_backup_after_sec == 180.0
-    assert opts.config.coinbase_enabled is True
+    assert opts.config.polymarket_stale_reconnect_sec == 5.0
+    assert opts.config.polymarket_unhealthy_log_after_sec == 10.0
+    assert opts.config.coinbase_enabled is False
 
 
 def test_live_mode_defaults_analysis_logs_off() -> None:
@@ -78,10 +81,16 @@ def test_polymarket_price_cli_overrides_config() -> None:
     assert build_runtime_options(disabled_args).config.polymarket_price_enabled is False
 
 
-def test_polymarket_backup_delay_cli_overrides_config() -> None:
-    args = build_arg_parser().parse_args(["--once", "--polymarket-backup-after-sec", "60"])
+def test_polymarket_unhealthy_log_delay_cli_overrides_config() -> None:
+    args = build_arg_parser().parse_args(["--once", "--polymarket-unhealthy-log-after-sec", "60"])
 
-    assert build_runtime_options(args).config.polymarket_backup_after_sec == 60.0
+    assert build_runtime_options(args).config.polymarket_unhealthy_log_after_sec == 60.0
+
+
+def test_polymarket_divergence_exit_cli_overrides_config() -> None:
+    args = build_arg_parser().parse_args(["--once", "--polymarket-divergence-exit-bps", "2.5"])
+
+    assert build_runtime_options(args).config.edge.polymarket_divergence_exit_bps == 2.5
 
 
 def test_dynamic_params_cli_options_are_explicit() -> None:
@@ -131,14 +140,20 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.depth_safety_multiplier == 1.5
     assert opts.config.execution.buy_price_buffer_ticks == 2.0
     assert opts.config.execution.buy_retry_price_buffer_ticks == 4.0
-    assert opts.config.execution.sell_price_buffer_ticks == 4.0
-    assert opts.config.execution.sell_retry_price_buffer_ticks == 5.0
+    assert opts.config.execution.sell_price_buffer_ticks == 5.0
+    assert opts.config.execution.sell_retry_price_buffer_ticks == 6.0
+    assert opts.config.execution.batch_exit_enabled is True
+    assert opts.config.execution.batch_exit_min_shares == 20.0
+    assert opts.config.execution.batch_exit_min_notional_usd == 5.0
+    assert opts.config.execution.batch_exit_slices == (0.4, 0.3, 1.0)
+    assert opts.config.execution.batch_exit_extra_buffer_ticks == (0.0, 3.0, 6.0)
     assert opts.config.execution.paper_latency_sec == 0.0
     assert opts.config.execution.retry_interval_sec == 0.0
     assert opts.config.interval_sec == 0.5
     assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
-    assert opts.config.edge.prob_drop_exit_window_sec == 5.0
-    assert opts.config.edge.prob_drop_exit_threshold == 0.06
+    assert opts.config.edge.prob_drop_exit_window_sec == 0.0
+    assert opts.config.edge.prob_drop_exit_threshold == 0.0
+    assert opts.config.edge.model_decay_buffer == 0.03
     assert opts.config.edge.early_required_edge == 0.16
     assert opts.config.edge.core_required_edge == 0.14
     assert opts.config.edge.min_entry_model_prob == 0.35
@@ -149,20 +164,11 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.market_disagrees_exit_max_remaining_sec == 60.0
     assert opts.config.edge.market_disagrees_exit_min_loss == 0.03
     assert opts.config.edge.final_force_exit_remaining_sec == 30.0
-    assert opts.config.lead_signal_enabled is True
-
-
-def test_lead_signal_is_independent_from_analysis_logging() -> None:
-    args = build_arg_parser().parse_args([
-        "--config",
-        "configs/prob_edge_aggressive.yaml",
-        "--once",
-        "--no-analysis-logs",
-    ])
-    opts = build_runtime_options(args)
-
-    assert opts.analysis_logs is False
-    assert opts.config.lead_signal_enabled is True
+    assert opts.config.polymarket_stale_reconnect_sec == 5.0
+    assert opts.config.polymarket_unhealthy_log_after_sec == 10.0
+    assert opts.config.edge.polymarket_divergence_exit_bps == 3.0
+    assert opts.config.edge.polymarket_divergence_exit_min_age_sec == 3.0
+    assert opts.config.coinbase_enabled is False
 
 
 def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Path) -> None:
@@ -341,9 +347,9 @@ def test_runtime_log_meta_keeps_price_diagnostics_for_analysis_logs() -> None:
     assert analysis["source_spread_usd"] == 20.0
 
 
-def test_price_analysis_logs_only_active_polymarket_source_fields() -> None:
+def test_price_analysis_uses_proxy_branch_for_reference_diagnostics() -> None:
     meta = {
-        "price_source": "polymarket_chainlink",
+        "price_source": "proxy_binance_basis_adjusted",
         "s_price": 100080.0,
         "k_price": 100000.0,
         "basis_bps": 0.0,
@@ -357,6 +363,7 @@ def test_price_analysis_logs_only_active_polymarket_source_fields() -> None:
         "source_spread_usd": None,
         "lead_binance_vs_polymarket_usd": 40.0,
         "lead_binance_vs_polymarket_bps": 3.997,
+        "polymarket_divergence_bps": 3.997,
         "lead_coinbase_vs_polymarket_usd": 20.0,
         "lead_proxy_vs_polymarket_usd": 30.0,
         "lead_binance_return_3s_bps": 1.2,
@@ -369,18 +376,15 @@ def test_price_analysis_logs_only_active_polymarket_source_fields() -> None:
     analysis = _price_analysis(meta)
 
     assert analysis == {
-        "price_source": "polymarket_chainlink",
+        "price_source": "proxy_binance_basis_adjusted",
         "s_price": 100080.0,
         "k_price": 100000.0,
         "basis_bps": 0.0,
         "polymarket_price": 100080.0,
         "polymarket_price_age_sec": 0.8,
-        "polymarket_open_price": 100000.0,
-        "polymarket_open_source": "ws_first_after",
         "lead_binance_vs_polymarket_usd": 40.0,
         "lead_binance_vs_polymarket_bps": 3.997,
-        "lead_coinbase_vs_polymarket_usd": 20.0,
-        "lead_proxy_vs_polymarket_usd": 30.0,
+        "polymarket_divergence_bps": 3.997,
         "lead_binance_return_3s_bps": 1.2,
         "lead_polymarket_return_3s_bps": 0.4,
         "lead_binance_side": "up",
@@ -389,7 +393,7 @@ def test_price_analysis_logs_only_active_polymarket_source_fields() -> None:
     }
 
 
-def test_lead_signal_does_not_enable_proxy_pricing_before_backup() -> None:
+def test_binance_proxy_is_model_source_while_polymarket_is_reference() -> None:
     class FakeFeed:
         latest_price = 100_120.0
 
@@ -440,12 +444,13 @@ def test_lead_signal_does_not_enable_proxy_pricing_before_backup() -> None:
         FakeStream(),
         cfg,
         0.4,
-        fallback_pricing_enabled=False,
     )
 
-    assert snap.s_price is None
-    assert meta["price_source"] == "missing"
+    assert snap.s_price == 100_120.0
+    assert meta["price_source"] == "proxy_binance"
+    assert meta["polymarket_price"] == 100_080.0
     assert meta["lead_binance_vs_polymarket_usd"] == 40.0
+    assert math.isclose(snap.polymarket_divergence_bps or 0.0, meta["polymarket_divergence_bps"], abs_tol=0.001)
 
 
 def test_price_analysis_logs_only_backup_proxy_fields_when_fallback_active() -> None:
@@ -476,26 +481,38 @@ def test_price_analysis_logs_only_backup_proxy_fields_when_fallback_active() -> 
     assert "polymarket_open_price" not in analysis
 
 
-def test_warmup_warning_row_explains_fail_closed_backup_delay() -> None:
+def test_reference_meta_only_attaches_for_analysis_or_active_risk_context() -> None:
+    reference = {"polymarket_divergence_bps": 3.2}
+    exit_decision = StrategyDecision(action="exit", reason="polymarket_divergence_exit")
+    hold_decision = StrategyDecision(action="hold", reason="edge_intact")
+
+    assert _should_attach_reference_meta(reference, analysis_logs=True, has_position=False, decision=None) is True
+    assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=True, decision=hold_decision) is True
+    assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=False, decision=exit_decision) is True
+    assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=False, decision=None) is False
+    assert _should_attach_reference_meta({}, analysis_logs=True, has_position=True, decision=hold_decision) is False
+
+
+def test_warmup_warning_row_reports_missing_binance_tick() -> None:
     now = dt.datetime(2026, 5, 6, 0, 0, tzinfo=dt.timezone.utc)
 
-    row = _warmup_warning_row(now=now, mode="paper", market_slug="m1", backup_after_sec=180.0)
+    row = _warmup_warning_row(now=now, mode="paper", market_slug="m1", unhealthy_log_after_sec=180.0)
 
     assert row == {
         "ts": now.astimezone().isoformat(),
         "event": "warning",
         "mode": "paper",
         "market_slug": "m1",
-        "warning": "polymarket_ws_warmup_no_tick",
-        "message": "polymarket WS warmup expired without first tick",
-        "backup_starts_after_sec": 180.0,
+        "warning": "binance_ws_warmup_no_tick",
+        "message": "Binance WS warmup expired without first tick",
+        "polymarket_reference_check_after_sec": 180.0,
     }
 
 
-def test_backup_feed_started_row_is_auditable() -> None:
+def test_polymarket_reference_unhealthy_row_is_auditable() -> None:
     now = dt.datetime(2026, 5, 6, 0, 0, tzinfo=dt.timezone.utc)
 
-    row = _backup_feed_started_row(
+    row = _polymarket_reference_unhealthy_row(
         now=now,
         mode="paper",
         market_slug="m1",
@@ -503,10 +520,9 @@ def test_backup_feed_started_row_is_auditable() -> None:
         coinbase_started=True,
     )
 
-    assert row["event"] == "backup_feed_started"
+    assert row["event"] == "polymarket_reference_unhealthy"
     assert row["trigger"] == "polymarket_unhealthy_for_seconds"
     assert row["unhealthy_for_sec"] == 181.2
-    assert row["binance_started"] is True
     assert row["coinbase_started"] is True
 
 

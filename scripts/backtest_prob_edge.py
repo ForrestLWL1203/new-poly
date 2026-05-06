@@ -41,6 +41,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--amount-usd", type=float, default=5.0)
     parser.add_argument("--early-required-edge", type=float, default=0.16)
     parser.add_argument("--core-required-edge", type=float, default=0.14)
+    parser.add_argument("--model-decay-buffer", type=float, default=0.03)
     parser.add_argument("--entry-start-age-sec", type=float, default=90.0)
     parser.add_argument("--entry-end-age-sec", type=float, default=270.0)
     parser.add_argument("--max-entries-per-market", type=int, default=2)
@@ -53,8 +54,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
     parser.add_argument("--buy-slippage-ticks", type=float)
     parser.add_argument("--sell-slippage-ticks", type=float)
-    parser.add_argument("--sell-price-buffer-ticks", type=float, default=4.0)
-    parser.add_argument("--sell-retry-price-buffer-ticks", type=float, default=5.0)
+    parser.add_argument("--sell-price-buffer-ticks", type=float, default=5.0)
+    parser.add_argument("--sell-retry-price-buffer-ticks", type=float, default=6.0)
     parser.add_argument("--prob-drop-exit-window-sec", type=float, default=0.0)
     parser.add_argument("--prob-drop-exit-threshold", type=float, default=0.0)
     parser.add_argument("--final-force-exit-remaining-sec", type=float, default=30.0)
@@ -64,6 +65,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-disagrees-exit-min-loss", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-min-age-sec", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-max-profit", type=float, default=0.01)
+    parser.add_argument("--polymarket-divergence-exit-bps", type=float, default=3.0)
+    parser.add_argument("--polymarket-divergence-exit-min-age-sec", type=float, default=3.0)
     parser.add_argument("--honor-order-events", action="store_true", help="For paper/live strategy JSONL, replay actual entry/exit/no-fill events instead of idealized fills.")
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
@@ -86,6 +89,7 @@ def main() -> int:
         amount_usd=args.amount_usd,
         early_required_edge=args.early_required_edge,
         core_required_edge=args.core_required_edge,
+        model_decay_buffer=args.model_decay_buffer,
         entry_start_age_sec=args.entry_start_age_sec,
         entry_end_age_sec=args.entry_end_age_sec,
         max_entries_per_market=args.max_entries_per_market,
@@ -103,6 +107,8 @@ def main() -> int:
         market_disagrees_exit_min_loss=args.market_disagrees_exit_min_loss,
         market_disagrees_exit_min_age_sec=args.market_disagrees_exit_min_age_sec,
         market_disagrees_exit_max_profit=args.market_disagrees_exit_max_profit,
+        polymarket_divergence_exit_bps=args.polymarket_divergence_exit_bps,
+        polymarket_divergence_exit_min_age_sec=args.polymarket_divergence_exit_min_age_sec,
         honor_order_events=args.honor_order_events,
         settlement_boundary_usd=args.settlement_boundary_usd,
         min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,

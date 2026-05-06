@@ -252,7 +252,7 @@ def test_collector_row_is_strategy_neutral() -> None:
 
 def test_collector_warns_when_polymarket_ws_open_disagrees_with_api() -> None:
     class FakeFeed:
-        latest_price = None
+        latest_price = 100_010.0
 
     class FakePolymarketFeed:
         latest_price = 100_010.0
@@ -287,6 +287,7 @@ def test_collector_warns_when_polymarket_ws_open_disagrees_with_api() -> None:
     )
     prices = collector.WindowPrices(
         k_price=100_000.0,
+        binance_open_price=100_000.0,
         polymarket_open_price=100_002.5,
         k_source="polymarket_crypto_price_api",
     )
@@ -308,7 +309,7 @@ def test_collector_warns_when_polymarket_ws_open_disagrees_with_api() -> None:
         volatility=None,
     )
 
-    assert row["price_source"] == "polymarket_chainlink"
+    assert row["price_source"] == "proxy_binance_basis_adjusted"
     assert "polymarket_ws_open_disagrees_with_api" in row["warnings"]
     assert row["settlement_aligned"] is False
 
@@ -379,7 +380,7 @@ def test_effective_price_falls_back_to_binance_when_coinbase_missing() -> None:
     assert price.spread_usd is None
 
 
-def test_effective_price_prefers_fresh_polymarket_chainlink_source() -> None:
+def test_effective_price_uses_proxy_model_source_and_keeps_polymarket_reference() -> None:
     class FakeBinanceFeed:
         latest_price = 100_120.0
 
@@ -405,12 +406,11 @@ def test_effective_price_prefers_fresh_polymarket_chainlink_source() -> None:
         prices,
         polymarket_feed=FakePolymarketFeed(),
         polymarket_enabled=True,
-        max_polymarket_age_sec=3.0,
     )
 
-    assert price.source == "polymarket_chainlink"
-    assert price.effective == 100_080.0
-    assert price.basis_bps == 0.0
+    assert price.source == "proxy_multi_source_basis_adjusted"
+    assert price.effective == 100_070.0
+    assert price.basis_bps == 4.0
     assert price.polymarket == 100_080.0
     assert price.polymarket_open == 100_000.0
     assert price.polymarket_age_sec == 0.25
@@ -418,7 +418,7 @@ def test_effective_price_prefers_fresh_polymarket_chainlink_source() -> None:
     assert price.spread_usd == 20.0
 
 
-def test_effective_price_falls_back_when_polymarket_chainlink_is_stale() -> None:
+def test_effective_price_keeps_stale_polymarket_only_as_reference() -> None:
     class FakeBinanceFeed:
         latest_price = 100_120.0
 
@@ -444,7 +444,6 @@ def test_effective_price_falls_back_when_polymarket_chainlink_is_stale() -> None
         prices,
         polymarket_feed=FakePolymarketFeed(),
         polymarket_enabled=True,
-        max_polymarket_age_sec=3.0,
     )
 
     assert price.source == "proxy_multi_source_basis_adjusted"
@@ -471,7 +470,6 @@ def test_effective_price_waits_closed_when_polymarket_is_stale_before_backup_sta
         prices,
         polymarket_feed=FakePolymarketFeed(),
         polymarket_enabled=True,
-        max_polymarket_age_sec=3.0,
     )
 
     assert price.source == "missing"

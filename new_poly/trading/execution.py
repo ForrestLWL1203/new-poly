@@ -27,8 +27,13 @@ class ExecutionConfig:
     retry_interval_sec: float = 0.0
     buy_price_buffer_ticks: float = 2.0
     buy_retry_price_buffer_ticks: float = 4.0
-    sell_price_buffer_ticks: float = 4.0
-    sell_retry_price_buffer_ticks: float = 5.0
+    sell_price_buffer_ticks: float = 5.0
+    sell_retry_price_buffer_ticks: float = 6.0
+    batch_exit_enabled: bool = False
+    batch_exit_min_shares: float = 20.0
+    batch_exit_min_notional_usd: float = 5.0
+    batch_exit_slices: tuple[float, ...] = (0.4, 0.3, 1.0)
+    batch_exit_extra_buffer_ticks: tuple[float, ...] = (0.0, 3.0, 6.0)
 
 
 @dataclass(frozen=True)
@@ -125,6 +130,29 @@ def _avg_sell_fill(levels: list[tuple[float, float]], shares: float, min_price: 
     return None
 
 
+def _avg_sell_fill_partial(levels: list[tuple[float, float]], shares: float, min_price: float | None) -> tuple[float, float, list[tuple[float, float]]] | None:
+    sold = 0.0
+    received = 0.0
+    remaining_levels: list[tuple[float, float]] = []
+    for price, size in levels:
+        if min_price is not None and price < min_price:
+            remaining_levels.append((price, size))
+            continue
+        remaining_to_sell = shares - sold
+        if remaining_to_sell <= 1e-9:
+            remaining_levels.append((price, size))
+            continue
+        take = min(size, remaining_to_sell)
+        sold += take
+        received += take * price
+        leftover = size - take
+        if leftover > 1e-9:
+            remaining_levels.append((price, leftover))
+    if sold <= 1e-9:
+        return None
+    return sold, received / sold, remaining_levels
+
+
 def _sell_aggression_ticks(
     exit_reason: str | None,
     attempt: int,
@@ -141,6 +169,7 @@ def _sell_aggression_ticks(
         "risk_exit",
         "market_overprice_exit",
         "market_disagrees_exit",
+        "polymarket_divergence_exit",
         "defensive_take_profit",
         "profit_protection_exit",
     }:
@@ -154,8 +183,8 @@ def _sell_price_hint(
     exit_reason: str | None,
     attempt: int,
     *,
-    sell_price_buffer_ticks: float = 4.0,
-    sell_retry_price_buffer_ticks: float = 5.0,
+    sell_price_buffer_ticks: float = 5.0,
+    sell_retry_price_buffer_ticks: float = 6.0,
 ) -> float | None:
     if min_price is None:
         return None
@@ -171,6 +200,65 @@ def _sell_price_hint(
     floor = tick
     rounded = round(max(floor, buffered), 6)
     return min(1.0, rounded)
+
+
+def _sell_price_hint_with_extra(
+    token_id: str,
+    min_price: float | None,
+    exit_reason: str | None,
+    attempt: int,
+    *,
+    extra_buffer_ticks: float,
+    sell_price_buffer_ticks: float = 5.0,
+    sell_retry_price_buffer_ticks: float = 6.0,
+) -> float | None:
+    if min_price is None:
+        return None
+    tick = get_tick_size(token_id)
+    if tick <= 0:
+        tick = 0.01
+    base_ticks = _sell_aggression_ticks(
+        exit_reason,
+        attempt,
+        sell_price_buffer_ticks=sell_price_buffer_ticks,
+        sell_retry_price_buffer_ticks=sell_retry_price_buffer_ticks,
+    )
+    buffered = min_price - (base_ticks + max(0.0, extra_buffer_ticks)) * tick
+    return round(max(tick, min(1.0, buffered)), 6)
+
+
+def _batch_exit_parts(shares: float, slices: tuple[float, ...]) -> list[float]:
+    if shares <= 0:
+        return []
+    clean = [value for value in slices if value > 0]
+    if not clean:
+        return [shares]
+    remaining = shares
+    parts: list[float] = []
+    for index, value in enumerate(clean):
+        is_last = index == len(clean) - 1
+        if is_last or value >= 1.0:
+            part = remaining
+        else:
+            part = min(remaining, shares * value)
+        if part > 1e-9:
+            parts.append(part)
+            remaining -= part
+        if remaining <= 1e-9:
+            break
+    if remaining > 1e-9:
+        parts.append(remaining)
+    return parts
+
+
+def _should_batch_exit(shares: float, min_price: float | None, cfg: ExecutionConfig) -> bool:
+    if not cfg.batch_exit_enabled:
+        return False
+    if shares >= cfg.batch_exit_min_shares:
+        return True
+    if min_price is not None and shares * min_price >= cfg.batch_exit_min_notional_usd:
+        return True
+    return False
 
 
 class PaperExecutionGateway:
@@ -212,6 +300,41 @@ class PaperExecutionGateway:
             "attempts": attempts,
             "total_latency_ms": _ms_since(start),
         }
+
+    def _paper_batch_sell_fill(
+        self,
+        token_id: str,
+        levels: list[tuple[float, float]],
+        shares: float,
+        min_price: float | None,
+        exit_reason: str | None,
+        attempt: int,
+    ) -> tuple[float, float] | None:
+        sold_total = 0.0
+        received_total = 0.0
+        remaining_levels = list(levels)
+        parts = _batch_exit_parts(shares, self.config.batch_exit_slices)
+        extra_ticks = self.config.batch_exit_extra_buffer_ticks
+        for index, part in enumerate(parts):
+            extra = extra_ticks[index] if index < len(extra_ticks) else extra_ticks[-1] if extra_ticks else 0.0
+            effective_min = _sell_price_hint_with_extra(
+                token_id,
+                min_price,
+                exit_reason,
+                attempt,
+                extra_buffer_ticks=extra,
+                sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
+                sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
+            )
+            fill = _avg_sell_fill_partial(remaining_levels, part, effective_min)
+            if fill is None:
+                continue
+            sold, avg_price, remaining_levels = fill
+            sold_total += sold
+            received_total += sold * avg_price
+        if sold_total <= 1e-9:
+            return None
+        return sold_total, received_total / sold_total
 
     async def buy(
         self,
@@ -318,7 +441,10 @@ class PaperExecutionGateway:
                 sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
             )
-            fill = _avg_sell_fill(levels, shares, effective_min)
+            if _should_batch_exit(shares, min_price, self.config):
+                fill = self._paper_batch_sell_fill(token_id, levels, shares, min_price, exit_reason, attempt)
+            else:
+                fill = _avg_sell_fill(levels, shares, effective_min)
             total_latency_ms = _ms_since(start)
             if fill is not None:
                 sold, avg_price = fill
@@ -369,8 +495,13 @@ class LiveFakExecutionGateway:
         retry_interval_sec: float = 0.0,
         buy_price_buffer_ticks: float = 2.0,
         buy_retry_price_buffer_ticks: float = 4.0,
-        sell_price_buffer_ticks: float = 4.0,
-        sell_retry_price_buffer_ticks: float = 5.0,
+        sell_price_buffer_ticks: float = 5.0,
+        sell_retry_price_buffer_ticks: float = 6.0,
+        batch_exit_enabled: bool = False,
+        batch_exit_min_shares: float = 20.0,
+        batch_exit_min_notional_usd: float = 5.0,
+        batch_exit_slices: tuple[float, ...] = (0.4, 0.3, 1.0),
+        batch_exit_extra_buffer_ticks: tuple[float, ...] = (0.0, 3.0, 6.0),
     ) -> None:
         if not live_risk_ack:
             raise ValueError("live mode requires --i-understand-live-risk")
@@ -380,6 +511,15 @@ class LiveFakExecutionGateway:
         self.buy_retry_price_buffer_ticks = max(self.buy_price_buffer_ticks, float(buy_retry_price_buffer_ticks))
         self.sell_price_buffer_ticks = max(0.0, float(sell_price_buffer_ticks))
         self.sell_retry_price_buffer_ticks = max(self.sell_price_buffer_ticks, float(sell_retry_price_buffer_ticks))
+        self.batch_config = ExecutionConfig(
+            batch_exit_enabled=bool(batch_exit_enabled),
+            batch_exit_min_shares=max(0.0, float(batch_exit_min_shares)),
+            batch_exit_min_notional_usd=max(0.0, float(batch_exit_min_notional_usd)),
+            batch_exit_slices=tuple(float(value) for value in batch_exit_slices),
+            batch_exit_extra_buffer_ticks=tuple(float(value) for value in batch_exit_extra_buffer_ticks),
+            sell_price_buffer_ticks=self.sell_price_buffer_ticks,
+            sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+        )
 
     async def buy(
         self,
@@ -442,7 +582,10 @@ class LiveFakExecutionGateway:
                 sell_price_buffer_ticks=self.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
             )
-            last = await asyncio.to_thread(self._post, token_id, amount, SELL, price_hint or min_price)
+            if _should_batch_exit(amount, min_price, self.batch_config):
+                last = await asyncio.to_thread(self._post_batch_sell, token_id, amount, min_price, exit_reason, attempt)
+            else:
+                last = await asyncio.to_thread(self._post, token_id, amount, SELL, price_hint or min_price)
             if last.success or attempt >= self.retry_count:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
             if self.retry_interval_sec > 0:
@@ -462,6 +605,72 @@ class LiveFakExecutionGateway:
             if amount <= 0:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
         return last
+
+    def _post_batch_sell(self, token_id: str, shares: float, min_price: float | None, exit_reason: str | None, attempt: int) -> ExecutionResult:
+        from py_clob_client_v2 import MarketOrderArgs, OrderType
+        from py_clob_client_v2.order_builder.constants import SELL as SDK_SELL
+
+        start = time.monotonic()
+        client = get_client()
+        post_orders = getattr(client, "post_orders", None) or getattr(client, "postOrders", None)
+        if post_orders is None:
+            return self._post(token_id, shares, SELL, _sell_price_hint(
+                token_id,
+                min_price,
+                exit_reason,
+                attempt,
+                sell_price_buffer_ticks=self.sell_price_buffer_ticks,
+                sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+            ) or min_price)
+        parts = _batch_exit_parts(shares, self.batch_config.batch_exit_slices)
+        extra_ticks = self.batch_config.batch_exit_extra_buffer_ticks
+        batch = []
+        for index, part in enumerate(parts[:15]):
+            extra = extra_ticks[index] if index < len(extra_ticks) else extra_ticks[-1] if extra_ticks else 0.0
+            price_hint = _sell_price_hint_with_extra(
+                token_id,
+                min_price,
+                exit_reason,
+                attempt,
+                extra_buffer_ticks=extra,
+                sell_price_buffer_ticks=self.sell_price_buffer_ticks,
+                sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+            )
+            args = MarketOrderArgs(token_id=token_id, amount=part, side=SDK_SELL, order_type=OrderType.FAK, price=price_hint or min_price or 0)
+            signed = client.create_market_order(args, options=get_order_options(token_id))
+            batch.append({"order": signed, "orderType": OrderType.FAK})
+        try:
+            responses = post_orders(batch)
+        except Exception as exc:
+            latency_ms = round((time.monotonic() - start) * 1000)
+            if _is_fak_no_match_error(exc):
+                return ExecutionResult(False, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+            raise
+        latency_ms = round((time.monotonic() - start) * 1000)
+        if not isinstance(responses, list):
+            responses = [responses]
+        filled_total = 0.0
+        received_total = 0.0
+        order_ids: list[str] = []
+        matched_count = 0
+        for response, part in zip(responses, parts):
+            if not isinstance(response, dict):
+                continue
+            order_id = response.get("orderID") or response.get("orderId") or response.get("id")
+            if order_id:
+                order_ids.append(str(order_id))
+            matched = _is_matched_response(response)
+            filled = _safe_float(response.get("sizeFilled", response.get("filledSize", 0)))
+            avg_price = _safe_float(response.get("avgPrice", response.get("price", 0)))
+            if matched and (filled <= 0 or avg_price <= 0):
+                filled, avg_price = _derive_fill(SELL, part, _safe_float(response.get("takingAmount")), _safe_float(response.get("makingAmount")), min_price or avg_price)
+            if matched and filled > 0 and avg_price > 0:
+                matched_count += 1
+                filled_total += filled
+                received_total += filled * avg_price
+        if filled_total <= 1e-9:
+            return ExecutionResult(False, order_id=",".join(order_ids) or None, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing={"batch_orders": len(batch), "matched_orders": matched_count})
+        return ExecutionResult(True, order_id=",".join(order_ids) or None, filled_size=filled_total, avg_price=received_total / filled_total, message="batch matched", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing={"batch_orders": len(batch), "matched_orders": matched_count})
 
     def _post(self, token_id: str, amount: float, side: str, price_hint: float | None) -> ExecutionResult:
         from py_clob_client_v2 import MarketOrderArgs, OrderType

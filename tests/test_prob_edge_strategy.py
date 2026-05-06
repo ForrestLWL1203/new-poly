@@ -47,6 +47,27 @@ def test_strategy_state_tracks_peak_pnl_and_drawdown() -> None:
     assert math.isclose(state.drawdown, -3.0)
 
 
+def test_strategy_state_partial_exit_keeps_remaining_position() -> None:
+    state = StrategyState()
+    state.record_entry(PositionSnapshot("m1", "up", "up-token", 1.0, 0.20, 100.0, 0.5, 0.3))
+
+    pnl, closed = state.record_partial_exit(0.50, 40.0, "partial_exit")
+
+    assert math.isclose(pnl, 12.0)
+    assert closed is False
+    assert state.has_position is True
+    assert state.open_position is not None
+    assert math.isclose(state.open_position.filled_shares, 60.0)
+    assert math.isclose(state.realized_pnl, 12.0)
+
+    pnl, closed = state.record_partial_exit(0.40, 100.0, "final_exit")
+
+    assert math.isclose(pnl, 12.0)
+    assert closed is True
+    assert state.open_position is None
+    assert math.isclose(state.realized_pnl, 24.0)
+
+
 def test_entry_rejects_warmup_and_existing_position() -> None:
     cfg = EdgeConfig()
     state = StrategyState(current_market_slug="m1")
@@ -406,6 +427,81 @@ def test_exit_logic_decay_and_market_overprice() -> None:
     overprice = evaluate_exit(rich_bid_snap, profitable_pos, cfg)
     assert overprice.action == "exit"
     assert overprice.reason == "market_overprice_exit"
+
+
+def _divergence_position(side: str) -> PositionSnapshot:
+    return PositionSnapshot(
+        market_slug="m1",
+        token_side=side,
+        token_id=f"{side}-token",
+        entry_time=100.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.20,
+    )
+
+
+def _divergence_snapshot(side: str, divergence_bps: float, age_sec: float = 130.0) -> MarketSnapshot:
+    bids = {
+        "up_bid_avg": 0.42,
+        "up_bid_limit": 0.41,
+        "up_bid_depth_ok": True,
+        "down_bid_avg": 0.42,
+        "down_bid_limit": 0.41,
+        "down_bid_depth_ok": True,
+    }
+    return MarketSnapshot(
+        market_slug="m1",
+        age_sec=age_sec,
+        remaining_sec=170.0,
+        s_price=100.0,
+        k_price=100.0,
+        sigma_eff=2.0,
+        polymarket_divergence_bps=divergence_bps,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+        **bids,
+    )
+
+
+def test_polymarket_divergence_exit_triggers_only_when_adverse() -> None:
+    cfg = EdgeConfig(polymarket_divergence_exit_bps=3.0, polymarket_divergence_exit_min_age_sec=3.0)
+
+    up_adverse = evaluate_exit(_divergence_snapshot("up", 3.2), _divergence_position("up"), cfg)
+    down_adverse = evaluate_exit(_divergence_snapshot("down", -3.2), _divergence_position("down"), cfg)
+    up_favorable = evaluate_exit(_divergence_snapshot("up", -8.0), _divergence_position("up"), cfg)
+    down_favorable = evaluate_exit(_divergence_snapshot("down", 8.0), _divergence_position("down"), cfg)
+
+    assert up_adverse.action == "exit"
+    assert up_adverse.reason == "polymarket_divergence_exit"
+    assert up_adverse.polymarket_divergence_bps == 3.2
+    assert down_adverse.action == "exit"
+    assert down_adverse.reason == "polymarket_divergence_exit"
+    assert down_adverse.polymarket_divergence_bps == -3.2
+    assert up_favorable.reason != "polymarket_divergence_exit"
+    assert down_favorable.reason != "polymarket_divergence_exit"
+
+
+def test_polymarket_divergence_exit_respects_age_and_disable_switch() -> None:
+    young_cfg = EdgeConfig(polymarket_divergence_exit_bps=3.0, polymarket_divergence_exit_min_age_sec=3.0)
+    disabled_cfg = EdgeConfig(polymarket_divergence_exit_bps=0.0, polymarket_divergence_exit_min_age_sec=3.0)
+    young_pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=128.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.20,
+    )
+
+    too_young = evaluate_exit(_divergence_snapshot("up", 10.0, age_sec=130.0), young_pos, young_cfg)
+    disabled = evaluate_exit(_divergence_snapshot("up", 10.0), _divergence_position("up"), disabled_cfg)
+
+    assert too_young.reason != "polymarket_divergence_exit"
+    assert disabled.reason != "polymarket_divergence_exit"
 
 
 def test_defensive_take_profit_requires_three_second_stagnation_history() -> None:

@@ -61,6 +61,8 @@ max_entries_per_market = 4
 amount_usd = 1
 low_price_extra_edge_threshold = 0.30
 low_price_extra_edge = 0.02
+model_decay_buffer = 0.03
+prob_drop_exit disabled by default
 ```
 
 To simulate FAK execution drift, add slippage ticks:
@@ -86,7 +88,7 @@ position can sell into current bid depth, replay fills from `bid_avg` and only
 uses the floor as a lower bound:
 
 ```text
-normal exits:      max(bid_avg - sell_slippage_ticks, bid_limit - 4 ticks)
+normal exits:      max(bid_avg - sell_slippage_ticks, bid_limit - 5 ticks)
 final_force_exit:  max(bid_avg - sell_slippage_ticks, bid_limit - 5 ticks)
 ```
 
@@ -108,14 +110,13 @@ python3 scripts/backtest_prob_edge.py \
   --entry-end-age-sec 240 \
   --early-required-edge 0.16 \
   --core-required-edge 0.14 \
+  --model-decay-buffer 0.03 \
   --max-entries-per-market 4 \
   --min-fair-cap-margin-ticks 1 \
   --entry-tick-size 0.01 \
   --min-entry-model-prob 0.35 \
   --low-price-extra-edge-threshold 0.30 \
   --low-price-extra-edge 0.02 \
-  --prob-drop-exit-window-sec 5 \
-  --prob-drop-exit-threshold 0.06 \
   --slippage-ticks 3
 ```
 
@@ -146,6 +147,9 @@ The replay uses:
 - `volatility_stale=true` as missing sigma, matching live behavior
 - `source_spread_bps` when present, so `cross_source_max_bps` can reproduce the
   live source-divergence entry skip
+- `polymarket_divergence_bps` or `lead_binance_vs_polymarket_bps`, so
+  `polymarket_divergence_exit_bps` can reproduce the live Polymarket-reference
+  risk exit
 
 Entry decisions still use size-aware `ask_avg` for edge screening, but simulated
 fills use the worse executable depth limit. If slippage pushes BUY above the
@@ -160,6 +164,8 @@ The backtest CLI exposes the live risk gates:
 --market-disagrees-exit-min-loss
 --market-disagrees-exit-min-age-sec
 --market-disagrees-exit-max-profit
+--polymarket-divergence-exit-bps
+--polymarket-divergence-exit-min-age-sec
 --low-price-extra-edge-threshold
 --low-price-extra-edge
 ```
@@ -168,7 +174,7 @@ Older JSONL without Coinbase fields cannot evaluate cross-source divergence;
 those rows behave as if the source-spread gate has no signal.
 
 SELL replay uses the same floor semantics as paper/live. Normal profit and stop
-exits default to a `4 tick` first floor, while final-force exits use `5 ticks`.
+exits default to a `5 tick` first floor, while final-force exits use `5 ticks`.
 The fill price comes from `bid_avg` unless explicit sell slippage is requested;
 the floor is only a minimum acceptable FAK price. The floor is clamped at one
 tick, matching the live executor behavior on very low-priced tokens.
@@ -213,9 +219,10 @@ fast probability-drop exit guard. The current aggressive profile uses `5` and
 
 If a position remains open after the final available row for a window, it is
 settled using the final collected effective `s_price` for that window. Current
-collector/bot logs use Polymarket live-data `crypto_prices_chainlink` as the
-primary source and only fall back to the lazy Binance/Coinbase proxy after a
-configured Polymarket outage:
+collector/bot logs normally use Binance, optionally open-basis-adjusted to the
+Polymarket `k_price`, as the effective model price. Polymarket live-data is kept
+as a reference field for divergence analysis rather than the default model
+source:
 
 ```text
 s_price > k_price => UP wins

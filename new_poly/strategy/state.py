@@ -50,16 +50,26 @@ class StrategyState:
         self.entry_count += 1
         self.prob_history = []
 
+    def record_partial_exit(self, exit_price: float, shares: float, reason: str) -> tuple[float, bool]:
+        if self.open_position is None:
+            return 0.0, True
+        exit_shares = min(max(0.0, shares), self.open_position.filled_shares)
+        pnl = (exit_price - self.open_position.entry_avg_price) * exit_shares
+        self.realized_pnl += pnl
+        self.peak_pnl = max(self.peak_pnl, self.realized_pnl)
+        self.open_position.filled_shares -= exit_shares
+        closed = self.open_position.filled_shares <= 1e-9
+        if closed:
+            self.open_position.exit_status = reason
+            self.open_position = None
+            self.prob_history = []
+        self.last_exit_reason = reason
+        return pnl, closed
+
     def record_exit(self, exit_price: float, reason: str) -> float:
         if self.open_position is None:
             return 0.0
-        pnl = (exit_price - self.open_position.entry_avg_price) * self.open_position.filled_shares
-        self.realized_pnl += pnl
-        self.peak_pnl = max(self.peak_pnl, self.realized_pnl)
-        self.open_position.exit_status = reason
-        self.open_position = None
-        self.last_exit_reason = reason
-        self.prob_history = []
+        pnl, _closed = self.record_partial_exit(exit_price, self.open_position.filled_shares, reason)
         return pnl
 
     def record_settlement(self, winning_side: str) -> float:

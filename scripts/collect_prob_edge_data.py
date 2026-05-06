@@ -319,7 +319,6 @@ def effective_price(
     coinbase_enabled: bool = True,
     polymarket_feed: PolymarketChainlinkBtcPriceFeed | None = None,
     polymarket_enabled: bool = True,
-    max_polymarket_age_sec: float = 4.0,
 ) -> EffectivePrice:
     binance_latest = feed.latest_price if feed is not None else None
     coinbase_latest = coinbase_feed.latest_price if coinbase_enabled and coinbase_feed is not None else None
@@ -331,11 +330,6 @@ def effective_price(
         if polymarket_enabled and polymarket_feed is not None and hasattr(polymarket_feed, "latest_age_sec")
         else None
     )
-    polymarket_fresh = (
-        polymarket_latest is not None
-        and (polymarket_age is None or polymarket_age <= max_polymarket_age_sec)
-    )
-
     def _with_polymarket(base: EffectivePrice) -> EffectivePrice:
         return EffectivePrice(
             base.source,
@@ -353,20 +347,6 @@ def effective_price(
         )
 
     if all_proxy is None:
-        if polymarket_fresh:
-            basis_bps = (
-                ((prices.polymarket_open_price - prices.k_price) / prices.k_price) * 10_000.0
-                if prices.k_price is not None and prices.polymarket_open_price is not None
-                else None
-            )
-            return EffectivePrice(
-                "polymarket_chainlink",
-                polymarket_latest,
-                basis_bps,
-                polymarket=polymarket_latest,
-                polymarket_open=prices.polymarket_open_price,
-                polymarket_age_sec=polymarket_age,
-            )
         return EffectivePrice(
             "missing",
             None,
@@ -387,27 +367,6 @@ def effective_price(
     has_paired_coinbase = coinbase_enabled and coinbase_latest is not None and prices.coinbase_open_price is not None
     spread_usd = abs(binance_latest - coinbase_latest) if binance_latest is not None and coinbase_latest is not None else None
     spread_bps = (spread_usd / all_proxy) * 10_000.0 if spread_usd is not None and all_proxy else None
-
-    if polymarket_fresh:
-        basis_bps = (
-            ((prices.polymarket_open_price - prices.k_price) / prices.k_price) * 10_000.0
-            if prices.k_price is not None and prices.polymarket_open_price is not None
-            else None
-        )
-        return EffectivePrice(
-            "polymarket_chainlink",
-            polymarket_latest,
-            basis_bps,
-            proxy=all_proxy,
-            proxy_open=_mean([open_price for _latest, open_price in basis_pairs]) if basis_pairs else None,
-            binance=binance_latest,
-            coinbase=coinbase_latest,
-            polymarket=polymarket_latest,
-            polymarket_open=prices.polymarket_open_price,
-            polymarket_age_sec=polymarket_age,
-            spread_usd=spread_usd,
-            spread_bps=spread_bps,
-        )
 
     if prices.k_price is not None and basis_pairs:
         proxy = _mean([latest for latest, _open in basis_pairs])
@@ -498,7 +457,6 @@ def build_row(
     volatility: DvolSnapshot | None,
     coinbase_enabled: bool = True,
     polymarket_price_enabled: bool = True,
-    max_polymarket_price_age_sec: float = 4.0,
 ) -> dict[str, Any]:
     age_sec = (now - window.start_time).total_seconds()
     remaining_sec = (window.end_time - now).total_seconds()
@@ -509,7 +467,6 @@ def build_row(
         coinbase_enabled=coinbase_enabled,
         polymarket_feed=polymarket_feed,
         polymarket_enabled=polymarket_price_enabled,
-        max_polymarket_age_sec=max_polymarket_price_age_sec,
     )
     price_source, s_price, basis_bps = price.source, price.effective, price.basis_bps
     now_ts = now.timestamp()
@@ -545,8 +502,8 @@ def build_row(
     ws_api_open_disagree = polymarket_open_disagrees(prices)
     if ws_api_open_disagree:
         warnings.append("polymarket_ws_open_disagrees_with_api")
-    if polymarket_price_enabled and price.source != "polymarket_chainlink":
-        warnings.append("polymarket_price_fallback")
+    if polymarket_price_enabled and price.polymarket is None:
+        warnings.append("missing_polymarket_reference")
     if not good_resolution:
         warnings.append("unexpected_resolution_source")
     row = {
@@ -558,7 +515,7 @@ def build_row(
         "remaining_sec": int(round(remaining_sec)),
         "window_bucket": window_bucket(age_sec, remaining_sec),
         "resolution_source": window.resolution_source,
-        "settlement_aligned": bool(good_resolution and price.source == "polymarket_chainlink" and not ws_api_open_disagree),
+        "settlement_aligned": bool(good_resolution and price.polymarket is not None and not ws_api_open_disagree),
         "sigma_source": sigma_source if sigma_eff is not None else "missing",
         "sigma_eff": compact_float(sigma_eff),
         "volatility_stale": volatility_stale,
@@ -587,6 +544,7 @@ def build_row(
         "source_spread_bps": compact_float(price.spread_bps, 3),
         "lead_binance_vs_polymarket_usd": compact_float(lead_binance_usd, 2),
         "lead_binance_vs_polymarket_bps": compact_float(lead_binance_bps, 3),
+        "polymarket_divergence_bps": compact_float(lead_binance_bps, 3),
         "lead_coinbase_vs_polymarket_usd": compact_float(lead_coinbase_usd, 2),
         "lead_coinbase_vs_polymarket_bps": compact_float(lead_coinbase_bps, 3),
         "lead_proxy_vs_polymarket_usd": compact_float(lead_proxy_usd, 2),
@@ -676,14 +634,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-timeout-sec", type=float, default=8.0)
     parser.add_argument("--windows", type=int, default=None)
     parser.add_argument("--include-current-window", action="store_true", help="Start from the in-progress window instead of waiting for the next full one.")
-    parser.add_argument("--coinbase", dest="coinbase_enabled", action="store_true", default=True)
+    parser.add_argument("--coinbase", dest="coinbase_enabled", action="store_true", default=False)
     parser.add_argument("--no-coinbase", dest="coinbase_enabled", action="store_false")
     parser.add_argument("--polymarket-price", dest="polymarket_price_enabled", action="store_true", default=True)
     parser.add_argument("--no-polymarket-price", dest="polymarket_price_enabled", action="store_false")
-    parser.add_argument("--max-polymarket-price-age-sec", type=float, default=4.0)
-    parser.add_argument("--polymarket-backup-after-sec", type=float, default=180.0)
-    parser.add_argument("--lead-signal", dest="lead_signal_enabled", action="store_true", default=False)
-    parser.add_argument("--no-lead-signal", dest="lead_signal_enabled", action="store_false")
+    parser.add_argument("--polymarket-stale-reconnect-sec", type=float, default=5.0)
     return parser
 
 
@@ -695,51 +650,33 @@ async def run(args: argparse.Namespace) -> int:
     writer = JsonlWriter(args.jsonl)
     feed: BinancePriceFeed | None = None
     coinbase_feed: CoinbaseBtcPriceFeed | None = None
-    polymarket_feed = PolymarketChainlinkBtcPriceFeed() if args.polymarket_price_enabled else None
+    polymarket_feed = (
+        PolymarketChainlinkBtcPriceFeed(max_history_sec=15.0, stale_reconnect_sec=args.polymarket_stale_reconnect_sec)
+        if args.polymarket_price_enabled
+        else None
+    )
     series = MarketSeries.from_known("btc-updown-5m")
     stream = PriceStream(on_price=_noop_price_update)
     tracker = WindowLimitTracker(args.windows)
     volatility = await asyncio.to_thread(fetch_dvol_snapshot) if args.collect_dvol else None
     next_dvol_refresh = time.monotonic() + args.dvol_refresh_sec if args.collect_dvol and args.dvol_refresh_sec > 0 else None
-    backup_started = False
-    polymarket_unhealthy_since: float | None = time.monotonic() if polymarket_feed is not None else None
-
-    async def ensure_backup_started() -> None:
-        nonlocal feed, coinbase_feed, backup_started
-        if backup_started:
-            return
-        if feed is None:
-            feed = BinancePriceFeed("btcusdt")
-            await feed.start()
-        if args.coinbase_enabled and coinbase_feed is None:
-            coinbase_feed = CoinbaseBtcPriceFeed()
-            await coinbase_feed.start()
-        backup_started = True
-
     try:
         window = find_initial_window(series, include_current=args.include_current_window)
         prices = WindowPrices()
+        feed = BinancePriceFeed("btcusdt")
+        await feed.start()
         if polymarket_feed is not None:
             await polymarket_feed.start()
-        if args.lead_signal_enabled:
-            if feed is None:
-                feed = BinancePriceFeed("btcusdt")
-                await feed.start()
-            if args.coinbase_enabled and coinbase_feed is None:
-                coinbase_feed = CoinbaseBtcPriceFeed()
-                await coinbase_feed.start()
-        if polymarket_feed is None:
-            await ensure_backup_started()
+        if args.coinbase_enabled and coinbase_feed is None:
+            coinbase_feed = CoinbaseBtcPriceFeed()
+            await coinbase_feed.start()
         await stream.connect([window.up_token, window.down_token])
         first = True
         deadline = time.monotonic() + max(0.0, args.warmup_timeout_sec)
         while True:
             if first:
                 while time.monotonic() < deadline:
-                    if polymarket_feed is not None:
-                        if polymarket_feed.latest_price is not None:
-                            break
-                    elif feed.latest_price is not None or (coinbase_feed is not None and coinbase_feed.latest_price is not None):
+                    if feed.latest_price is not None:
                         break
                     await asyncio.sleep(0.1)
                 first = False
@@ -748,18 +685,6 @@ async def run(args: argparse.Namespace) -> int:
             await refresh_k_price(window, prices, age_sec)
             if polymarket_feed is not None:
                 await refresh_polymarket_open(polymarket_feed, window, prices, age_sec)
-                pm_age = polymarket_feed.latest_age_sec()
-                pm_healthy = polymarket_feed.latest_price is not None and (pm_age is None or pm_age <= args.max_polymarket_price_age_sec)
-                if pm_healthy:
-                    polymarket_unhealthy_since = None
-                elif polymarket_unhealthy_since is None:
-                    polymarket_unhealthy_since = time.monotonic()
-                if (
-                    not backup_started
-                    and polymarket_unhealthy_since is not None
-                    and time.monotonic() - polymarket_unhealthy_since >= args.polymarket_backup_after_sec
-                ):
-                    await ensure_backup_started()
             if feed is not None:
                 await refresh_binance_open(feed, window, prices, age_sec)
             if coinbase_feed is not None:
@@ -796,7 +721,6 @@ async def run(args: argparse.Namespace) -> int:
                 volatility=volatility,
                 coinbase_enabled=args.coinbase_enabled,
                 polymarket_price_enabled=args.polymarket_price_enabled,
-                max_polymarket_price_age_sec=args.max_polymarket_price_age_sec,
             )
             if args.verbose:
                 row["tokens"] = {"up": window.up_token, "down": window.down_token}

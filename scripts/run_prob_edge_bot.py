@@ -80,8 +80,8 @@ class BotConfig:
     coinbase_enabled: bool = False
     polymarket_price_enabled: bool = True
     max_polymarket_price_age_sec: float = 4.0
-    polymarket_backup_after_sec: float = 180.0
-    lead_signal_enabled: bool = False
+    polymarket_stale_reconnect_sec: float = 5.0
+    polymarket_unhealthy_log_after_sec: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -225,12 +225,28 @@ def _parse_scalar(value: str) -> Any:
         return value.strip('"').strip("'")
 
 
+def _float_tuple(value: Any, default: tuple[float, ...]) -> tuple[float, ...]:
+    if value is None:
+        return default
+    if isinstance(value, (list, tuple)):
+        raw_values = value
+    elif isinstance(value, str):
+        raw_values = [item.strip() for item in value.strip("[]").split(",") if item.strip()]
+    else:
+        raw_values = [value]
+    try:
+        parsed = tuple(float(item) for item in raw_values)
+    except (TypeError, ValueError):
+        return default
+    return parsed or default
+
+
 def load_bot_config(path: Path) -> BotConfig:
     raw = _load_yaml(path)
     edge = EdgeConfig(
         early_required_edge=float(_deep_get(raw, ("strategy", "early_required_edge"), 0.16)),
         core_required_edge=float(_deep_get(raw, ("strategy", "core_required_edge"), 0.14)),
-        model_decay_buffer=float(_deep_get(raw, ("strategy", "model_decay_buffer"), 0.02)),
+        model_decay_buffer=float(_deep_get(raw, ("strategy", "model_decay_buffer"), 0.03)),
         overprice_buffer=float(_deep_get(raw, ("strategy", "overprice_buffer"), 0.02)),
         entry_start_age_sec=float(_deep_get(raw, ("strategy", "entry_start_age_sec"), 90.0)),
         entry_end_age_sec=float(_deep_get(raw, ("strategy", "entry_end_age_sec"), 270.0)),
@@ -261,6 +277,8 @@ def load_bot_config(path: Path) -> BotConfig:
         market_disagrees_exit_min_loss=float(_deep_get(raw, ("strategy", "market_disagrees_exit_min_loss"), 0.0)),
         market_disagrees_exit_min_age_sec=float(_deep_get(raw, ("strategy", "market_disagrees_exit_min_age_sec"), 0.0)),
         market_disagrees_exit_max_profit=float(_deep_get(raw, ("strategy", "market_disagrees_exit_max_profit"), 0.01)),
+        polymarket_divergence_exit_bps=float(_deep_get(raw, ("strategy", "polymarket_divergence_exit_bps"), 3.0)),
+        polymarket_divergence_exit_min_age_sec=float(_deep_get(raw, ("strategy", "polymarket_divergence_exit_min_age_sec"), 3.0)),
     )
     execution = ExecutionConfig(
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.0)),
@@ -271,8 +289,13 @@ def load_bot_config(path: Path) -> BotConfig:
         retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.0)),
         buy_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_price_buffer_ticks"), 2.0)),
         buy_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_retry_price_buffer_ticks"), 4.0)),
-        sell_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_price_buffer_ticks"), 4.0)),
-        sell_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_retry_price_buffer_ticks"), 5.0)),
+        sell_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_price_buffer_ticks"), 5.0)),
+        sell_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_retry_price_buffer_ticks"), 6.0)),
+        batch_exit_enabled=bool(_deep_get(raw, ("execution", "batch_exit_enabled"), False)),
+        batch_exit_min_shares=float(_deep_get(raw, ("execution", "batch_exit_min_shares"), 20.0)),
+        batch_exit_min_notional_usd=float(_deep_get(raw, ("execution", "batch_exit_min_notional_usd"), 5.0)),
+        batch_exit_slices=_float_tuple(_deep_get(raw, ("execution", "batch_exit_slices"), None), (0.4, 0.3, 1.0)),
+        batch_exit_extra_buffer_ticks=_float_tuple(_deep_get(raw, ("execution", "batch_exit_extra_buffer_ticks"), None), (0.0, 3.0, 6.0)),
     )
     amount_usd = float(_deep_get(raw, ("execution", "amount_usd"), 5.0))
     return BotConfig(
@@ -287,8 +310,12 @@ def load_bot_config(path: Path) -> BotConfig:
         coinbase_enabled=bool(_deep_get(raw, ("market_data", "coinbase_enabled"), False)),
         polymarket_price_enabled=bool(_deep_get(raw, ("market_data", "polymarket_price_enabled"), True)),
         max_polymarket_price_age_sec=float(_deep_get(raw, ("market_data", "max_polymarket_price_age_sec"), 4.0)),
-        polymarket_backup_after_sec=float(_deep_get(raw, ("market_data", "polymarket_backup_after_sec"), 180.0)),
-        lead_signal_enabled=bool(_deep_get(raw, ("market_data", "lead_signal_enabled"), False)),
+        polymarket_stale_reconnect_sec=float(_deep_get(raw, ("market_data", "polymarket_stale_reconnect_sec"), 5.0)),
+        polymarket_unhealthy_log_after_sec=float(_deep_get(
+            raw,
+            ("market_data", "polymarket_unhealthy_log_after_sec"),
+            10.0,
+        )),
     )
 
 
@@ -313,9 +340,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-coinbase", dest="coinbase_enabled", action="store_false")
     parser.add_argument("--polymarket-price", dest="polymarket_price_enabled", action="store_true", default=None)
     parser.add_argument("--no-polymarket-price", dest="polymarket_price_enabled", action="store_false")
-    parser.add_argument("--polymarket-backup-after-sec", type=float)
-    parser.add_argument("--lead-signal", dest="lead_signal_enabled", action="store_true", default=None)
-    parser.add_argument("--no-lead-signal", dest="lead_signal_enabled", action="store_false")
+    parser.add_argument("--polymarket-stale-reconnect-sec", type=float)
+    parser.add_argument("--polymarket-unhealthy-log-after-sec", type=float)
+    parser.add_argument("--polymarket-divergence-exit-bps", type=float)
     return parser
 
 
@@ -333,18 +360,25 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
             buy_retry_price_buffer_ticks=cfg.execution.buy_retry_price_buffer_ticks,
             sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
             sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
+            batch_exit_enabled=cfg.execution.batch_exit_enabled,
+            batch_exit_min_shares=cfg.execution.batch_exit_min_shares,
+            batch_exit_min_notional_usd=cfg.execution.batch_exit_min_notional_usd,
+            batch_exit_slices=cfg.execution.batch_exit_slices,
+            batch_exit_extra_buffer_ticks=cfg.execution.batch_exit_extra_buffer_ticks,
         )
-        cfg = BotConfig(cfg.edge, execution, float(args.amount_usd), cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, cfg.lead_signal_enabled)
+        cfg = replace(cfg, execution=execution, amount_usd=float(args.amount_usd))
     if args.interval_sec is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, float(args.interval_sec), cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, cfg.lead_signal_enabled)
+        cfg = replace(cfg, interval_sec=float(args.interval_sec))
     if args.coinbase_enabled is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, bool(args.coinbase_enabled), cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, cfg.lead_signal_enabled)
+        cfg = replace(cfg, coinbase_enabled=bool(args.coinbase_enabled))
     if args.polymarket_price_enabled is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, bool(args.polymarket_price_enabled), cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, cfg.lead_signal_enabled)
-    if args.polymarket_backup_after_sec is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, max(0.0, float(args.polymarket_backup_after_sec)), cfg.lead_signal_enabled)
-    if args.lead_signal_enabled is not None:
-        cfg = BotConfig(cfg.edge, cfg.execution, cfg.amount_usd, cfg.interval_sec, cfg.warmup_timeout_sec, cfg.dvol_refresh_sec, cfg.max_dvol_age_sec, cfg.settlement_boundary_usd, cfg.coinbase_enabled, cfg.polymarket_price_enabled, cfg.max_polymarket_price_age_sec, cfg.polymarket_backup_after_sec, bool(args.lead_signal_enabled))
+        cfg = replace(cfg, polymarket_price_enabled=bool(args.polymarket_price_enabled))
+    if args.polymarket_stale_reconnect_sec is not None:
+        cfg = replace(cfg, polymarket_stale_reconnect_sec=max(1.0, float(args.polymarket_stale_reconnect_sec)))
+    if args.polymarket_unhealthy_log_after_sec is not None:
+        cfg = replace(cfg, polymarket_unhealthy_log_after_sec=max(0.0, float(args.polymarket_unhealthy_log_after_sec)))
+    if args.polymarket_divergence_exit_bps is not None:
+        cfg = replace(cfg, edge=replace(cfg.edge, polymarket_divergence_exit_bps=max(0.0, float(args.polymarket_divergence_exit_bps))))
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
     if args.dynamic_params and args.jsonl is None:
@@ -379,8 +413,8 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
         "coinbase_enabled": cfg.coinbase_enabled,
         "polymarket_price_enabled": cfg.polymarket_price_enabled,
         "max_polymarket_price_age_sec": cfg.max_polymarket_price_age_sec,
-        "polymarket_backup_after_sec": cfg.polymarket_backup_after_sec,
-        "lead_signal_enabled": cfg.lead_signal_enabled,
+        "polymarket_stale_reconnect_sec": cfg.polymarket_stale_reconnect_sec,
+        "polymarket_unhealthy_log_after_sec": cfg.polymarket_unhealthy_log_after_sec,
         "windows": options.windows,
         "once": options.once,
         "strategy": asdict(cfg.edge),
@@ -452,6 +486,7 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
         "exit_prob_stagnant": decision.prob_stagnant,
         "exit_prob_delta_3s": _compact(decision.prob_delta_3s),
         "exit_prob_drop_delta": _compact(decision.prob_drop_delta),
+        "exit_polymarket_divergence_bps": _compact(decision.polymarket_divergence_bps, 3),
         "exit_price": _compact(fill_price),
         "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
         "order_attempt": result.attempt if result is not None else None,
@@ -480,6 +515,7 @@ PRICE_ANALYSIS_FIELDS = {
     "source_spread_bps",
     "lead_binance_vs_polymarket_usd",
     "lead_binance_vs_polymarket_bps",
+    "polymarket_divergence_bps",
     "lead_coinbase_vs_polymarket_usd",
     "lead_coinbase_vs_polymarket_bps",
     "lead_proxy_vs_polymarket_usd",
@@ -510,36 +546,7 @@ def _runtime_log_meta(meta: dict[str, Any]) -> dict[str, Any]:
 def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
     source = str(meta.get("price_source") or "")
     base_fields = ("price_source", "s_price", "k_price", "basis_bps")
-    if source == "polymarket_chainlink":
-        fields = base_fields + (
-            "polymarket_price",
-            "polymarket_price_age_sec",
-            "polymarket_open_price",
-            "polymarket_open_source",
-            "lead_binance_vs_polymarket_usd",
-            "lead_binance_vs_polymarket_bps",
-            "lead_coinbase_vs_polymarket_usd",
-            "lead_coinbase_vs_polymarket_bps",
-            "lead_proxy_vs_polymarket_usd",
-            "lead_proxy_vs_polymarket_bps",
-            "lead_binance_return_1s_bps",
-            "lead_binance_return_3s_bps",
-            "lead_binance_return_5s_bps",
-            "lead_coinbase_return_1s_bps",
-            "lead_coinbase_return_3s_bps",
-            "lead_coinbase_return_5s_bps",
-            "lead_polymarket_return_1s_bps",
-            "lead_polymarket_return_3s_bps",
-            "lead_polymarket_return_5s_bps",
-            "lead_binance_side",
-            "lead_coinbase_side",
-            "lead_polymarket_side",
-            "lead_proxy_side",
-            "lead_binance_side_disagrees_with_polymarket",
-            "lead_coinbase_side_disagrees_with_polymarket",
-            "lead_proxy_side_disagrees_with_polymarket",
-        )
-    elif source.startswith("proxy_"):
+    if source.startswith("proxy_"):
         fields = base_fields + (
             "polymarket_price",
             "polymarket_price_age_sec",
@@ -553,6 +560,14 @@ def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
             "coinbase_open_source",
             "source_spread_usd",
             "source_spread_bps",
+            "lead_binance_vs_polymarket_usd",
+            "lead_binance_vs_polymarket_bps",
+            "polymarket_divergence_bps",
+            "lead_binance_return_3s_bps",
+            "lead_polymarket_return_3s_bps",
+            "lead_binance_side",
+            "lead_polymarket_side",
+            "lead_binance_side_disagrees_with_polymarket",
         )
     else:
         fields = base_fields + (
@@ -566,6 +581,65 @@ def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key in fields
         if key in meta and (value := meta.get(key)) is not None and value != "missing"
+    }
+
+
+def _should_attach_reference_meta(
+    reference_meta: dict[str, Any],
+    *,
+    analysis_logs: bool,
+    has_position: bool,
+    decision: StrategyDecision | None,
+) -> bool:
+    if not reference_meta:
+        return False
+    if analysis_logs or has_position:
+        return True
+    return decision is not None and decision.action == "exit"
+
+
+def _reference_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "polymarket_price",
+        "polymarket_price_age_sec",
+        "lead_binance_vs_polymarket_usd",
+        "lead_binance_vs_polymarket_bps",
+        "polymarket_divergence_bps",
+        "lead_binance_return_3s_bps",
+        "lead_polymarket_return_3s_bps",
+        "lead_binance_side",
+        "lead_polymarket_side",
+        "lead_binance_side_disagrees_with_polymarket",
+    )
+    return {
+        key: value
+        for key in fields
+        if key in meta and (value := meta.get(key)) is not None and value != "missing"
+    }
+
+
+def _decision_log(decision: StrategyDecision) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in decision.__dict__.items()
+        if value is not None
+    }
+
+
+def _position_log(position: PositionSnapshot | None, *, compact: bool) -> dict[str, Any] | None:
+    if position is None:
+        return None
+    if not compact:
+        return position.__dict__
+    return {
+        "market_slug": position.market_slug,
+        "token_side": position.token_side,
+        "entry_time": _compact(position.entry_time),
+        "entry_avg_price": _compact(position.entry_avg_price),
+        "filled_shares": _compact(position.filled_shares),
+        "entry_model_prob": _compact(position.entry_model_prob),
+        "entry_edge": _compact(position.entry_edge),
+        "exit_status": position.exit_status,
     }
 
 
@@ -597,19 +671,19 @@ def _side_vs_k(price: float | None, k_price: float | None) -> str | None:
     return "up" if price >= k_price else "down"
 
 
-def _warmup_warning_row(*, now: dt.datetime, mode: str, market_slug: str, backup_after_sec: float) -> dict[str, Any]:
+def _warmup_warning_row(*, now: dt.datetime, mode: str, market_slug: str, unhealthy_log_after_sec: float) -> dict[str, Any]:
     return {
         "ts": now.astimezone().isoformat(),
         "event": "warning",
         "mode": mode,
         "market_slug": market_slug,
-        "warning": "polymarket_ws_warmup_no_tick",
-        "message": "polymarket WS warmup expired without first tick",
-        "backup_starts_after_sec": float(backup_after_sec),
+        "warning": "binance_ws_warmup_no_tick",
+        "message": "Binance WS warmup expired without first tick",
+        "polymarket_reference_check_after_sec": float(unhealthy_log_after_sec),
     }
 
 
-def _backup_feed_started_row(
+def _polymarket_reference_unhealthy_row(
     *,
     now: dt.datetime,
     mode: str,
@@ -619,13 +693,26 @@ def _backup_feed_started_row(
 ) -> dict[str, Any]:
     return {
         "ts": now.astimezone().isoformat(),
-        "event": "backup_feed_started",
+        "event": "polymarket_reference_unhealthy",
         "mode": mode,
         "market_slug": market_slug,
         "trigger": "polymarket_unhealthy_for_seconds",
         "unhealthy_for_sec": _compact(unhealthy_for_sec, 3),
-        "binance_started": True,
         "coinbase_started": bool(coinbase_started),
+    }
+
+
+def _polymarket_reference_recovered_row(
+    *,
+    now: dt.datetime,
+    mode: str,
+    market_slug: str,
+) -> dict[str, Any]:
+    return {
+        "ts": now.astimezone().isoformat(),
+        "event": "polymarket_reference_recovered",
+        "mode": mode,
+        "market_slug": market_slug,
     }
 
 
@@ -687,8 +774,8 @@ def _bot_config_with_edge(cfg: BotConfig, edge: EdgeConfig) -> BotConfig:
         coinbase_enabled=cfg.coinbase_enabled,
         polymarket_price_enabled=cfg.polymarket_price_enabled,
         max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec,
-        polymarket_backup_after_sec=cfg.polymarket_backup_after_sec,
-        lead_signal_enabled=cfg.lead_signal_enabled,
+        polymarket_stale_reconnect_sec=cfg.polymarket_stale_reconnect_sec,
+        polymarket_unhealthy_log_after_sec=cfg.polymarket_unhealthy_log_after_sec,
     )
 
 
@@ -721,6 +808,8 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         market_disagrees_exit_min_loss=cfg.edge.market_disagrees_exit_min_loss,
         market_disagrees_exit_min_age_sec=cfg.edge.market_disagrees_exit_min_age_sec,
         market_disagrees_exit_max_profit=cfg.edge.market_disagrees_exit_max_profit,
+        polymarket_divergence_exit_bps=cfg.edge.polymarket_divergence_exit_bps,
+        polymarket_divergence_exit_min_age_sec=cfg.edge.polymarket_divergence_exit_min_age_sec,
     )
 
 
@@ -758,21 +847,17 @@ def _snapshot(
     stream: PriceStream,
     cfg: BotConfig,
     sigma_eff: float | None,
-    fallback_pricing_enabled: bool = True,
 ) -> tuple[MarketSnapshot, dict[str, Any]]:
     now = dt.datetime.now(dt.timezone.utc)
     age_sec = (now - window.start_time).total_seconds()
     remaining_sec = (window.end_time - now).total_seconds()
-    pricing_feed = feed if fallback_pricing_enabled else None
-    pricing_coinbase_feed = coinbase_feed if fallback_pricing_enabled else None
     price = effective_price(
-        pricing_feed,
-        pricing_coinbase_feed,
+        feed,
+        coinbase_feed,
         prices,
         coinbase_enabled=cfg.coinbase_enabled,
         polymarket_feed=polymarket_feed,
         polymarket_enabled=cfg.polymarket_price_enabled,
-        max_polymarket_age_sec=cfg.max_polymarket_price_age_sec,
     )
     price_source, s_price, basis_bps = price.source, price.effective, price.basis_bps
     now_ts = now.timestamp()
@@ -816,7 +901,8 @@ def _snapshot(
         down_bid_depth_ok=bool(down["bid_depth_ok"]),
         up_book_age_ms=up["book_age_ms"],
         down_book_age_ms=down["book_age_ms"],
-        source_spread_bps=None if price.source == "polymarket_chainlink" else price.spread_bps,
+        source_spread_bps=price.spread_bps,
+        polymarket_divergence_bps=lead_binance_bps,
     )
     meta = {
         "ts": now.astimezone().isoformat(),
@@ -845,6 +931,7 @@ def _snapshot(
         "source_spread_bps": _compact(raw_source_spread_bps if raw_source_spread_bps is not None else price.spread_bps, 3),
         "lead_binance_vs_polymarket_usd": _compact(lead_binance_usd, 2),
         "lead_binance_vs_polymarket_bps": _compact(lead_binance_bps, 3),
+        "polymarket_divergence_bps": _compact(lead_binance_bps, 3),
         "lead_coinbase_vs_polymarket_usd": _compact(lead_coinbase_usd, 2),
         "lead_coinbase_vs_polymarket_bps": _compact(lead_coinbase_bps, 3),
         "lead_proxy_vs_polymarket_usd": _compact(lead_proxy_usd, 2),
@@ -895,9 +982,8 @@ async def _refresh_entry_retry_params(
     sigma_eff: float | None,
     state: StrategyState,
     original_side: str | None,
-    fallback_pricing_enabled: bool = False,
 ) -> BuyRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff, fallback_pricing_enabled=fallback_pricing_enabled)
+    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
     decision = evaluate_entry(snap, state, cfg.edge)
     if decision.action != "enter" or decision.side != original_side:
         return None
@@ -921,9 +1007,8 @@ async def _refresh_exit_retry_params(
     state: StrategyState,
     position: PositionSnapshot,
     exit_reason: str | None = None,
-    fallback_pricing_enabled: bool = False,
 ) -> SellRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff, fallback_pricing_enabled=fallback_pricing_enabled)
+    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
     decision = evaluate_exit(snap, position, cfg.edge, state)
     if decision.action == "exit" and decision.limit_price is not None:
         return SellRetryParams(min_price=decision.limit_price, exit_reason=decision.reason)
@@ -958,7 +1043,11 @@ async def run(options: RuntimeOptions) -> int:
             dynamic_start_error = str(exc)
     feed: BinancePriceFeed | None = None
     coinbase_feed: CoinbaseBtcPriceFeed | None = None
-    polymarket_feed = PolymarketChainlinkBtcPriceFeed() if cfg.polymarket_price_enabled else None
+    polymarket_feed = (
+        PolymarketChainlinkBtcPriceFeed(max_history_sec=15.0, stale_reconnect_sec=cfg.polymarket_stale_reconnect_sec)
+        if cfg.polymarket_price_enabled
+        else None
+    )
     series = MarketSeries.from_known("btc-updown-5m")
     stream = PriceStream(on_price=_noop_price_update)
     volatility: DvolSnapshot | None = None
@@ -970,32 +1059,8 @@ async def run(options: RuntimeOptions) -> int:
     state = StrategyState()
     completed_windows = 0
     seen_repetitive_skips: set[tuple[str, str]] = set()
-    backup_started = False
+    polymarket_reference_warning_logged = False
     polymarket_unhealthy_since: float | None = time.monotonic() if polymarket_feed is not None else None
-
-    async def ensure_backup_started() -> None:
-        nonlocal feed, coinbase_feed, backup_started
-        if backup_started:
-            return
-        unhealthy_for_sec = (
-            time.monotonic() - polymarket_unhealthy_since
-            if polymarket_unhealthy_since is not None
-            else 0.0
-        )
-        if feed is None:
-            feed = BinancePriceFeed("btcusdt")
-            await feed.start()
-        if cfg.coinbase_enabled and coinbase_feed is None:
-            coinbase_feed = CoinbaseBtcPriceFeed()
-            await coinbase_feed.start()
-        backup_started = True
-        logger.write(_backup_feed_started_row(
-            now=dt.datetime.now(dt.timezone.utc),
-            mode=options.mode,
-            market_slug=state.current_market_slug or "",
-            unhealthy_for_sec=unhealthy_for_sec,
-            coinbase_started=cfg.coinbase_enabled,
-        ))
 
     gateway = (
         LiveFakExecutionGateway(
@@ -1006,6 +1071,11 @@ async def run(options: RuntimeOptions) -> int:
             buy_retry_price_buffer_ticks=cfg.execution.buy_retry_price_buffer_ticks,
             sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
             sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
+            batch_exit_enabled=cfg.execution.batch_exit_enabled,
+            batch_exit_min_shares=cfg.execution.batch_exit_min_shares,
+            batch_exit_min_notional_usd=cfg.execution.batch_exit_min_notional_usd,
+            batch_exit_slices=cfg.execution.batch_exit_slices,
+            batch_exit_extra_buffer_ticks=cfg.execution.batch_exit_extra_buffer_ticks,
         )
         if options.mode == "live"
         else PaperExecutionGateway(stream=stream, config=cfg.execution)
@@ -1026,35 +1096,28 @@ async def run(options: RuntimeOptions) -> int:
         window = find_initial_window(series)
         prices = WindowPrices()
         state.reset_for_market(window.slug)
+        feed = BinancePriceFeed("btcusdt")
+        await feed.start()
         if polymarket_feed is not None:
             await polymarket_feed.start()
-        if cfg.lead_signal_enabled:
-            if feed is None:
-                feed = BinancePriceFeed("btcusdt")
-                await feed.start()
-            if cfg.coinbase_enabled and coinbase_feed is None:
-                coinbase_feed = CoinbaseBtcPriceFeed()
-                await coinbase_feed.start()
-        if polymarket_feed is None:
-            await ensure_backup_started()
+        if cfg.coinbase_enabled and coinbase_feed is None:
+            coinbase_feed = CoinbaseBtcPriceFeed()
+            await coinbase_feed.start()
         await stream.connect([window.up_token, window.down_token])
         if options.mode == "live":
             await asyncio.to_thread(prefetch_order_params, window.up_token)
             await asyncio.to_thread(prefetch_order_params, window.down_token)
         warmup_deadline = time.monotonic() + max(0.0, cfg.warmup_timeout_sec)
         while time.monotonic() < warmup_deadline:
-            if polymarket_feed is not None:
-                if polymarket_feed.latest_price is not None:
-                    break
-            elif feed.latest_price is not None or (coinbase_feed is not None and coinbase_feed.latest_price is not None):
+            if feed.latest_price is not None:
                 break
             await asyncio.sleep(0.1)
-        if polymarket_feed is not None and polymarket_feed.latest_price is None:
+        if feed.latest_price is None:
             logger.write(_warmup_warning_row(
                 now=dt.datetime.now(dt.timezone.utc),
                 mode=options.mode,
                 market_slug=window.slug,
-                backup_after_sec=cfg.polymarket_backup_after_sec,
+                unhealthy_log_after_sec=cfg.polymarket_unhealthy_log_after_sec,
             ))
 
         while True:
@@ -1088,15 +1151,30 @@ async def run(options: RuntimeOptions) -> int:
                 pm_age = polymarket_feed.latest_age_sec()
                 pm_healthy = polymarket_feed.latest_price is not None and (pm_age is None or pm_age <= cfg.max_polymarket_price_age_sec)
                 if pm_healthy:
+                    if polymarket_reference_warning_logged:
+                        logger.write(_polymarket_reference_recovered_row(
+                            now=dt.datetime.now(dt.timezone.utc),
+                            mode=options.mode,
+                            market_slug=window.slug,
+                        ))
+                        polymarket_reference_warning_logged = False
                     polymarket_unhealthy_since = None
                 elif polymarket_unhealthy_since is None:
                     polymarket_unhealthy_since = time.monotonic()
                 if (
-                    not backup_started
+                    not polymarket_reference_warning_logged
                     and polymarket_unhealthy_since is not None
-                    and time.monotonic() - polymarket_unhealthy_since >= cfg.polymarket_backup_after_sec
+                    and time.monotonic() - polymarket_unhealthy_since >= cfg.polymarket_unhealthy_log_after_sec
                 ):
-                    await ensure_backup_started()
+                    unhealthy_for_sec = time.monotonic() - polymarket_unhealthy_since
+                    polymarket_reference_warning_logged = True
+                    logger.write(_polymarket_reference_unhealthy_row(
+                        now=dt.datetime.now(dt.timezone.utc),
+                        mode=options.mode,
+                        market_slug=window.slug,
+                        unhealthy_for_sec=unhealthy_for_sec,
+                        coinbase_started=cfg.coinbase_enabled,
+                    ))
             if feed is not None:
                 await refresh_binance_open(feed, window, prices, age_sec)
             if coinbase_feed is not None:
@@ -1118,9 +1196,9 @@ async def run(options: RuntimeOptions) -> int:
                 stream,
                 cfg,
                 sigma_eff,
-                fallback_pricing_enabled=backup_started or polymarket_feed is None,
             )
             price_analysis = _price_analysis(meta)
+            reference_meta = _reference_meta(meta)
 
             row: dict[str, Any] = {
                 **_runtime_log_meta(meta),
@@ -1129,17 +1207,12 @@ async def run(options: RuntimeOptions) -> int:
                 "sigma_source": volatility.source if volatility is not None else "missing",
                 "sigma_eff": _compact(sigma_eff),
                 "volatility_stale": dvol_stale,
-                "position": state.open_position.__dict__ if state.open_position else None,
+                "position": _position_log(state.open_position, compact=True),
                 "realized_pnl": _compact(state.realized_pnl, 4),
             }
-            if options.analysis_logs:
-                row["analysis"] = {"price_sources": price_analysis}
-                if volatility is not None:
-                    row["analysis"]["volatility"] = volatility.to_json()
-
             if state.has_position and state.open_position is not None:
                 decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
-                row["decision"] = decision.__dict__
+                row["decision"] = _decision_log(decision)
                 if decision.model_prob is not None:
                     state.record_model_prob(
                         snap.age_sec,
@@ -1147,7 +1220,7 @@ async def run(options: RuntimeOptions) -> int:
                         retention_sec=max(cfg.edge.prob_stagnation_window_sec, cfg.edge.prob_drop_exit_window_sec, 5.0),
                     )
                 if decision.action == "exit":
-                    exiting_position = state.open_position
+                    exiting_position = replace(state.open_position)
                     result = await gateway.sell(
                         state.open_position.token_id,
                         state.open_position.filled_shares,
@@ -1165,27 +1238,29 @@ async def run(options: RuntimeOptions) -> int:
                             state=state,
                             position=position,
                             exit_reason=decision.reason,
-                            fallback_pricing_enabled=backup_started or polymarket_feed is None,
                         ),
                     )
                     row["order"] = result.__dict__
                     if options.analysis_logs:
-                        row["analysis"] = {**row.get("analysis", {}), **_exit_analysis(decision, result)}
+                        row["analysis"] = {"price_sources": price_analysis, **_exit_analysis(decision, result)}
                     if result.success:
-                        pnl = state.record_exit(result.avg_price, decision.reason)
-                        row["event"] = "exit"
+                        pnl, closed = state.record_partial_exit(result.avg_price, result.filled_size, decision.reason)
+                        row["event"] = "exit" if closed else "partial_exit"
                         row["exit_reason"] = decision.reason
                         row["exit_price"] = _compact(result.avg_price)
                         row["exit_shares"] = _compact(result.filled_size)
                         row["exit_pnl"] = _compact(pnl, 4)
                         if options.analysis_logs:
-                            row["position_before_exit"] = exiting_position.__dict__
+                            row["position_before_exit"] = _position_log(exiting_position, compact=False)
+                            row["position_after_exit"] = _position_log(state.open_position, compact=False)
                     else:
                         row["event"] = "order_no_fill"
                         row["order_intent"] = "exit"
+                        if options.analysis_logs:
+                            row["analysis"] = {"price_sources": price_analysis, **_exit_analysis(decision, result)}
             else:
                 decision = evaluate_entry(snap, state, cfg.edge)
-                row["decision"] = decision.__dict__
+                row["decision"] = _decision_log(decision)
                 if decision.action == "enter":
                     token_id = window.up_token if decision.side == "up" else window.down_token
                     result = await gateway.buy(
@@ -1205,12 +1280,11 @@ async def run(options: RuntimeOptions) -> int:
                             sigma_eff=sigma_eff,
                             state=state,
                             original_side=side,
-                            fallback_pricing_enabled=backup_started or polymarket_feed is None,
                         ),
                     )
                     row["order"] = result.__dict__
                     if options.analysis_logs:
-                        row["analysis"] = {**row.get("analysis", {}), **_entry_analysis(decision, result)}
+                        row["analysis"] = {"price_sources": price_analysis, **_entry_analysis(decision, result)}
                     if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
                         state.record_entry(PositionSnapshot(
                             market_slug=window.slug,
@@ -1227,11 +1301,20 @@ async def run(options: RuntimeOptions) -> int:
                         row["entry_price"] = _compact(result.avg_price)
                         row["entry_shares"] = _compact(result.filled_size)
                         if options.analysis_logs and state.open_position is not None:
-                            row["position_after_entry"] = state.open_position.__dict__
+                            row["position_after_entry"] = _position_log(state.open_position, compact=False)
                     else:
                         row["event"] = "order_no_fill"
                         row["order_intent"] = "entry"
+                        if options.analysis_logs:
+                            row["analysis"] = {"price_sources": price_analysis, **_entry_analysis(decision, result)}
 
+            if _should_attach_reference_meta(
+                reference_meta,
+                analysis_logs=options.analysis_logs,
+                has_position=state.has_position,
+                decision=decision,
+            ):
+                row["reference"] = reference_meta
             if _should_write_row(row, seen_repetitive_skips):
                 logger.write(row)
             if options.once:
@@ -1246,7 +1329,6 @@ async def run(options: RuntimeOptions) -> int:
                         coinbase_enabled=cfg.coinbase_enabled,
                         polymarket_feed=polymarket_feed,
                         polymarket_enabled=cfg.polymarket_price_enabled,
-                        max_polymarket_age_sec=cfg.max_polymarket_price_age_sec,
                     ).effective
                     settlement = choose_settlement(prices, settlement_price, boundary_usd=cfg.settlement_boundary_usd)
                     settled_position = state.open_position

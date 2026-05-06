@@ -56,6 +56,29 @@ class SequencedLiveGateway(LiveFakExecutionGateway):
         return self.responses.pop(0)
 
 
+class BatchClient:
+    def __init__(self):
+        self.market_orders = []
+        self.posted_batches = []
+
+    def create_market_order(self, args, options=None):
+        self.market_orders.append(args)
+        return {"amount": args.amount, "price": args.price}
+
+    def post_orders(self, batch):
+        self.posted_batches.append(batch)
+        return [
+            {
+                "orderID": f"ord-{index}",
+                "success": True,
+                "status": "matched",
+                "makingAmount": str(order["order"]["amount"]),
+                "takingAmount": str(order["order"]["amount"] * order["order"]["price"]),
+            }
+            for index, order in enumerate(batch)
+        ]
+
+
 def test_paper_buy_and_sell_use_depth_after_delay() -> None:
     async def scenario() -> None:
         stream = FakeStream()
@@ -272,7 +295,7 @@ def test_live_sell_retry_reposts_same_floor_price(monkeypatch) -> None:
     assert result.total_latency_ms is not None
 
 
-def test_live_sell_profit_exit_uses_small_aggressive_retry(monkeypatch) -> None:
+def test_live_sell_profit_exit_uses_configured_aggressive_retry(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 10.0)
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
     gateway = SequencedLiveGateway([
@@ -283,8 +306,8 @@ def test_live_sell_profit_exit_uses_small_aggressive_retry(monkeypatch) -> None:
     result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="defensive_take_profit"))
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.36
-    assert gateway.calls[1][3] == 0.35
+    assert gateway.calls[0][3] == 0.35
+    assert gateway.calls[1][3] == 0.34
 
 
 def test_live_sell_logic_decay_starts_below_bid_limit(monkeypatch) -> None:
@@ -298,8 +321,23 @@ def test_live_sell_logic_decay_starts_below_bid_limit(monkeypatch) -> None:
     result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="logic_decay_exit"))
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.36
-    assert gateway.calls[1][3] == 0.35
+    assert gateway.calls[0][3] == 0.35
+    assert gateway.calls[1][3] == 0.34
+
+
+def test_live_sell_polymarket_divergence_uses_configured_aggressive_retry(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 10.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.36, message="MATCHED", mode="live"),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="polymarket_divergence_exit"))
+
+    assert result.success is True
+    assert gateway.calls[0][3] == 0.35
+    assert gateway.calls[1][3] == 0.34
 
 
 def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) -> None:
@@ -325,8 +363,32 @@ def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) ->
     )
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.36
-    assert gateway.calls[1][3] == 0.45
+    assert gateway.calls[0][3] == 0.35
+    assert gateway.calls[1][3] == 0.44
+
+
+def test_live_batch_sell_posts_multiple_fak_slices(monkeypatch) -> None:
+    client = BatchClient()
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: client)
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 100.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = LiveFakExecutionGateway(
+        live_risk_ack=True,
+        batch_exit_enabled=True,
+        batch_exit_min_shares=20.0,
+        batch_exit_slices=(0.4, 0.3, 1.0),
+        batch_exit_extra_buffer_ticks=(0.0, 3.0, 6.0),
+    )
+
+    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="logic_decay_exit"))
+
+    assert result.success is True
+    assert result.filled_size == pytest.approx(100.0)
+    assert result.avg_price == pytest.approx((40 * 0.33 + 30 * 0.30 + 30 * 0.27) / 100)
+    assert len(client.posted_batches) == 1
+    assert [order.amount for order in client.market_orders] == [40.0, 30.0, 30.0]
+    assert [order.price for order in client.market_orders] == [0.33, 0.30, 0.27]
 
 
 def test_live_sell_final_force_uses_emergency_ladder(monkeypatch) -> None:
@@ -632,6 +694,33 @@ def test_paper_sell_retry_uses_refreshed_exit_floor(monkeypatch) -> None:
         assert result.success is True
         assert result.attempt == 2
         assert result.avg_price == 0.45
+
+    asyncio.run(scenario())
+
+
+def test_paper_batch_sell_can_partially_exit_large_share_position(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+
+    async def scenario() -> None:
+        stream = FakeStream()
+        stream.bids["up"] = [(0.38, 40.0), (0.32, 30.0), (0.28, 30.0)]
+        gateway = PaperExecutionGateway(
+            stream=stream,
+            config=ExecutionConfig(
+                paper_latency_sec=0.0,
+                retry_count=0,
+                batch_exit_enabled=True,
+                batch_exit_min_shares=20.0,
+                batch_exit_slices=(0.4, 0.3, 1.0),
+                batch_exit_extra_buffer_ticks=(0.0, 3.0, 6.0),
+            ),
+        )
+
+        result = await gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="logic_decay_exit")
+
+        assert result.success is True
+        assert result.filled_size == pytest.approx(100.0)
+        assert result.avg_price == pytest.approx(0.332)
 
     asyncio.run(scenario())
 

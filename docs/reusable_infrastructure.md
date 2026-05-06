@@ -48,7 +48,8 @@ new_poly/logging_utils.py
 - `latest_age_sec`.
 - `price_at_or_before`.
 - `first_price_at_or_after`.
-- Primary strategy `S` source; Binance/Coinbase feeds are fallback.
+- Settlement-source reference and divergence diagnostic. The current strategy
+  uses Binance as the primary model `S` source.
 
 `new_poly.market.market`
 

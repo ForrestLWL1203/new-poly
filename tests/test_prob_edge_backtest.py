@@ -4,6 +4,8 @@ import sys
 import math
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs
@@ -64,6 +66,39 @@ def test_backtest_enters_and_settles_open_position() -> None:
     assert result.summary["settlements"] == 1
     assert result.summary["total_pnl"] > 0
     assert result.trades[0]["entry_side"] == "up"
+
+
+def test_backtest_honor_order_events_keeps_partial_exit_open_until_final_exit() -> None:
+    entry = _row("m1", 100, 101.0)
+    entry.update({
+        "event": "entry",
+        "analysis": {"entry_side": "up", "entry_price": 0.10, "entry_model_prob": 0.70, "entry_edge_signal": 0.60},
+        "order": {"success": True, "filled_size": 100.0, "avg_price": 0.10},
+    })
+    partial = _row("m1", 120, 101.0)
+    partial.update({
+        "event": "partial_exit",
+        "exit_reason": "logic_decay_exit",
+        "analysis": {"exit_price": 0.30},
+        "order": {"success": True, "filled_size": 40.0, "avg_price": 0.30},
+    })
+    final = _row("m1", 140, 101.0)
+    final.update({
+        "event": "exit",
+        "exit_reason": "logic_decay_exit",
+        "analysis": {"exit_price": 0.20},
+        "order": {"success": True, "filled_size": 60.0, "avg_price": 0.20},
+    })
+
+    result = run_backtest([entry, partial, final], BacktestConfig(honor_order_events=True))
+
+    assert result.summary["closed_trades"] == 1
+    assert result.trades[0]["partial_exits"][0]["age_sec"] == 120.0
+    assert result.trades[0]["partial_exits"][0]["reason"] == "logic_decay_exit"
+    assert result.trades[0]["partial_exits"][0]["price"] == 0.30
+    assert result.trades[0]["partial_exits"][0]["shares"] == 40.0
+    assert result.trades[0]["partial_exits"][0]["pnl"] == pytest.approx(8.0)
+    assert result.trades[0]["pnl"] == 14.0
 
 
 def test_scan_configs_returns_sorted_results() -> None:
@@ -271,6 +306,41 @@ def test_backtest_config_passes_max_entries_to_strategy() -> None:
     cfg = BacktestConfig(max_entries_per_market=4)
 
     assert cfg.edge_config().max_entries_per_market == 4
+
+
+def test_backtest_config_passes_model_decay_buffer_to_strategy() -> None:
+    cfg = BacktestConfig(model_decay_buffer=0.03)
+
+    assert cfg.edge_config().model_decay_buffer == 0.03
+
+
+def test_backtest_config_passes_polymarket_divergence_exit_to_strategy() -> None:
+    cfg = BacktestConfig(polymarket_divergence_exit_bps=3.0, polymarket_divergence_exit_min_age_sec=3.0)
+
+    edge_cfg = cfg.edge_config()
+
+    assert edge_cfg.polymarket_divergence_exit_bps == 3.0
+    assert edge_cfg.polymarket_divergence_exit_min_age_sec == 3.0
+
+
+def test_backtest_replays_polymarket_divergence_exit_from_lead_field() -> None:
+    rows = [
+        _row("m1", 90, 100.10),
+        _row("m1", 130, 100.10),
+    ]
+    rows[0]["up"]["ask_avg"] = 0.35
+    rows[0]["up"]["ask_limit"] = 0.35
+    rows[1]["up"]["bid_avg"] = 0.36
+    rows[1]["up"]["bid_limit"] = 0.35
+    rows[1]["lead_binance_vs_polymarket_bps"] = 3.4
+
+    result = run_backtest(rows, BacktestConfig(
+        amount_usd=10.0,
+        polymarket_divergence_exit_bps=3.0,
+        polymarket_divergence_exit_min_age_sec=3.0,
+    ))
+
+    assert result.trades[0]["exit_reason"] == "polymarket_divergence_exit"
 
 
 def test_backtest_rejects_entry_when_safety_depth_exceeds_formula_cap() -> None:

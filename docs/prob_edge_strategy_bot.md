@@ -76,25 +76,32 @@ python3 scripts/run_prob_edge_bot.py \
   profile uses `$1`.
 - Default max successful entries per market is `2`.
 - The default strategy loop interval is `0.5s`, so paper/live decisions run at
-  roughly 2Hz. Time-window guards such as `prob_drop_exit_window_sec=5` and
-  `prob_stagnation_window_sec=3` are wall-clock windows, not tick counts.
+  roughly 2Hz. Time-window guards such as `prob_stagnation_window_sec=3` are
+  wall-clock windows, not tick counts.
 - `sigma_eff` uses Deribit BTC DVOL divided by 100.
 - K is the Polymarket UI Price to Beat from the crypto price API.
-- Settlement/reporting in paper mode uses proxy direction; the bot does not wait
-  for Polymarket `closePrice`.
-- S uses Polymarket live-data `crypto_prices_chainlink` by default. This is the
-  same live BTC/USD source observed by the Polymarket event UI and matched the
-  crypto price API open/close ticks in a three-window probe on 2026-05-06.
-- Binance and Coinbase are backup sources, but they are not started while
-  Polymarket live-data is healthy. If the Polymarket source is missing or stale
-  beyond `market_data.max_polymarket_price_age_sec`, the bot first stays
-  fail-closed and does not trade. Only after the source has been continuously
-  unhealthy for `market_data.polymarket_backup_after_sec` does it lazily start
-  Binance/Coinbase and fall back to the previous basis-adjusted proxy logic.
-- Optional `market_data.lead_signal_enabled` starts Binance/Coinbase while
-  Polymarket remains the pricing baseline. This records whether CEX prices are
-  leading or disagreeing with the Polymarket source; it does not change `S` or
-  entry/exit decisions yet. `analysis_logs` only controls whether those
+- Settlement/reporting in paper mode uses the collected effective price
+  direction; the bot does not wait for Polymarket `closePrice`.
+- S uses Binance BTC/USDT trades as the default model input. This is intentional:
+  the current strategy is trying to capture the CEX-to-Polymarket information
+  lead, then only trade when the Polymarket CLOB price still offers edge.
+- Polymarket live-data `crypto_prices_chainlink` is kept as a settlement-source
+  reference and risk diagnostic, not as the normal probability-model `S`. A
+  three-window probe on 2026-05-06 showed its boundary ticks matching the crypto
+  price API `openPrice`/`closePrice`, so it is useful for detecting when the CEX
+  lead is becoming dangerous near settlement.
+- The Polymarket reference feed stores only a short rolling history, currently
+  about 15 seconds. The bot only needs recent reference ticks for source
+  divergence and short-horizon movement diagnostics.
+- Coinbase is disabled by default and should stay off unless a specific run is
+  testing multi-source backup behavior. With Coinbase disabled, the active model
+  source is Binance-only.
+- If Polymarket reference data is missing or stale, Binance can still provide
+  the model price. The Polymarket feed has its own stale watchdog: after
+  `market_data.polymarket_stale_reconnect_sec` without a valid price tick, it
+  closes and reconnects the WS. The current default is `5s`.
+- CEX-vs-Polymarket lead diagnostics are always computed when both sources have
+  data because the cost is tiny. `analysis_logs` only decides whether those
   diagnostics are written to JSONL.
 - `market_data.max_polymarket_price_age_sec` defaults to `4.0`; a five-window
   VPS paper run observed occasional healthy Polymarket updates around `3.27s`,
@@ -138,11 +145,19 @@ market_disagrees_exit_max_remaining_sec
 market_disagrees_exit_min_loss
 market_disagrees_exit_min_age_sec
 market_disagrees_exit_max_profit
+polymarket_divergence_exit_bps
+polymarket_divergence_exit_min_age_sec
 retry_count
 retry_interval_sec
+batch_exit_enabled
+batch_exit_min_shares
+batch_exit_min_notional_usd
+batch_exit_slices
+batch_exit_extra_buffer_ticks
 polymarket_price_enabled
 max_polymarket_price_age_sec
-polymarket_backup_after_sec
+polymarket_stale_reconnect_sec
+polymarket_unhealthy_log_after_sec
 coinbase_enabled
 ```
 
@@ -152,12 +167,22 @@ from replaying the 120-window collector and dry-run datasets captured on
 thresholds admitted too many low-probability lottery-style entries and larger
 `logic_decay_exit` losses.
 
-Coinbase is now a lazy backup source, not the normal strategy baseline. When
-the bot is already in fallback mode and both Binance/Coinbase live prices are
-available, `cross_source_max_bps` acts as an entry quality gate. If the two
-backup sources disagree by more than the configured basis-point threshold, the
-bot skips new entries with `source_divergence`. While Polymarket live-data is
-fresh, Binance/Coinbase are not needed for trading decisions.
+Binance is now the normal strategy baseline. Coinbase is disabled by default
+and only participates when explicitly enabled. When both Binance/Coinbase live
+prices are available, `cross_source_max_bps` can act as an entry quality gate.
+If the two CEX sources disagree by more than the configured basis-point
+threshold, the bot skips new entries with `source_divergence`. Binance-vs-
+Polymarket divergence is diagnostic and risk context, not a hard entry block by
+default, because that divergence may be the edge source.
+
+For open positions, that same reference can become a risk exit. The current
+default `polymarket_divergence_exit_bps=3.0` exits only when the divergence is
+adverse to the held side and the position has been open for at least
+`polymarket_divergence_exit_min_age_sec=3.0`. UP exits when
+`Binance - Polymarket > 3 bps`; DOWN exits when `Binance - Polymarket < -3 bps`.
+Set the threshold to `0` to disable this guard. This is separate from
+`market_disagrees_exit`, which measures CLOB bid/model disagreement rather than
+Polymarket reference divergence.
 
 The initial `market_disagrees_exit_threshold` default is `0.30`. A looser
 `0.20` threshold caught more bid/model deterioration but over-exited in replay;
@@ -269,7 +294,7 @@ chasing a stale signal. The default hint ladder is configurable:
 
 ```text
 attempt 1: min(ask_limit + 2 ticks, fair_cap)
-attempt 2: min(ask_limit + 4 ticks, fair_cap)
+attempt 2: min(ask_limit + 5 ticks, fair_cap)
 ```
 
 SELL also gets one retry. In CLOB FAK semantics any visible bid at or above the
@@ -279,9 +304,10 @@ profit-taking and stop-loss exits use the same configurable aggressive floor:
 ```text
 normal exits:
   market_overprice_exit / defensive_take_profit / profit_protection_exit
-  logic_decay_exit / risk_exit
-  attempt 1: bid_limit - 4 ticks
-  attempt 2: bid_limit - 5 ticks
+  logic_decay_exit / risk_exit / market_disagrees_exit
+  polymarket_divergence_exit
+  attempt 1: bid_limit - 5 ticks
+  attempt 2: bid_limit - 6 ticks
 
 final_force_exit:
   attempt 1: bid_limit - 5 ticks
@@ -290,7 +316,7 @@ final_force_exit:
 
 Earlier versions used separate profit/stop floors. Live testing showed that even
 profit exits can hit FAK no-match when the local book moves between WS snapshot
-and POST, so normal exits now share a `4/5 tick` ladder. `final_force_exit`
+and POST, so normal exits now share a `5/6 tick` ladder. `final_force_exit`
 keeps its hardcoded `5/10 tick` emergency ladder because the final seconds
 prioritize reducing expiry exposure over profile-level tuning. Sell floors are
 clamped at one tick; for very low-priced tokens, attempt 1 and attempt 2 may
@@ -303,6 +329,31 @@ position still has fresh bid depth, the refreshed `bid_limit` is used as the new
 sell floor with the original exit reason. This is based on the 2026-05-05
 48-window paper run where 5 exit no-fills were observed and 4/5 became worse
 after the retry was skipped as "signal no longer valid".
+
+## Batch Exit
+
+Small positions still use the single-order SELL FAK path above. Larger
+positions can use batch exit:
+
+```yaml
+batch_exit_enabled: true
+batch_exit_min_shares: 20
+batch_exit_min_notional_usd: 5
+batch_exit_slices: [0.4, 0.3, 1.0]
+batch_exit_extra_buffer_ticks: [0, 3, 6]
+```
+
+The trigger is based on position size, not only low entry price. A 10 USDC
+position can still create many shares if the entry price is low enough, and
+large share counts are harder to exit against thin late-window bid depth.
+
+When triggered, live mode posts up to 15 pre-signed SELL FAK orders through
+Polymarket's batch `/orders` path in a single request. With the default slices,
+the bot tries 40%, 30%, then the remaining shares, while each later slice uses a
+more aggressive floor. Paper mode mirrors this with local book simulation and
+allows partial fills. If only part of a position sells, the bot records realized
+PnL for the sold shares and keeps the remaining shares open; new entries remain
+blocked until the position is fully closed.
 
 Live CLOB can return a `400` response such as `no orders found to match with FAK
 order`. That is normal FAK behavior when the local WS book has moved before the
@@ -324,20 +375,24 @@ without an intentional wait.
 The bot still exits on logic decay and market overpricing, and now adds
 late-window profit protection:
 
-- `logic_decay_exit`: model probability falls below entry cost by `0.02`.
+- `logic_decay_exit`: model probability falls below entry cost by
+  `model_decay_buffer`. Current configs use `0.03`, chosen over `0.02/0.04`
+  after replay because it slightly reduced early false exits without materially
+  increasing drawdown.
 - `market_overprice_exit`: executable bid is above model probability by `0.02`.
 - `defensive_take_profit`: when `30 < remaining_sec <= 60`, profit is at least
   `defensive_profit_min`, and the held-side model probability has not risen over
   `prob_stagnation_window_sec`.
 - `prob_drop_exit`: when enabled, the held-side model probability drops by at
   least `prob_drop_exit_threshold` over `prob_drop_exit_window_sec` and is below
-  the entry-time model probability. The current aggressive profile uses a
-  `5s / 0.06` guard to cut fast probability collapses before classic
-  `logic_decay_exit` fires. The below-entry condition is intentional: positions
-  that became strongly favorable and then partially retreated do not panic-exit
-  while still better than the original model probability. Because probability
-  history is cleared at entry, this guard cannot fire until the position has
-  been open for at least `prob_drop_exit_window_sec`.
+  the entry-time model probability. Current MVP/aggressive configs set
+  `prob_drop_exit_window_sec=0` and `prob_drop_exit_threshold=0`, so this guard
+  is disabled by default. Recent replay showed it overlapped with
+  `market_disagrees_exit` and lowered win rate. The code is kept for future A/B
+  tests, but normal risk control now relies on market disagreement, logic decay,
+  and final-force exits. Because probability history is cleared at entry, this
+  guard cannot fire until the position has been open for at least
+  `prob_drop_exit_window_sec` when re-enabled.
 - `market_disagrees_exit`: when enabled, the Polymarket executable bid becomes
   materially cheaper relative to the model than it was at entry. It is
   intentionally constrained to late, already-losing positions:
@@ -389,6 +444,10 @@ Normal long-running logs intentionally keep price diagnostics minimal: only the
 effective `price_source`, `s_price`, `k_price`, and `basis_bps` stay in the
 runtime row. The full DVOL snapshot is also omitted from normal tick rows; keep
 `sigma_eff`, `sigma_source`, and `volatility_stale` for replay compatibility.
+Tick rows include a compact `reference` object only when analysis logs are on,
+while a position is open, or when an exit decision needs that reference context.
+Idle long-running live ticks omit it to keep logs small. Full price-source
+diagnostics are reserved for analysis/order rows.
 
 When analysis logs are enabled, the bot first writes a `config` row containing
 the non-secret strategy, execution, and runtime parameters used for the run.
@@ -416,6 +475,7 @@ source_spread_usd
 source_spread_bps
 lead_binance_vs_polymarket_usd
 lead_binance_vs_polymarket_bps
+polymarket_divergence_bps
 lead_coinbase_vs_polymarket_usd
 lead_coinbase_vs_polymarket_bps
 lead_proxy_vs_polymarket_usd
@@ -427,10 +487,10 @@ lead_binance_side / lead_coinbase_side / lead_proxy_side / lead_polymarket_side
 lead_*_side_disagrees_with_polymarket
 ```
 
-Null and `"missing"` analysis values are omitted. Polymarket fields appear when
-the Polymarket feed has data; proxy/Binance/Coinbase fields appear only after
-lazy backup activation, when running with `--no-polymarket-price`, or when
-`lead_signal_enabled` is enabled and analysis logging is turned on.
+Null and `"missing"` analysis values are omitted. Binance fields appear in
+normal runs because Binance is the model source. Polymarket fields appear when
+the reference feed has data. Coinbase fields appear only when Coinbase is
+explicitly enabled.
 
 Analysis logs are enabled by default in paper mode, disabled by default in live
 mode, and can be explicitly toggled with `--analysis-logs` or

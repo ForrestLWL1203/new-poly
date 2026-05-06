@@ -24,14 +24,15 @@ The collector records:
 - Polymarket Gamma market slug/token metadata.
 - Polymarket crypto price API for the UI Price to Beat:
   `k_price = openPrice`.
-- Polymarket live-data WebSocket topic `crypto_prices_chainlink` as the primary
-  live BTC/USD `S` source.
-- Binance BTC/USDT trade WebSocket as the first backup proxy BTC price source.
-- Coinbase BTC-USD match WebSocket as the second backup proxy BTC price source
-  when enabled.
+- Binance BTC/USDT trade WebSocket as the primary model BTC price source.
+- Polymarket live-data WebSocket topic `crypto_prices_chainlink` as the
+  settlement-source reference price, used for source-divergence diagnostics and
+  not as the normal model `S`.
+- Coinbase BTC-USD match WebSocket only when explicitly enabled for backup or
+  multi-source diagnostics. It is disabled by default.
 - Binance and, when enabled, Coinbase open prices inside the window boundary
   lookaround `(window_start - 5s, window_start + 5s)`, used to compute
-  fallback `basis_bps` after backup activation.
+  open-basis-adjusted `s_price`.
 - Polymarket CLOB WebSocket top/depth summaries for UP and DOWN tokens.
 - Deribit BTC DVOL snapshot as 30-day implied-volatility reference.
 
@@ -41,30 +42,28 @@ Polymarket crypto price API exposes `openPrice`. The collector does not fetch
 or log `closePrice`; simple post-run direction checks can compare Binance
 window open/close prices instead.
 
-The primary live price is now the same Polymarket live-data stream observed by
-the event UI. In a three-window probe on 2026-05-06, the WS boundary ticks
-matched the crypto price API `openPrice`/`closePrice` exactly. When that stream
-is fresh, rows use:
+The model live price is now Binance by default. Polymarket live-data remains
+important, but only as a reference stream observed by the event UI. In a
+three-window probe on 2026-05-06, the WS boundary ticks matched the crypto price
+API `openPrice`/`closePrice` exactly. When Binance has same-window open basis,
+rows usually use:
 
 ```text
-price_source = polymarket_chainlink
-settlement_aligned = true
+price_source = proxy_binance_basis_adjusted
+s_price = binance_live - (binance_open - k_price)
 ```
 
-If the Polymarket live-data stream is missing or stale, the collector does not
-immediately trade through the backup proxy. It remains fail-closed first. Only
-after the source has been continuously unhealthy for
-`--polymarket-backup-after-sec` seconds does it lazily start Binance/Coinbase
-backup feeds and fall back to the previous basis-adjusted proxy. Rows emitted
-before backup activation have `s_price=null` or `price_source=missing`, so
-strategy replay will naturally skip them.
+If the Polymarket live-data stream is missing or stale, the collector keeps
+using Binance for the model price but marks the reference data as absent or old.
+After `--polymarket-stale-reconnect-sec` seconds without a valid price tick, the
+Polymarket WS feed closes and reconnects. Current default is `5s`. The
+Polymarket reference cache is intentionally short, about 15 seconds.
 
-Coinbase can be disabled with `--no-coinbase`. It is a backup feed only in the
-default setup; it is not started while Polymarket live-data is healthy. When
-both Binance and Coinbase backup feeds are live, the proxy uses their arithmetic
-mean for `proxy_price`. Once `k_price` and at least one matching open price are
-known, it applies the open-basis adjustment using only sources that have both a
-live price and a same-window open price:
+Coinbase is disabled by default. Enable it with `--coinbase` only for runs that
+need multi-source diagnostics. When both Binance and Coinbase are live, the
+proxy uses their arithmetic mean for `proxy_price`. Once `k_price` and at least
+one matching open price are known, it applies the open-basis adjustment using
+only sources that have both a live price and a same-window open price:
 
 ```text
 proxy_live = mean(valid paired live prices)
@@ -112,10 +111,9 @@ Useful options:
 --include-current-window
 --windows 12
 --polymarket-price / --no-polymarket-price
---max-polymarket-price-age-sec 4
---polymarket-backup-after-sec 180
+--polymarket-stale-reconnect-sec 5
+--polymarket-unhealthy-log-after-sec 10
 --coinbase / --no-coinbase
---lead-signal / --no-lead-signal
 --verbose
 ```
 
@@ -175,6 +173,7 @@ basis_bps
 source_spread_usd
 source_spread_bps
 lead_binance_vs_polymarket_usd / bps
+polymarket_divergence_bps
 lead_coinbase_vs_polymarket_usd / bps
 lead_proxy_vs_polymarket_usd / bps
 lead_binance_return_1s_bps / 3s / 5s

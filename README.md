@@ -114,13 +114,14 @@ python3 scripts/collect_prob_edge_data.py \
 
 The script extracts the Polymarket UI Price to Beat from Polymarket's crypto
 price API as `k_price`, then uses a Binance open-basis-adjusted proxy for
-current `s_price` by default. Pass `--coinbase` to also start the Coinbase feed
-and use the Binance+Coinbase paired proxy.
+current model `s_price` by default. Polymarket live-data is still collected, but
+as the settlement-reference diagnostic rather than the primary model input. Pass
+`--coinbase` only for runs that need Coinbase diagnostics or a multi-source
+proxy.
 It does not fetch or log Polymarket `closePrice`; simple post-run direction
 checks should compare proxy window open/close prices.
-It intentionally keeps `settlement_aligned=false` until a true
-settlement-aligned realtime price source is available. It also fetches Deribit
-BTC DVOL once at startup by default and records it under `volatility`.
+It also fetches Deribit BTC DVOL once at startup by default and records it under
+`volatility`.
 `volatility_stale` is emitted so replay can ignore expired sigma snapshots. See
 [docs/prob_edge_data_collector.md](/Users/forrestliao/workspace/new-poly/docs/prob_edge_data_collector.md).
 
@@ -139,7 +140,9 @@ and `--i-understand-live-risk` are provided.
 Current default strategy behavior:
 
 - The tuned live-oriented profile evaluates the strategy loop every `0.5s`.
-- S is the Binance proxy price by default. With `--coinbase` or
+- S is the Binance proxy price by default. This is intentional: the current
+  strategy treats Binance as the faster model signal and Polymarket live-data as
+  the settlement-reference risk signal. With `--coinbase` or
   `market_data.coinbase_enabled=true`, S becomes the Binance+Coinbase paired
   proxy, basis-adjusted once K and proxy open are known.
 - Entry thresholds are time phased: `0.16` for `100 <= age < 120`, `0.14` for
@@ -170,7 +173,12 @@ Current default strategy behavior:
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
 - Exits include logic decay, market-overprice exits, market-disagrees exits for
   late losing positions whose bid/model ratio deteriorates, final-60s defensive
-  take-profit, and final-30s forced risk exit.
+  take-profit, Polymarket-reference divergence exits, and final-30s forced risk
+  exit.
+- Small exits use the normal single SELL FAK path. Larger positions can use
+  batch exits, slicing the position into several more aggressive SELL FAK orders
+  so a partial fill can reduce risk instead of leaving the whole position
+  stranded.
 - Live CLOB auth uses one cached `ClobClient` and configures the SDK HTTP
   client with `http2`, a larger keep-alive pool, and explicit timeouts to avoid
   waiting on connection setup during FAK posting.
@@ -188,10 +196,10 @@ for compact long-running paper logs.
 Current parameter files:
 
 - `configs/prob_edge_mvp.yaml`: conservative baseline/default config.
-- `configs/prob_edge_aggressive.yaml`: current optimized aggressive paper
-  candidate from the first 96-window replay. It uses `100-240s` entry timing,
-  `0.14/0.12` early/core edge thresholds, `max_entries_per_market=4`, and
-  `$1` paper notional/depth.
+- `configs/prob_edge_aggressive.yaml`: current live-oriented aggressive paper
+  candidate. It uses `100-240s` entry timing, `0.16/0.14` early/core edge
+  thresholds, `max_entries_per_market=4`, `$1` paper notional/depth, Binance as
+  the model source, and Polymarket live-data as a reference risk guard.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
   profiles and health thresholds. It only changes entry timing/edge/max-entry
   settings, and only at window boundaries.

@@ -69,9 +69,10 @@ def price_ticks_from_message(data: dict[str, Any]) -> list[tuple[float, float]]:
 class PolymarketChainlinkBtcPriceFeed:
     """Keep a rolling stream of Polymarket's live BTC/USD Chainlink prices."""
 
-    def __init__(self, symbol: str = "btc/usd", max_history_sec: float = 900.0):
+    def __init__(self, symbol: str = "btc/usd", max_history_sec: float = 15.0, stale_reconnect_sec: float = 5.0):
         self._symbol = symbol.lower()
         self._max_history_sec = max_history_sec
+        self._stale_reconnect_sec = max(1.0, float(stale_reconnect_sec))
         self._history: deque[tuple[float, float]] = deque()
         self._running = False
         self._recv_task: Optional[asyncio.Task] = None
@@ -85,6 +86,14 @@ class PolymarketChainlinkBtcPriceFeed:
         if not self._history:
             return None
         return max(0.0, (now if now is not None else time.time()) - self._history[-1][0])
+
+    @property
+    def stale_reconnect_sec(self) -> float:
+        return self._stale_reconnect_sec
+
+    @property
+    def max_history_sec(self) -> float:
+        return self._max_history_sec
 
     async def start(self) -> None:
         if self._running:
@@ -157,8 +166,21 @@ class PolymarketChainlinkBtcPriceFeed:
                     await self._ws.send(json.dumps(subscribe, separators=(",", ":")))
                     log.debug("PolymarketChainlinkBtcPriceFeed connected: %s %s", POLYMARKET_LIVE_DATA_WS_URL, self._symbol)
                     backoff = 1.0
+                    last_tick_monotonic = time.monotonic()
 
-                async for msg in self._ws:
+                while self._running and self._ws is not None:
+                    elapsed_since_tick = time.monotonic() - last_tick_monotonic
+                    timeout = max(0.1, self._stale_reconnect_sec - elapsed_since_tick)
+                    try:
+                        msg = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        log.warning("PolymarketChainlinkBtcPriceFeed stale for %.1fs, reconnecting...", self._stale_reconnect_sec)
+                        try:
+                            await asyncio.wait_for(self._ws.close(), timeout=3.0)
+                        except Exception:
+                            pass
+                        self._ws = None
+                        break
                     try:
                         data = json.loads(msg)
                     except json.JSONDecodeError:
@@ -167,7 +189,16 @@ class PolymarketChainlinkBtcPriceFeed:
                     for ts, price in ticks:
                         self._inject(ts, price)
                     if ticks:
+                        last_tick_monotonic = time.monotonic()
                         self._prune(time.time())
+                    elif time.monotonic() - last_tick_monotonic >= self._stale_reconnect_sec:
+                        log.warning("PolymarketChainlinkBtcPriceFeed received no valid ticks for %.1fs, reconnecting...", self._stale_reconnect_sec)
+                        try:
+                            await asyncio.wait_for(self._ws.close(), timeout=3.0)
+                        except Exception:
+                            pass
+                        self._ws = None
+                        break
             except asyncio.CancelledError:
                 raise
             except websockets.ConnectionClosed:
