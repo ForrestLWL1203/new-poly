@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+from dataclasses import replace
+
+from new_poly.bot_loop import FeedContext
+from new_poly.bot_runner import BotRunner, StartedContext, StartupContext
+from new_poly.bot_runtime import WindowPrices, build_arg_parser, build_runtime_options
+from new_poly.market.market import MarketWindow
+from new_poly.strategy.dynamic_params import DynamicConfig, DynamicState, SignalProfile
+
+
+class DummyLogger:
+    def __init__(self) -> None:
+        self.rows = []
+
+    def write(self, row) -> None:
+        self.rows.append(row)
+
+    def prune(self) -> int:
+        return 0
+
+    def close(self) -> None:
+        pass
+
+
+class DummyStream:
+    def __init__(self) -> None:
+        self.switched = []
+
+    async def switch_tokens(self, token_ids):
+        self.switched.append(list(token_ids))
+
+
+def _window(slug: str, *, offset: int = 0) -> MarketWindow:
+    start = dt.datetime(2026, 5, 6, 0, 0, tzinfo=dt.timezone.utc) + dt.timedelta(minutes=offset)
+    return MarketWindow(
+        question=f"{slug}?",
+        up_token=f"{slug}-up",
+        down_token=f"{slug}-down",
+        start_time=start,
+        end_time=start + dt.timedelta(minutes=5),
+        slug=slug,
+        resolution_source="test",
+    )
+
+
+def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
+    async def scenario() -> None:
+        options = build_runtime_options(build_arg_parser().parse_args(["--once"]))
+        runner = BotRunner(options)
+        runner.logger = DummyLogger()
+        stream = DummyStream()
+        feeds = FeedContext(binance=None, coinbase=None, polymarket=None, stream=stream)
+        gateway = object()
+        first = _window("m1")
+        next_window = _window("m2", offset=5)
+        initial_prices = WindowPrices(k_price=100.0)
+        next_prices = WindowPrices(k_price=101.0)
+        new_cfg = replace(options.config, amount_usd=2.0)
+        dynamic_state = DynamicState(active_profile="aggressive")
+        dynamic_task = asyncio.create_task(asyncio.sleep(0))
+
+        async def fake_handle_window_close(**kwargs):
+            assert kwargs["window"] is first
+            assert kwargs["prices"] is initial_prices
+            assert kwargs["feeds"] is feeds
+            assert kwargs["dynamic_cfg"] is runner.dynamic.cfg
+            assert kwargs["dynamic_state"] is runner.dynamic.state
+            assert kwargs["dynamic_task"] is runner.dynamic.task
+            return next_window, next_prices, new_cfg, dynamic_state, dynamic_task, False
+
+        monkeypatch.setattr("new_poly.bot_runner._handle_window_close", fake_handle_window_close)
+
+        runner.startup_context = StartupContext(feeds=feeds, gateway=gateway)
+        runner.context = StartedContext(feeds=feeds, gateway=gateway, window=first, prices=initial_prices)
+        runner.dynamic.cfg = DynamicConfig(
+            profiles=[
+                SignalProfile(
+                    name="aggressive",
+                    entry_start_age_sec=100,
+                    entry_end_age_sec=240,
+                    early_required_edge=0.14,
+                    core_required_edge=0.12,
+                    max_entries_per_market=4,
+                    min_candidate_trades=12,
+                    risk_rank=0,
+                )
+            ]
+        )
+        runner.dynamic.state = DynamicState(active_profile="aggressive", pending_profile="aggressive")
+        initial_dynamic_task = asyncio.create_task(asyncio.sleep(0))
+        runner.dynamic.task = initial_dynamic_task
+        runner.state.entry_count = 3
+        runner.state.current_market_slug = first.slug
+
+        should_stop = await runner.roll_window()
+
+        assert should_stop is False
+        assert runner.active.window is next_window
+        assert runner.active.prices is next_prices
+        assert runner.cfg is new_cfg
+        assert runner.dynamic.state is dynamic_state
+        assert runner.dynamic.task is dynamic_task
+        assert runner.state.current_market_slug == next_window.slug
+        assert runner.state.entry_count == 0
+        assert runner.state.open_position is None
+        assert runner.active.feeds is feeds
+        assert runner.active.gateway is gateway
+
+        await asyncio.gather(initial_dynamic_task, dynamic_task, runner.dynamic.task, return_exceptions=True)
+
+    asyncio.run(scenario())

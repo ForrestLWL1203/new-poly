@@ -7,6 +7,7 @@ import datetime as dt
 from dataclasses import dataclass, replace
 
 from new_poly.bot_dynamic import DynamicParamController
+from new_poly.bot_logging import build_tick_row, write_tick_row
 from new_poly.bot_loop import (
     DvolRuntime,
     FeedContext,
@@ -25,14 +26,9 @@ from new_poly.bot_runtime import (
     RuntimeOptions,
     WindowPrices,
     _bot_config_with_edge,
-    _compact,
     _config_log_row,
-    _position_log,
     _price_analysis,
     _reference_meta,
-    _runtime_log_meta,
-    _should_attach_reference_meta,
-    _should_write_row,
     _snapshot,
     find_initial_window,
 )
@@ -157,14 +153,29 @@ class BotRunner:
         snap, meta = self.build_snapshot(sigma_eff)
         price_analysis = _price_analysis(meta)
         reference_meta = _reference_meta(meta)
-        row = self.build_tick_row(meta, sigma_eff=sigma_eff, dvol_stale=dvol_stale)
+        row = build_tick_row(
+            meta,
+            options=self.options,
+            dvol=self.dvol,
+            state=self.state,
+            sigma_eff=sigma_eff,
+            dvol_stale=dvol_stale,
+        )
         decision = await self.handle_strategy_tick(
             row=row,
             snap=snap,
             sigma_eff=sigma_eff,
             price_analysis=price_analysis,
         )
-        self.write_tick_row(row=row, reference_meta=reference_meta, decision=decision)
+        write_tick_row(
+            logger=self.logger,
+            loop=self.loop,
+            options=self.options,
+            state=self.state,
+            row=row,
+            reference_meta=reference_meta,
+            decision=decision,
+        )
         return self.options.once
 
     async def drain_dynamic_task(self) -> None:
@@ -209,18 +220,6 @@ class BotRunner:
             sigma_eff,
         )
 
-    def build_tick_row(self, meta, *, sigma_eff, dvol_stale):
-        return {
-            **_runtime_log_meta(meta),
-            "mode": self.options.mode,
-            "event": "tick",
-            "sigma_source": self.dvol.state.current.source if self.dvol.state.current is not None else "missing",
-            "sigma_eff": _compact(sigma_eff),
-            "volatility_stale": dvol_stale,
-            "position": _position_log(self.state.open_position, compact=True),
-            "realized_pnl": _compact(self.state.realized_pnl, 4),
-        }
-
     async def handle_strategy_tick(self, *, row, snap, sigma_eff, price_analysis):
         if self.state.has_position and self.state.open_position is not None:
             return await _handle_open_position_tick(
@@ -249,17 +248,6 @@ class BotRunner:
             sigma_eff=sigma_eff,
             price_analysis=price_analysis,
         )
-
-    def write_tick_row(self, *, row, reference_meta, decision) -> None:
-        if _should_attach_reference_meta(
-            reference_meta,
-            analysis_logs=self.options.analysis_logs,
-            has_position=self.state.has_position,
-            decision=decision,
-        ):
-            row["reference"] = reference_meta
-        if _should_write_row(row, self.loop.seen_repetitive_skips):
-            self.logger.write(row)
 
     async def roll_window(self) -> bool:
         (
