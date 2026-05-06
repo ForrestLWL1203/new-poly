@@ -14,6 +14,7 @@ from new_poly.bot_runtime import (
     _should_attach_reference_meta,
     _should_write_row,
 )
+from new_poly.strategy.prob_edge import StrategyDecision
 from new_poly.strategy.state import StrategyState
 
 
@@ -46,7 +47,7 @@ def write_tick_row(
     state: StrategyState,
     row: dict[str, Any],
     reference_meta: dict[str, Any],
-    decision,
+    decision: StrategyDecision | None,
 ) -> None:
     if _should_attach_reference_meta(
         reference_meta,

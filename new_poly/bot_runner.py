@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 from dataclasses import dataclass, replace
+from typing import Any
 
 from new_poly.bot_dynamic import DynamicParamController
 from new_poly.bot_logging import build_tick_row, write_tick_row
@@ -34,19 +35,20 @@ from new_poly.bot_runtime import (
 )
 from new_poly.market.market import MarketWindow
 from new_poly.market.series import MarketSeries
+from new_poly.strategy.prob_edge import MarketSnapshot, StrategyDecision
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import LiveFakExecutionGateway, PaperExecutionGateway
 
 Gateway = LiveFakExecutionGateway | PaperExecutionGateway
 
 
-@dataclass
+@dataclass(slots=True)
 class StartupContext:
     feeds: FeedContext
     gateway: Gateway
 
 
-@dataclass
+@dataclass(slots=True)
 class StartedContext:
     feeds: FeedContext
     gateway: Gateway
@@ -199,7 +201,7 @@ class BotRunner:
             age_sec=age_sec,
         )
 
-    async def advance_dvol(self):
+    async def advance_dvol(self) -> tuple[float | None, bool]:
         return await _advance_dvol_refresh(
             dvol=self.dvol,
             cfg=self.cfg,
@@ -208,7 +210,7 @@ class BotRunner:
             window_slug=self.active.window.slug,
         )
 
-    def build_snapshot(self, sigma_eff):
+    def build_snapshot(self, sigma_eff: float | None) -> tuple[MarketSnapshot, dict[str, Any]]:
         return _snapshot(
             self.active.window,
             self.active.prices,
@@ -220,7 +222,14 @@ class BotRunner:
             sigma_eff,
         )
 
-    async def handle_strategy_tick(self, *, row, snap, sigma_eff, price_analysis):
+    async def handle_strategy_tick(
+        self,
+        *,
+        row: dict[str, Any],
+        snap: MarketSnapshot,
+        sigma_eff: float | None,
+        price_analysis: dict[str, Any],
+    ) -> StrategyDecision:
         if self.state.has_position and self.state.open_position is not None:
             return await _handle_open_position_tick(
                 row=row,
