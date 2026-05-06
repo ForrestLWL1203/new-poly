@@ -9,13 +9,10 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 
+import yaml
+
 from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest
 from new_poly.strategy.prob_edge import EdgeConfig
-
-try:
-    import yaml
-except ImportError:  # pragma: no cover - pyyaml is installed in normal runtimes
-    yaml = None
 
 
 @dataclass(frozen=True)
@@ -27,6 +24,7 @@ class SignalProfile:
     core_required_edge: float
     max_entries_per_market: int
     min_candidate_trades: int
+    risk_rank: int = 0
 
     def apply_to(self, edge: EdgeConfig) -> EdgeConfig:
         return replace(
@@ -182,10 +180,10 @@ class DynamicDecision:
 def default_dynamic_config() -> DynamicConfig:
     return DynamicConfig(
         profiles=[
-            SignalProfile("aggressive", 100, 240, 0.14, 0.12, 4, min_candidate_trades=12),
-            SignalProfile("balanced", 105, 240, 0.18, 0.16, 3, min_candidate_trades=8),
-            SignalProfile("conservative", 135, 240, 0.22, 0.20, 2, min_candidate_trades=4),
-            SignalProfile("strict", 150, 210, 0.22, 0.20, 2, min_candidate_trades=3),
+            SignalProfile("aggressive", 100, 240, 0.14, 0.12, 4, min_candidate_trades=12, risk_rank=0),
+            SignalProfile("balanced", 105, 240, 0.18, 0.16, 3, min_candidate_trades=8, risk_rank=1),
+            SignalProfile("conservative", 135, 240, 0.22, 0.20, 2, min_candidate_trades=4, risk_rank=2),
+            SignalProfile("strict", 150, 210, 0.22, 0.20, 2, min_candidate_trades=3, risk_rank=3),
         ]
     )
 
@@ -194,7 +192,7 @@ def load_dynamic_config(path: Path) -> DynamicConfig:
     if not path.exists():
         raise FileNotFoundError(path)
     text = path.read_text()
-    raw = yaml.safe_load(text) if yaml is not None else _parse_dynamic_yaml(text)
+    raw = yaml.safe_load(text)
     raw = raw or {}
     if not isinstance(raw, dict):
         raise ValueError("dynamic config must be a mapping")
@@ -213,6 +211,7 @@ def load_dynamic_config(path: Path) -> DynamicConfig:
             core_required_edge=float(profile_raw["core_required_edge"]),
             max_entries_per_market=int(profile_raw["max_entries_per_market"]),
             min_candidate_trades=int(profile_raw["min_candidate_trades"]),
+            risk_rank=int(profile_raw.get("risk_rank", len(profiles))),
         )
         if profile.entry_start_age_sec > profile.entry_end_age_sec:
             raise ValueError(f"profile entry_start_age_sec > entry_end_age_sec: {name}")
@@ -238,53 +237,6 @@ def load_dynamic_config(path: Path) -> DynamicConfig:
         win_rate_score_weight=float(scoring.get("win_rate_score_weight", 1.0)),
         drawdown_score_weight=float(scoring.get("drawdown_score_weight", 0.1)),
     )
-
-
-def _parse_scalar(value: str) -> Any:
-    if value.lower() in ("true", "false"):
-        return value.lower() == "true"
-    try:
-        if any(ch in value for ch in (".", "e", "E")):
-            return float(value)
-        return int(value)
-    except ValueError:
-        return value.strip('"').strip("'")
-
-
-def _parse_dynamic_yaml(text: str) -> dict[str, Any]:
-    root: dict[str, Any] = {}
-    section: str | None = None
-    profile_name: str | None = None
-    for raw_line in text.splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        stripped = line.strip()
-        if indent == 0:
-            profile_name = None
-            if stripped.endswith(":"):
-                section = stripped[:-1]
-                root[section] = {}
-                continue
-            if ":" in stripped:
-                key, value = stripped.split(":", 1)
-                root[key.strip()] = _parse_scalar(value.strip())
-            continue
-        if section is None or ":" not in stripped:
-            continue
-        if section == "profiles":
-            if indent == 2 and stripped.endswith(":"):
-                profile_name = stripped[:-1]
-                root["profiles"][profile_name] = {}
-                continue
-            if indent >= 4 and profile_name is not None:
-                key, value = stripped.split(":", 1)
-                root["profiles"][profile_name][key.strip()] = _parse_scalar(value.strip())
-            continue
-        key, value = stripped.split(":", 1)
-        root[section][key.strip()] = _parse_scalar(value.strip())
-    return root
 
 
 def _parse_ts(value: str | None) -> dt.datetime | None:
@@ -381,22 +333,22 @@ def summarize_actual_results(rows: Iterable[dict[str, Any]], *, min_trades: int,
     )
 
 
-def _profile_index(cfg: DynamicConfig, name: str) -> int:
+def _profile_rank(cfg: DynamicConfig, name: str) -> int:
     try:
-        return cfg.profile_names().index(name)
+        return cfg.profile(name).risk_rank
     except ValueError:
         return 0
 
 
 def _score_candidates(candidates: Iterable[CandidateResult], cfg: DynamicConfig, active_profile: str) -> list[CandidateResult]:
-    active_index = _profile_index(cfg, active_profile)
+    active_rank = _profile_rank(cfg, active_profile)
     scored: list[CandidateResult] = []
     for candidate in candidates:
         try:
             profile = cfg.profile(candidate.profile)
         except ValueError:
             continue
-        if _profile_index(cfg, candidate.profile) < active_index:
+        if profile.risk_rank < active_rank:
             scored.append(replace(candidate.with_score(cfg, profile), safe=False, rejection_reason="more_aggressive_than_active"))
             continue
         scored.append(candidate.with_score(cfg, profile))

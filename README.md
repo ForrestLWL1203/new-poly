@@ -140,13 +140,18 @@ and `--i-understand-live-risk` are provided.
 Current default strategy behavior:
 
 - The tuned live-oriented profile evaluates the strategy loop every `0.5s`.
+- Startup must obtain Deribit DVOL before the strategy loop begins. Runtime
+  refresh failures keep the last valid DVOL until it exceeds the configured
+  stale age, so a temporary Deribit outage does not poison the sigma cache.
 - S is the Binance proxy price by default. This is intentional: the current
   strategy treats Binance as the faster model signal and Polymarket live-data as
   the settlement-reference risk signal. With `--coinbase` or
   `market_data.coinbase_enabled=true`, S becomes the Binance+Coinbase paired
   proxy, basis-adjusted once K and proxy open are known.
-- Entry thresholds are time phased: `0.16` for `100 <= age < 120`, `0.14` for
-  `120 <= age < 240`, and late entry is disabled from `240s` onward.
+- Entry thresholds are time phased. The aggressive profile uses `0.16` for
+  `100 <= age < 120`, `0.14` for `120 <= age < 240`, and disables late entry
+  from `240s` onward. The phase boundaries are explicit config fields:
+  `early_to_core_age_sec` and `core_to_late_age_sec`.
 - FAK entry decisions use size-aware `ask_avg` for edge, require
   `ask_limit <= model_prob - required_edge`, require the formula cap to leave
   at least one tick of executable margin, and send BUY hints as
@@ -181,7 +186,9 @@ Current default strategy behavior:
   stranded.
 - Live CLOB auth uses one cached `ClobClient` and configures the SDK HTTP
   client with `http2`, a larger keep-alive pool, and explicit timeouts to avoid
-  waiting on connection setup during FAK posting.
+  waiting on connection setup during FAK posting. This mutates the SDK's
+  process-wide helper client and is intended for the current single-bot,
+  single-account process model.
 
 Paper smoke test:
 

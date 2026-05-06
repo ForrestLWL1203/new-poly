@@ -33,6 +33,11 @@ def _configure_proxy() -> None:
     from py_clob_client_v2.http_helpers import helpers as _http_helpers
 
     if hasattr(_http_helpers, "_http_client"):
+        # py-clob-client-v2 keeps this helper client at module scope. The bot is
+        # intentionally a single-account, single-strategy process, so replacing
+        # it once lets all SDK requests share the same keep-alive pool. A future
+        # multi-strategy process should split this into an explicit client
+        # factory instead of sharing this global SDK helper.
         _http_helpers._http_client = _http_helpers._http_client.__class__(**_build_http_client_kwargs())
 
 

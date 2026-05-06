@@ -97,9 +97,18 @@ class PriceStream:
             return asks[level - 1]
 
         asks = self.get_latest_ask_levels(token_id, max_age_sec=max_age_sec)
+        update = self._prices.get(token_id)
+        if update is not None:
+            ask_received_at = update.best_ask_received_at or update.received_at
+            book = self._books.get(token_id)
+            book_received_at = float(book.get("received_at", 0.0) or 0.0) if book is not None else 0.0
+            if update.best_ask is not None and ask_received_at >= book_received_at:
+                if max_age_sec is not None and ask_received_at > 0:
+                    if time.monotonic() - ask_received_at > max_age_sec:
+                        return None
+                return update.best_ask
         if asks:
             return asks[0]
-        update = self._prices.get(token_id)
         if update is None:
             return None
         ask_received_at = update.best_ask_received_at or update.received_at
@@ -109,7 +118,13 @@ class PriceStream:
         return update.best_ask
 
     def get_latest_best_ask_age(self, token_id: str, level: int = 1) -> Optional[float]:
-        """Return age in seconds for the cached best ask, if known."""
+        """Return age in seconds for executable ask depth, if known.
+
+        ``best_bid_ask`` messages can refresh top-of-book prices without
+        refreshing level sizes. Strategy depth checks use book levels, so this
+        method intentionally reports book age when depth exists instead of
+        treating a fresh BBO tick as fresh depth.
+        """
         if level >= 1:
             book = self._books.get(token_id)
             if book is not None:
@@ -138,9 +153,17 @@ class PriceStream:
             return bids[level - 1]
 
         bids = self.get_latest_bid_levels(token_id, max_age_sec=max_age_sec)
+        update = self._prices.get(token_id)
+        if update is not None:
+            book = self._books.get(token_id)
+            book_received_at = float(book.get("received_at", 0.0) or 0.0) if book is not None else 0.0
+            if update.best_bid is not None and update.received_at >= book_received_at:
+                if max_age_sec is not None and update.received_at > 0:
+                    if time.monotonic() - update.received_at > max_age_sec:
+                        return None
+                return update.best_bid
         if bids:
             return bids[0]
-        update = self._prices.get(token_id)
         if update is None:
             return None
         received_at = update.received_at
@@ -150,7 +173,7 @@ class PriceStream:
         return update.best_bid
 
     def get_latest_best_bid_age(self, token_id: str, level: int = 1) -> Optional[float]:
-        """Return age in seconds for the cached best bid, if known."""
+        """Return age in seconds for executable bid depth, if known."""
         if level >= 1:
             book = self._books.get(token_id)
             if book is not None:
@@ -355,12 +378,24 @@ class PriceStream:
         while self._running:
             await asyncio.sleep(PING_INTERVAL)
             if self._ws and self._running:
+                ws = self._ws
                 try:
-                    await self._ws.send("{}")
+                    await ws.send("{}")
                     log.debug("Sent WS ping {}")
                 except Exception as e:
-                    log.debug("WS ping failed: %s", e)
-                    break
+                    log.warning("WS ping failed; forcing reconnect: %s", e)
+                    async with self._connection_lock:
+                        if self._ws is ws:
+                            try:
+                                transport = getattr(ws, "transport", None)
+                                if transport is not None:
+                                    transport.abort()
+                                else:
+                                    await ws.close()
+                            except Exception:
+                                pass
+                            self._ws = None
+                    continue
 
     async def _recv_loop(self) -> None:
         """Continuously receive and dispatch WebSocket messages, with reconnection."""

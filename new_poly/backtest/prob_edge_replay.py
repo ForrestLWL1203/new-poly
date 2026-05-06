@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, evaluate_entry, evaluate_exit, required_edge_for_entry
@@ -29,6 +29,8 @@ class BacktestConfig:
     amount_usd: float = 5.0
     early_required_edge: float = 0.16
     core_required_edge: float = 0.14
+    early_to_core_age_sec: float = 120.0
+    core_to_late_age_sec: float = 240.0
     model_decay_buffer: float = 0.03
     entry_start_age_sec: float = 90.0
     entry_end_age_sec: float = 270.0
@@ -43,6 +45,10 @@ class BacktestConfig:
     prob_drop_exit_window_sec: float = 0.0
     prob_drop_exit_threshold: float = 0.0
     final_force_exit_remaining_sec: float = 30.0
+    profit_protection_start_remaining_sec: float = 15.0
+    profit_protection_end_remaining_sec: float = 30.0
+    defensive_take_profit_start_remaining_sec: float = 30.0
+    defensive_take_profit_end_remaining_sec: float = 60.0
     settlement_boundary_usd: float = 5.0
     min_fair_cap_margin_ticks: float = 0.0
     entry_tick_size: float = 0.01
@@ -63,6 +69,8 @@ class BacktestConfig:
         return EdgeConfig(
             early_required_edge=self.early_required_edge,
             core_required_edge=self.core_required_edge,
+            early_to_core_age_sec=self.early_to_core_age_sec,
+            core_to_late_age_sec=self.core_to_late_age_sec,
             model_decay_buffer=self.model_decay_buffer,
             entry_start_age_sec=self.entry_start_age_sec,
             entry_end_age_sec=self.entry_end_age_sec,
@@ -72,6 +80,10 @@ class BacktestConfig:
             prob_drop_exit_window_sec=self.prob_drop_exit_window_sec,
             prob_drop_exit_threshold=self.prob_drop_exit_threshold,
             final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
+            profit_protection_start_remaining_sec=self.profit_protection_start_remaining_sec,
+            profit_protection_end_remaining_sec=self.profit_protection_end_remaining_sec,
+            defensive_take_profit_start_remaining_sec=self.defensive_take_profit_start_remaining_sec,
+            defensive_take_profit_end_remaining_sec=self.defensive_take_profit_end_remaining_sec,
             min_fair_cap_margin_ticks=self.min_fair_cap_margin_ticks,
             entry_tick_size=self.entry_tick_size,
             min_entry_model_prob=self.min_entry_model_prob,
@@ -557,39 +569,12 @@ def scan_configs(
     base = base_config or BacktestConfig()
     results: list[dict[str, Any]] = []
     for early, core, start, end in itertools.product(early_edges, core_edges, entry_starts, entry_ends):
-        cfg = BacktestConfig(
-            amount_usd=base.amount_usd,
+        cfg = replace(
+            base,
             early_required_edge=float(early),
             core_required_edge=float(core),
-            model_decay_buffer=base.model_decay_buffer,
             entry_start_age_sec=float(start),
             entry_end_age_sec=float(end),
-            max_book_age_ms=base.max_book_age_ms,
-            max_entries_per_market=base.max_entries_per_market,
-            late_entry_enabled=base.late_entry_enabled,
-            tick_size=base.tick_size,
-            buy_slippage_ticks=base.buy_slippage_ticks,
-            sell_slippage_ticks=base.sell_slippage_ticks,
-            sell_price_buffer_ticks=base.sell_price_buffer_ticks,
-            sell_retry_price_buffer_ticks=base.sell_retry_price_buffer_ticks,
-            prob_drop_exit_window_sec=base.prob_drop_exit_window_sec,
-            prob_drop_exit_threshold=base.prob_drop_exit_threshold,
-            final_force_exit_remaining_sec=base.final_force_exit_remaining_sec,
-            settlement_boundary_usd=base.settlement_boundary_usd,
-            min_fair_cap_margin_ticks=base.min_fair_cap_margin_ticks,
-            entry_tick_size=base.entry_tick_size,
-            min_entry_model_prob=base.min_entry_model_prob,
-            low_price_extra_edge_threshold=base.low_price_extra_edge_threshold,
-            low_price_extra_edge=base.low_price_extra_edge,
-            cross_source_max_bps=base.cross_source_max_bps,
-            market_disagrees_exit_threshold=base.market_disagrees_exit_threshold,
-            market_disagrees_exit_max_remaining_sec=base.market_disagrees_exit_max_remaining_sec,
-            market_disagrees_exit_min_loss=base.market_disagrees_exit_min_loss,
-            market_disagrees_exit_min_age_sec=base.market_disagrees_exit_min_age_sec,
-            market_disagrees_exit_max_profit=base.market_disagrees_exit_max_profit,
-            polymarket_divergence_exit_bps=base.polymarket_divergence_exit_bps,
-            polymarket_divergence_exit_min_age_sec=base.polymarket_divergence_exit_min_age_sec,
-            honor_order_events=base.honor_order_events,
         )
         result = run_backtest(materialized, cfg)
         if result.summary["entries"] < min_entries:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable, Optional
 
 from new_poly import config
@@ -34,6 +34,21 @@ class ExecutionConfig:
     batch_exit_min_notional_usd: float = 5.0
     batch_exit_slices: tuple[float, ...] = (0.4, 0.3, 1.0)
     batch_exit_extra_buffer_ticks: tuple[float, ...] = (0.0, 3.0, 6.0)
+
+    def normalization_warnings(self) -> tuple[str, ...]:
+        warnings: list[str] = []
+        if self.buy_retry_price_buffer_ticks < self.buy_price_buffer_ticks:
+            warnings.append("buy_retry_price_buffer_ticks_clamped_to_buy_price_buffer_ticks")
+        if self.sell_retry_price_buffer_ticks < self.sell_price_buffer_ticks:
+            warnings.append("sell_retry_price_buffer_ticks_clamped_to_sell_price_buffer_ticks")
+        return tuple(warnings)
+
+    def normalized(self) -> "ExecutionConfig":
+        return replace(
+            self,
+            buy_retry_price_buffer_ticks=max(self.buy_price_buffer_ticks, self.buy_retry_price_buffer_ticks),
+            sell_retry_price_buffer_ticks=max(self.sell_price_buffer_ticks, self.sell_retry_price_buffer_ticks),
+        )
 
 
 @dataclass(frozen=True)
@@ -68,33 +83,17 @@ SellRetryRefresh = Callable[[int], Awaitable[Optional[SellRetryParams]]]
 
 
 def _with_attempt(result: ExecutionResult, *, attempt: int, total_latency_ms: int) -> ExecutionResult:
-    return ExecutionResult(
-        success=result.success,
-        order_id=result.order_id,
-        filled_size=result.filled_size,
-        avg_price=result.avg_price,
-        message=result.message,
-        mode=result.mode,
-        latency_ms=result.latency_ms,
-        attempt=attempt,
-        total_latency_ms=total_latency_ms,
-        timing=result.timing,
-    )
+    return replace(result, attempt=attempt, total_latency_ms=total_latency_ms)
 
 
 def _retry_skipped(result: ExecutionResult, *, attempt: int, total_latency_ms: int) -> ExecutionResult:
     message = result.message or "order no fill"
-    return ExecutionResult(
+    return replace(
+        result,
         success=False,
-        order_id=result.order_id,
-        filled_size=result.filled_size,
-        avg_price=result.avg_price,
         message=f"{message}; retry skipped: signal no longer valid",
-        mode=result.mode,
-        latency_ms=result.latency_ms,
         attempt=attempt,
         total_latency_ms=total_latency_ms,
-        timing=result.timing,
     )
 
 

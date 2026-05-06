@@ -15,9 +15,11 @@ assert spec.loader is not None
 sys.modules[spec.name] = collector
 spec.loader.exec_module(collector)
 
+from new_poly.market import prob_edge_data as data_helpers
+
 
 def test_extract_crypto_prices_from_api_response() -> None:
-    data = collector.extract_crypto_prices_from_api_response({
+    data = data_helpers.extract_crypto_prices_from_api_response({
         "openPrice": "78409.37",
         "closePrice": 78379.9,
         "completed": True,
@@ -43,7 +45,7 @@ def test_api_url_uses_exact_window_iso() -> None:
         slug="btc-updown-5m-1777798500",
     )
 
-    url = collector.crypto_price_api_url(window)
+    url = data_helpers.crypto_price_api_url(window)
 
     assert "symbol=BTC" in url
     assert "eventStartTime=2026-05-03T08%3A55%3A00Z" in url
@@ -52,16 +54,16 @@ def test_api_url_uses_exact_window_iso() -> None:
 
 
 def test_window_bucket() -> None:
-    assert collector.window_bucket(age_sec=-1, remaining_sec=301) == "warmup"
-    assert collector.window_bucket(age_sec=25, remaining_sec=275) == "early"
-    assert collector.window_bucket(age_sec=180, remaining_sec=120) == "core"
-    assert collector.window_bucket(age_sec=250, remaining_sec=50) == "late"
-    assert collector.window_bucket(age_sec=275, remaining_sec=25) == "no_entry"
-    assert collector.window_bucket(age_sec=301, remaining_sec=-1) == "closed"
+    assert data_helpers.window_bucket(age_sec=-1, remaining_sec=301) == "warmup"
+    assert data_helpers.window_bucket(age_sec=25, remaining_sec=275) == "early"
+    assert data_helpers.window_bucket(age_sec=180, remaining_sec=120) == "core"
+    assert data_helpers.window_bucket(age_sec=250, remaining_sec=50) == "late"
+    assert data_helpers.window_bucket(age_sec=275, remaining_sec=25) == "no_entry"
+    assert data_helpers.window_bucket(age_sec=301, remaining_sec=-1) == "closed"
 
 
 def test_avg_price_for_notional() -> None:
-    avg, ok, notional, limit_price = collector.avg_price_for_notional([(0.4, 10), (0.42, 20)], 8.0)
+    avg, ok, notional, limit_price = data_helpers.avg_price_for_notional([(0.4, 10), (0.42, 20)], 8.0)
 
     assert ok is True
     assert avg == 0.409756
@@ -86,7 +88,7 @@ def test_token_state_uses_safety_multiplier_without_changing_trade_average() -> 
         def get_latest_best_ask_age(self, token_id):
             return 0.01
 
-    state = collector.token_state(FakeStream(), "up", depth_notional=1.0, depth_safety_multiplier=1.5)
+    state = data_helpers.token_state(FakeStream(), "up", depth_notional=1.0, depth_safety_multiplier=1.5)
 
     assert state["ask_avg"] == 0.5
     assert state["ask_limit"] == 0.5
@@ -124,10 +126,10 @@ def test_initial_window_defaults_to_next_full_window(monkeypatch) -> None:
         slug="btc-updown-5m-2",
     )
 
-    monkeypatch.setattr(collector, "find_next_window", lambda series: current)
-    monkeypatch.setattr(collector, "find_following_window", lambda window, series: following)
+    monkeypatch.setattr(data_helpers, "find_next_window", lambda series: current)
+    monkeypatch.setattr(data_helpers, "find_following_window", lambda window, series: following)
 
-    selected = collector.find_initial_window(
+    selected = data_helpers.find_initial_window(
         collector.MarketSeries.from_known("btc-updown-5m"),
         include_current=False,
         now=collector.dt.datetime(2026, 5, 3, 0, 1, tzinfo=collector.dt.timezone.utc),

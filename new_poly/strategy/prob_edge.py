@@ -16,6 +16,8 @@ class EdgeConfig:
     overprice_buffer: float = 0.02
     entry_start_age_sec: float = 90.0
     entry_end_age_sec: float = 270.0
+    early_to_core_age_sec: float = 120.0
+    core_to_late_age_sec: float = 240.0
     final_no_entry_remaining_sec: float = 30.0
     max_entries_per_market: int = 2
     max_book_age_ms: float = 1000.0
@@ -24,6 +26,10 @@ class EdgeConfig:
     late_max_spread: float = 0.02
     defensive_profit_min: float = 0.03
     protection_profit_min: float = 0.01
+    profit_protection_start_remaining_sec: float = 15.0
+    profit_protection_end_remaining_sec: float = 30.0
+    defensive_take_profit_start_remaining_sec: float = 30.0
+    defensive_take_profit_end_remaining_sec: float = 60.0
     final_force_exit_remaining_sec: float = 30.0
     final_hold_min_prob: float = 0.98
     final_hold_min_bid_avg: float = 0.97
@@ -129,9 +135,9 @@ def required_edge_for_entry(snapshot: MarketSnapshot, cfg: EdgeConfig) -> EntryP
         return EntryPhase("final_no_entry", False, None)
     if snapshot.age_sec < cfg.entry_start_age_sec or snapshot.age_sec > cfg.entry_end_age_sec:
         return EntryPhase("outside_window", False, None)
-    if snapshot.age_sec < 120.0:
+    if snapshot.age_sec < cfg.early_to_core_age_sec:
         return EntryPhase("early", True, cfg.early_required_edge)
-    if snapshot.age_sec < 240.0:
+    if snapshot.age_sec < cfg.core_to_late_age_sec:
         return EntryPhase("core", True, cfg.core_required_edge)
     if not cfg.late_entry_enabled:
         return EntryPhase("late_disabled", False, None)
@@ -288,9 +294,9 @@ def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: Edg
         strong_hold = model_prob >= cfg.final_hold_min_prob and bid >= cfg.final_hold_min_bid_avg and bid_limit >= cfg.final_hold_min_bid_limit
         if not strong_hold:
             return StrategyDecision(action="exit", reason="final_force_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement, polymarket_divergence_bps=polymarket_divergence_bps)
-    if 15.0 < snapshot.remaining_sec <= 30.0 and profit_now >= cfg.protection_profit_min:
+    if cfg.profit_protection_start_remaining_sec < snapshot.remaining_sec <= cfg.profit_protection_end_remaining_sec and profit_now >= cfg.protection_profit_min:
         return StrategyDecision(action="exit", reason="profit_protection_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement, polymarket_divergence_bps=polymarket_divergence_bps)
-    if 30.0 < snapshot.remaining_sec <= 60.0 and profit_now >= cfg.defensive_profit_min and prob_stagnant:
+    if cfg.defensive_take_profit_start_remaining_sec < snapshot.remaining_sec <= cfg.defensive_take_profit_end_remaining_sec and profit_now >= cfg.defensive_profit_min and prob_stagnant:
         return StrategyDecision(action="exit", reason="defensive_take_profit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement, polymarket_divergence_bps=polymarket_divergence_bps)
     if prob_drop_delta is not None and prob_drop_delta <= -cfg.prob_drop_exit_threshold and model_prob < position.entry_model_prob:
         return StrategyDecision(action="exit", reason="prob_drop_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement, polymarket_divergence_bps=polymarket_divergence_bps)

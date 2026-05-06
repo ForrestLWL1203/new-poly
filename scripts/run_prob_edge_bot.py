@@ -11,7 +11,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     import yaml
@@ -25,6 +25,20 @@ from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import fetch_dvol_snapshot
 from new_poly.market.deribit import DvolSnapshot
+from new_poly.market.prob_edge_data import (
+    WindowPrices,
+    effective_price,
+    find_following_window,
+    find_initial_window,
+    lead_delta,
+    price_return_bps,
+    refresh_binance_open,
+    refresh_coinbase_open,
+    refresh_k_price,
+    refresh_polymarket_open,
+    side_vs_k,
+    token_state,
+)
 from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
@@ -50,18 +64,6 @@ from new_poly.trading.execution import (
     SellRetryParams,
 )
 
-from scripts.collect_prob_edge_data import (
-    WindowPrices,
-    effective_price,
-    find_following_window,
-    find_initial_window,
-    refresh_binance_open,
-    refresh_coinbase_open,
-    refresh_k_price,
-    refresh_polymarket_open,
-    token_state,
-)
-
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "prob_edge_mvp.yaml"
 DEFAULT_DYNAMIC_CONFIG = REPO_ROOT / "configs" / "prob_edge_dynamic.yaml"
 DEFAULT_DYNAMIC_STATE = REPO_ROOT / "data" / "prob-edge-dynamic-state.json"
@@ -76,12 +78,15 @@ class BotConfig:
     warmup_timeout_sec: float
     dvol_refresh_sec: float
     max_dvol_age_sec: float
+    dvol_retry_interval_sec: float
+    dvol_retry_attempts: int
     settlement_boundary_usd: float
     coinbase_enabled: bool = False
     polymarket_price_enabled: bool = True
     max_polymarket_price_age_sec: float = 4.0
     polymarket_stale_reconnect_sec: float = 5.0
     polymarket_unhealthy_log_after_sec: float = 10.0
+    config_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,23 @@ class RuntimeOptions:
     dynamic_state: Path = DEFAULT_DYNAMIC_STATE
     log_retention_hours: float | None = 24.0
     log_prune_every_windows: int = 5
+
+
+@dataclass
+class DvolRefreshState:
+    current: DvolSnapshot | None = None
+    failed_refreshes: int = 0
+    last_error: str | None = None
+
+    def apply_refresh_result(self, snapshot: DvolSnapshot | None) -> bool:
+        if is_valid_dvol(snapshot):
+            self.current = snapshot
+            self.failed_refreshes = 0
+            self.last_error = None
+            return True
+        self.failed_refreshes += 1
+        self.last_error = "invalid_dvol"
+        return False
 
 
 class JsonlLogger:
@@ -250,6 +272,8 @@ def load_bot_config(path: Path) -> BotConfig:
         overprice_buffer=float(_deep_get(raw, ("strategy", "overprice_buffer"), 0.02)),
         entry_start_age_sec=float(_deep_get(raw, ("strategy", "entry_start_age_sec"), 90.0)),
         entry_end_age_sec=float(_deep_get(raw, ("strategy", "entry_end_age_sec"), 270.0)),
+        early_to_core_age_sec=float(_deep_get(raw, ("strategy", "early_to_core_age_sec"), 120.0)),
+        core_to_late_age_sec=float(_deep_get(raw, ("strategy", "core_to_late_age_sec"), 240.0)),
         final_no_entry_remaining_sec=float(_deep_get(raw, ("strategy", "final_no_entry_remaining_sec"), 30.0)),
         max_entries_per_market=int(_deep_get(raw, ("strategy", "max_entries_per_market"), 2)),
         max_book_age_ms=float(_deep_get(raw, ("strategy", "max_book_age_ms"), 1000.0)),
@@ -258,6 +282,10 @@ def load_bot_config(path: Path) -> BotConfig:
         late_max_spread=float(_deep_get(raw, ("strategy", "late_max_spread"), 0.02)),
         defensive_profit_min=float(_deep_get(raw, ("strategy", "defensive_profit_min"), 0.03)),
         protection_profit_min=float(_deep_get(raw, ("strategy", "protection_profit_min"), 0.01)),
+        profit_protection_start_remaining_sec=float(_deep_get(raw, ("strategy", "profit_protection_start_remaining_sec"), 15.0)),
+        profit_protection_end_remaining_sec=float(_deep_get(raw, ("strategy", "profit_protection_end_remaining_sec"), 30.0)),
+        defensive_take_profit_start_remaining_sec=float(_deep_get(raw, ("strategy", "defensive_take_profit_start_remaining_sec"), 30.0)),
+        defensive_take_profit_end_remaining_sec=float(_deep_get(raw, ("strategy", "defensive_take_profit_end_remaining_sec"), 60.0)),
         final_force_exit_remaining_sec=float(_deep_get(raw, ("strategy", "final_force_exit_remaining_sec"), 30.0)),
         final_hold_min_prob=float(_deep_get(raw, ("strategy", "final_hold_min_prob"), 0.98)),
         final_hold_min_bid_avg=float(_deep_get(raw, ("strategy", "final_hold_min_bid_avg"), 0.97)),
@@ -280,7 +308,7 @@ def load_bot_config(path: Path) -> BotConfig:
         polymarket_divergence_exit_bps=float(_deep_get(raw, ("strategy", "polymarket_divergence_exit_bps"), 3.0)),
         polymarket_divergence_exit_min_age_sec=float(_deep_get(raw, ("strategy", "polymarket_divergence_exit_min_age_sec"), 3.0)),
     )
-    execution = ExecutionConfig(
+    execution_raw = ExecutionConfig(
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.0)),
         depth_notional=float(_deep_get(raw, ("execution", "depth_notional"), 5.0)),
         depth_safety_multiplier=float(_deep_get(raw, ("execution", "depth_safety_multiplier"), 1.0)),
@@ -297,6 +325,8 @@ def load_bot_config(path: Path) -> BotConfig:
         batch_exit_slices=_float_tuple(_deep_get(raw, ("execution", "batch_exit_slices"), None), (0.4, 0.3, 1.0)),
         batch_exit_extra_buffer_ticks=_float_tuple(_deep_get(raw, ("execution", "batch_exit_extra_buffer_ticks"), None), (0.0, 3.0, 6.0)),
     )
+    execution_warnings = execution_raw.normalization_warnings()
+    execution = execution_raw.normalized()
     amount_usd = float(_deep_get(raw, ("execution", "amount_usd"), 5.0))
     return BotConfig(
         edge=edge,
@@ -306,6 +336,8 @@ def load_bot_config(path: Path) -> BotConfig:
         warmup_timeout_sec=float(_deep_get(raw, ("runtime", "warmup_timeout_sec"), 8.0)),
         dvol_refresh_sec=float(_deep_get(raw, ("runtime", "dvol_refresh_sec"), 300.0)),
         max_dvol_age_sec=float(_deep_get(raw, ("runtime", "max_dvol_age_sec"), 900.0)),
+        dvol_retry_interval_sec=float(_deep_get(raw, ("runtime", "dvol_retry_interval_sec"), 5.0)),
+        dvol_retry_attempts=int(_deep_get(raw, ("runtime", "dvol_retry_attempts"), 10)),
         settlement_boundary_usd=float(_deep_get(raw, ("runtime", "settlement_boundary_usd"), 5.0)),
         coinbase_enabled=bool(_deep_get(raw, ("market_data", "coinbase_enabled"), False)),
         polymarket_price_enabled=bool(_deep_get(raw, ("market_data", "polymarket_price_enabled"), True)),
@@ -316,6 +348,7 @@ def load_bot_config(path: Path) -> BotConfig:
             ("market_data", "polymarket_unhealthy_log_after_sec"),
             10.0,
         )),
+        config_warnings=execution_warnings,
     )
 
 
@@ -405,7 +438,7 @@ def _compact(value: float | None, digits: int = 6) -> float | None:
 
 def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
     cfg = options.config
-    return {
+    row = {
         "ts": dt.datetime.now().astimezone().isoformat(),
         "event": "config",
         "mode": options.mode,
@@ -427,6 +460,8 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
             "warmup_timeout_sec": cfg.warmup_timeout_sec,
             "dvol_refresh_sec": cfg.dvol_refresh_sec,
             "max_dvol_age_sec": cfg.max_dvol_age_sec,
+            "dvol_retry_interval_sec": cfg.dvol_retry_interval_sec,
+            "dvol_retry_attempts": cfg.dvol_retry_attempts,
             "settlement_boundary_usd": cfg.settlement_boundary_usd,
         },
         "dynamic_params": {
@@ -437,6 +472,9 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
         "log_retention_hours": options.log_retention_hours,
         "log_prune_every_windows": options.log_prune_every_windows,
     }
+    if cfg.config_warnings:
+        row["config_warnings"] = list(cfg.config_warnings)
+    return row
 
 
 def _dynamic_health_payload(last_check_result: dict[str, Any]) -> dict[str, Any] | None:
@@ -643,34 +681,6 @@ def _position_log(position: PositionSnapshot | None, *, compact: bool) -> dict[s
     }
 
 
-def _price_return_bps(feed: Any, *, now_ts: float, lookback_sec: float) -> float | None:
-    latest = getattr(feed, "latest_price", None) if feed is not None else None
-    if latest is None or latest <= 0:
-        return None
-    if not hasattr(feed, "price_at_or_before"):
-        return None
-    try:
-        previous = feed.price_at_or_before(now_ts - lookback_sec, max_backward_sec=lookback_sec + 2.0)
-    except TypeError:
-        previous = feed.price_at_or_before(now_ts - lookback_sec)
-    if previous is None or previous <= 0:
-        return None
-    return ((latest - previous) / previous) * 10_000.0
-
-
-def _lead_delta(price: float | None, polymarket_price: float | None) -> tuple[float | None, float | None]:
-    if price is None or polymarket_price is None or polymarket_price <= 0:
-        return None, None
-    delta = price - polymarket_price
-    return delta, (delta / polymarket_price) * 10_000.0
-
-
-def _side_vs_k(price: float | None, k_price: float | None) -> str | None:
-    if price is None or k_price is None:
-        return None
-    return "up" if price >= k_price else "down"
-
-
 def _warmup_warning_row(*, now: dt.datetime, mode: str, market_slug: str, unhealthy_log_after_sec: float) -> dict[str, Any]:
     return {
         "ts": now.astimezone().isoformat(),
@@ -743,6 +753,36 @@ def is_dvol_stale(volatility: DvolSnapshot | None, *, now_monotonic: float, max_
     return volatility is None or now_monotonic - volatility.fetched_at > max_age_sec
 
 
+def is_valid_dvol(volatility: DvolSnapshot | None) -> bool:
+    return volatility is not None and volatility.sigma is not None and volatility.sigma > 0
+
+
+async def fetch_valid_dvol_with_retries(
+    *,
+    fetcher: Callable[[], DvolSnapshot] = fetch_dvol_snapshot,
+    retry_interval_sec: float = 5.0,
+    max_retries: int = 10,
+    sleep: Callable[[float], Any] = asyncio.sleep,
+    on_retry: Callable[[int, DvolSnapshot | None, str | None], None] | None = None,
+) -> DvolSnapshot | None:
+    retries = max(0, int(max_retries))
+    for attempt in range(retries + 1):
+        snapshot: DvolSnapshot | None = None
+        error: str | None = None
+        try:
+            snapshot = await asyncio.to_thread(fetcher)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        if is_valid_dvol(snapshot):
+            return snapshot
+        if attempt >= retries:
+            return None
+        if on_retry is not None:
+            on_retry(attempt + 1, snapshot, error)
+        await sleep(max(0.0, float(retry_interval_sec)))
+    return None
+
+
 def choose_settlement(
     prices: WindowPrices,
     latest_proxy_price: float | None,
@@ -762,21 +802,7 @@ def choose_settlement(
 
 
 def _bot_config_with_edge(cfg: BotConfig, edge: EdgeConfig) -> BotConfig:
-    return BotConfig(
-        edge=edge,
-        execution=cfg.execution,
-        amount_usd=cfg.amount_usd,
-        interval_sec=cfg.interval_sec,
-        warmup_timeout_sec=cfg.warmup_timeout_sec,
-        dvol_refresh_sec=cfg.dvol_refresh_sec,
-        max_dvol_age_sec=cfg.max_dvol_age_sec,
-        settlement_boundary_usd=cfg.settlement_boundary_usd,
-        coinbase_enabled=cfg.coinbase_enabled,
-        polymarket_price_enabled=cfg.polymarket_price_enabled,
-        max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec,
-        polymarket_stale_reconnect_sec=cfg.polymarket_stale_reconnect_sec,
-        polymarket_unhealthy_log_after_sec=cfg.polymarket_unhealthy_log_after_sec,
-    )
+    return replace(cfg, edge=edge)
 
 
 def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
@@ -867,13 +893,13 @@ def _snapshot(
     raw_proxy_price = sum(raw_proxy_values) / len(raw_proxy_values) if raw_proxy_values else None
     raw_source_spread_usd = abs(raw_binance_price - raw_coinbase_price) if raw_binance_price is not None and raw_coinbase_price is not None else None
     raw_source_spread_bps = (raw_source_spread_usd / raw_proxy_price) * 10_000.0 if raw_source_spread_usd is not None and raw_proxy_price else None
-    lead_binance_usd, lead_binance_bps = _lead_delta(raw_binance_price, price.polymarket)
-    lead_coinbase_usd, lead_coinbase_bps = _lead_delta(raw_coinbase_price, price.polymarket)
-    lead_proxy_usd, lead_proxy_bps = _lead_delta(raw_proxy_price, price.polymarket)
-    lead_binance_side = _side_vs_k(raw_binance_price, prices.k_price)
-    lead_coinbase_side = _side_vs_k(raw_coinbase_price, prices.k_price)
-    lead_proxy_side = _side_vs_k(raw_proxy_price, prices.k_price)
-    lead_polymarket_side = _side_vs_k(price.polymarket, prices.k_price)
+    lead_binance_usd, lead_binance_bps = lead_delta(raw_binance_price, price.polymarket)
+    lead_coinbase_usd, lead_coinbase_bps = lead_delta(raw_coinbase_price, price.polymarket)
+    lead_proxy_usd, lead_proxy_bps = lead_delta(raw_proxy_price, price.polymarket)
+    lead_binance_side = side_vs_k(raw_binance_price, prices.k_price)
+    lead_coinbase_side = side_vs_k(raw_coinbase_price, prices.k_price)
+    lead_proxy_side = side_vs_k(raw_proxy_price, prices.k_price)
+    lead_polymarket_side = side_vs_k(price.polymarket, prices.k_price)
     up = token_state(stream, window.up_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     down = token_state(stream, window.down_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     snap = MarketSnapshot(
@@ -902,7 +928,7 @@ def _snapshot(
         up_book_age_ms=up["book_age_ms"],
         down_book_age_ms=down["book_age_ms"],
         source_spread_bps=price.spread_bps,
-        polymarket_divergence_bps=lead_binance_bps,
+        polymarket_divergence_bps=lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps,
     )
     meta = {
         "ts": now.astimezone().isoformat(),
@@ -931,20 +957,20 @@ def _snapshot(
         "source_spread_bps": _compact(raw_source_spread_bps if raw_source_spread_bps is not None else price.spread_bps, 3),
         "lead_binance_vs_polymarket_usd": _compact(lead_binance_usd, 2),
         "lead_binance_vs_polymarket_bps": _compact(lead_binance_bps, 3),
-        "polymarket_divergence_bps": _compact(lead_binance_bps, 3),
+        "polymarket_divergence_bps": _compact(lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps, 3),
         "lead_coinbase_vs_polymarket_usd": _compact(lead_coinbase_usd, 2),
         "lead_coinbase_vs_polymarket_bps": _compact(lead_coinbase_bps, 3),
         "lead_proxy_vs_polymarket_usd": _compact(lead_proxy_usd, 2),
         "lead_proxy_vs_polymarket_bps": _compact(lead_proxy_bps, 3),
-        "lead_binance_return_1s_bps": _compact(_price_return_bps(feed, now_ts=now_ts, lookback_sec=1.0), 3),
-        "lead_binance_return_3s_bps": _compact(_price_return_bps(feed, now_ts=now_ts, lookback_sec=3.0), 3),
-        "lead_binance_return_5s_bps": _compact(_price_return_bps(feed, now_ts=now_ts, lookback_sec=5.0), 3),
-        "lead_coinbase_return_1s_bps": _compact(_price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=1.0), 3),
-        "lead_coinbase_return_3s_bps": _compact(_price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=3.0), 3),
-        "lead_coinbase_return_5s_bps": _compact(_price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=5.0), 3),
-        "lead_polymarket_return_1s_bps": _compact(_price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=1.0), 3),
-        "lead_polymarket_return_3s_bps": _compact(_price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=3.0), 3),
-        "lead_polymarket_return_5s_bps": _compact(_price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_binance_return_1s_bps": _compact(price_return_bps(feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_binance_return_3s_bps": _compact(price_return_bps(feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_binance_return_5s_bps": _compact(price_return_bps(feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_coinbase_return_1s_bps": _compact(price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_coinbase_return_3s_bps": _compact(price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_coinbase_return_5s_bps": _compact(price_return_bps(coinbase_feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_polymarket_return_1s_bps": _compact(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=1.0), 3),
+        "lead_polymarket_return_3s_bps": _compact(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=3.0), 3),
+        "lead_polymarket_return_5s_bps": _compact(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=5.0), 3),
         "lead_binance_side": lead_binance_side,
         "lead_coinbase_side": lead_coinbase_side,
         "lead_proxy_side": lead_proxy_side,
@@ -1050,11 +1076,9 @@ async def run(options: RuntimeOptions) -> int:
     )
     series = MarketSeries.from_known("btc-updown-5m")
     stream = PriceStream(on_price=_noop_price_update)
-    volatility: DvolSnapshot | None = None
-    try:
-        volatility = await asyncio.to_thread(fetch_dvol_snapshot)
-    except Exception:
-        volatility = None
+    dvol_state = DvolRefreshState()
+    dvol_refresh_task: asyncio.Task[DvolSnapshot | None] | None = None
+    dvol_refresh_market_slug: str | None = None
     next_dvol_refresh = time.monotonic() + cfg.dvol_refresh_sec
     state = StrategyState()
     completed_windows = 0
@@ -1093,6 +1117,38 @@ async def run(options: RuntimeOptions) -> int:
                 "message": dynamic_start_error,
                 "action": "keep_current",
             })
+        startup_dvol = await fetch_valid_dvol_with_retries(
+            retry_interval_sec=cfg.dvol_retry_interval_sec,
+            max_retries=cfg.dvol_retry_attempts,
+            on_retry=lambda attempt, snapshot, error: logger.write({
+                "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "event": "dvol_retry",
+                "mode": options.mode,
+                "phase": "startup",
+                "attempt": attempt,
+                "max_retries": cfg.dvol_retry_attempts,
+                "retry_interval_sec": cfg.dvol_retry_interval_sec,
+                "snapshot": snapshot.to_json() if snapshot is not None else None,
+                "error": error,
+            }),
+        )
+        if startup_dvol is None:
+            logger.write({
+                "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "event": "dvol_startup_failed",
+                "mode": options.mode,
+                "max_retries": cfg.dvol_retry_attempts,
+                "action": "stop",
+            })
+            return 1
+        dvol_state.apply_refresh_result(startup_dvol)
+        logger.write({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "event": "dvol_ready",
+            "mode": options.mode,
+            "phase": "startup",
+            "volatility": startup_dvol.to_json(),
+        })
         window = find_initial_window(series)
         prices = WindowPrices()
         state.reset_for_market(window.slug)
@@ -1179,14 +1235,53 @@ async def run(options: RuntimeOptions) -> int:
                 await refresh_binance_open(feed, window, prices, age_sec)
             if coinbase_feed is not None:
                 await refresh_coinbase_open(coinbase_feed, window, prices, age_sec)
-            if time.monotonic() >= next_dvol_refresh:
+            if dvol_refresh_task is not None and dvol_refresh_task.done():
                 try:
-                    volatility = await asyncio.to_thread(fetch_dvol_snapshot)
+                    refreshed = dvol_refresh_task.result()
                 except Exception:
-                    pass
+                    refreshed = None
+                if dvol_state.apply_refresh_result(refreshed):
+                    logger.write({
+                        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "event": "dvol_recovered",
+                        "mode": options.mode,
+                        "market_slug": dvol_refresh_market_slug or window.slug,
+                        "volatility": dvol_state.current.to_json() if dvol_state.current is not None else None,
+                    })
+                else:
+                    logger.write({
+                        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "event": "dvol_refresh_failed",
+                        "mode": options.mode,
+                        "market_slug": dvol_refresh_market_slug or window.slug,
+                        "failed_refreshes": dvol_state.failed_refreshes,
+                        "last_error": dvol_state.last_error,
+                        "kept_previous": dvol_state.current.to_json() if dvol_state.current is not None else None,
+                    })
+                dvol_refresh_task = None
+                dvol_refresh_market_slug = None
                 next_dvol_refresh = time.monotonic() + cfg.dvol_refresh_sec
-            dvol_stale = is_dvol_stale(volatility, now_monotonic=time.monotonic(), max_age_sec=cfg.max_dvol_age_sec)
-            sigma_eff = None if dvol_stale or volatility is None else volatility.sigma
+            if dvol_refresh_task is None and time.monotonic() >= next_dvol_refresh:
+                refresh_market_slug = window.slug
+                dvol_refresh_market_slug = refresh_market_slug
+                dvol_refresh_task = asyncio.create_task(fetch_valid_dvol_with_retries(
+                    retry_interval_sec=cfg.dvol_retry_interval_sec,
+                    max_retries=cfg.dvol_retry_attempts,
+                    on_retry=lambda attempt, snapshot, error: logger.write({
+                        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "event": "dvol_retry",
+                        "mode": options.mode,
+                        "market_slug": refresh_market_slug,
+                        "phase": "refresh",
+                        "attempt": attempt,
+                        "max_retries": cfg.dvol_retry_attempts,
+                        "retry_interval_sec": cfg.dvol_retry_interval_sec,
+                        "snapshot": snapshot.to_json() if snapshot is not None else None,
+                        "error": error,
+                    }),
+                ))
+            dvol_stale = is_dvol_stale(dvol_state.current, now_monotonic=time.monotonic(), max_age_sec=cfg.max_dvol_age_sec)
+            sigma_eff = None if dvol_stale or dvol_state.current is None else dvol_state.current.sigma
             snap, meta = _snapshot(
                 window,
                 prices,
@@ -1204,7 +1299,7 @@ async def run(options: RuntimeOptions) -> int:
                 **_runtime_log_meta(meta),
                 "mode": options.mode,
                 "event": "tick",
-                "sigma_source": volatility.source if volatility is not None else "missing",
+                "sigma_source": dvol_state.current.source if dvol_state.current is not None else "missing",
                 "sigma_eff": _compact(sigma_eff),
                 "volatility_stale": dvol_stale,
                 "position": _position_log(state.open_position, compact=True),
@@ -1448,6 +1543,7 @@ async def run(options: RuntimeOptions) -> int:
                 window = next_window
                 prices = WindowPrices()
                 state.reset_for_market(window.slug)
+                seen_repetitive_skips.clear()
                 await asyncio.wait_for(stream.switch_tokens([window.up_token, window.down_token]), timeout=8.0)
                 if options.mode == "live":
                     await asyncio.to_thread(prefetch_order_params, window.up_token)
@@ -1456,6 +1552,9 @@ async def run(options: RuntimeOptions) -> int:
         logger.write({"ts": dt.datetime.now().astimezone().isoformat(), "event": "error", "error": str(exc)})
         return 1
     finally:
+        if dvol_refresh_task is not None:
+            dvol_refresh_task.cancel()
+            await asyncio.gather(dvol_refresh_task, return_exceptions=True)
         closers = [stream.close()]
         if feed is not None:
             closers.append(feed.stop())

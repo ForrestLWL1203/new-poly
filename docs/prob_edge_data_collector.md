@@ -17,6 +17,10 @@ The compatibility wrapper `scripts/prob_edge_dry_run.py` currently delegates to
 this collector so old commands do not break, but new commands should use the
 collector name.
 
+Strategy-neutral helper code used by both the collector and strategy bot lives
+in `new_poly/market/prob_edge_data.py`. Keep this script as an entrypoint and
+JSONL row builder; do not add bot-only strategy decisions here.
+
 ## Data Sources
 
 The collector records:

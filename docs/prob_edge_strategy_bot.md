@@ -12,6 +12,9 @@ It shares one strategy state machine across two execution modes:
 The bot is separate from `scripts/collect_prob_edge_data.py`. The collector
 records raw market data only; this script computes probabilities, decisions,
 virtual/live fills, position state, and PnL.
+Both entrypoints share strategy-neutral window, K-refresh, effective-price, and
+token-depth helpers from `new_poly/market/prob_edge_data.py`; the bot does not
+import implementation details from the collector script.
 
 ## Run
 
@@ -68,9 +71,13 @@ python3 scripts/run_prob_edge_bot.py \
 ## Default Rules
 
 - New entries use phase-specific edge thresholds:
-  `90 <= age < 120` requires `early_required_edge = 0.16`;
-  `120 <= age < 240` requires `core_required_edge = 0.14`;
-  `240 <= age <= 270` is disabled by default with `late_entry_enabled = false`.
+  `entry_start_age_sec <= age < early_to_core_age_sec` requires
+  `early_required_edge`;
+  `early_to_core_age_sec <= age < core_to_late_age_sec` requires
+  `core_required_edge`;
+  `core_to_late_age_sec <= age <= entry_end_age_sec` is disabled by default
+  with `late_entry_enabled = false`. Current tuned configs use `0.16/0.14`
+  edge thresholds and `120s/240s` phase boundaries.
 - No new entries in the final 30 seconds.
 - Default notional is `$5` in the MVP profile. The aggressive/live-smoke
   profile uses `$1`.
@@ -79,6 +86,15 @@ python3 scripts/run_prob_edge_bot.py \
   roughly 2Hz. Time-window guards such as `prob_stagnation_window_sec=3` are
   wall-clock windows, not tick counts.
 - `sigma_eff` uses Deribit BTC DVOL divided by 100.
+- Startup requires a valid DVOL snapshot. If the first request fails, the bot
+  retries every `runtime.dvol_retry_interval_sec` seconds for
+  `runtime.dvol_retry_attempts` retries and exits with `dvol_startup_failed` if
+  it still cannot obtain sigma.
+- Runtime DVOL refreshes do not overwrite the last valid snapshot with an empty
+  one. Failed refreshes retry in the background; while the previous snapshot is
+  still younger than `runtime.max_dvol_age_sec`, the strategy keeps using it.
+  Once it becomes stale, new entries fail closed with `missing_model_inputs`
+  while existing positions can still run exit checks.
 - K is the Polymarket UI Price to Beat from the crypto price API.
 - Settlement/reporting in paper mode uses the collected effective price
   direction; the bot does not wait for Polymarket `closePrice`.
@@ -124,11 +140,17 @@ Config knobs include:
 ```text
 early_required_edge
 core_required_edge
+early_to_core_age_sec
+core_to_late_age_sec
 late_entry_enabled
 late_required_edge
 late_max_spread
 defensive_profit_min
 protection_profit_min
+profit_protection_start_remaining_sec
+profit_protection_end_remaining_sec
+defensive_take_profit_start_remaining_sec
+defensive_take_profit_end_remaining_sec
 final_hold_min_prob
 final_hold_min_bid_avg
 final_hold_min_bid_limit
@@ -158,6 +180,10 @@ polymarket_price_enabled
 max_polymarket_price_age_sec
 polymarket_stale_reconnect_sec
 polymarket_unhealthy_log_after_sec
+dvol_refresh_sec
+max_dvol_age_sec
+dvol_retry_interval_sec
+dvol_retry_attempts
 coinbase_enabled
 ```
 
@@ -183,6 +209,11 @@ adverse to the held side and the position has been open for at least
 Set the threshold to `0` to disable this guard. This is separate from
 `market_disagrees_exit`, which measures CLOB bid/model disagreement rather than
 Polymarket reference divergence.
+
+The probability helper clamps the pre-expiry `d2` time input to a minimum
+`0.1s` only as a numerical guard against unstable `sqrt(T)` behavior. The bot
+does not rely on sub-second model probabilities for live risk because new entry
+is already closed and `final_force_exit` handles the final seconds.
 
 The initial `market_disagrees_exit_threshold` default is `0.30`. A looser
 `0.20` threshold caught more bid/model deterioration but over-exited in replay;
@@ -297,6 +328,12 @@ attempt 1: min(ask_limit + 2 ticks, fair_cap)
 attempt 2: min(ask_limit + 5 ticks, fair_cap)
 ```
 
+If `buy_retry_price_buffer_ticks` is configured below
+`buy_price_buffer_ticks`, the runtime clamps it up to the first-attempt buffer
+and emits `buy_retry_price_buffer_ticks_clamped_to_buy_price_buffer_ticks` in
+the config row. Retry is never allowed to become less aggressive than the first
+BUY attempt.
+
 SELL also gets one retry. In CLOB FAK semantics any visible bid at or above the
 sell floor can fill, while bids below the floor are rejected. Normal
 profit-taking and stop-loss exits use the same configurable aggressive floor:
@@ -380,9 +417,11 @@ late-window profit protection:
   after replay because it slightly reduced early false exits without materially
   increasing drawdown.
 - `market_overprice_exit`: executable bid is above model probability by `0.02`.
-- `defensive_take_profit`: when `30 < remaining_sec <= 60`, profit is at least
-  `defensive_profit_min`, and the held-side model probability has not risen over
-  `prob_stagnation_window_sec`.
+- `defensive_take_profit`: when
+  `defensive_take_profit_start_remaining_sec < remaining_sec <= defensive_take_profit_end_remaining_sec`,
+  profit is at least `defensive_profit_min`, and the held-side model
+  probability has not risen over `prob_stagnation_window_sec`. Current configs
+  use the classic `30s-60s` band.
 - `prob_drop_exit`: when enabled, the held-side model probability drops by at
   least `prob_drop_exit_threshold` over `prob_drop_exit_window_sec` and is below
   the entry-time model probability. Current MVP/aggressive configs set
@@ -401,8 +440,10 @@ late-window profit protection:
   `market_disagrees_exit_min_age_sec`, and no meaningful current profit. This
   catches cases where the model probability stays high but the market is
   increasingly unwilling to pay for that outcome.
-- `profit_protection_exit`: legacy configurable profit guard; the current
-  30-second final-force boundary normally supersedes it.
+- `profit_protection_exit`: configurable late profit guard active when
+  `profit_protection_start_remaining_sec < remaining_sec <= profit_protection_end_remaining_sec`;
+  the current 30-second final-force boundary normally supersedes most of this
+  band.
 - `final_force_exit`: when `remaining_sec <= final_force_exit_remaining_sec`
   (`30s` in current configs), sell if depth exists unless
   `model_prob`, `bid_avg`, and `bid_limit` all exceed their final-hold
@@ -428,6 +469,8 @@ remaining_sec
 s_price
 k_price
 sigma_eff
+sigma_source
+volatility_stale
 up/down book summaries
 decision
 order
@@ -574,6 +617,8 @@ Default behavior:
   be scheduled.
 - Candidate profiles are replayed with 3-tick BUY/SELL slippage. This is an
   intentional robustness bias, not a claim that live FAK normally slips 3 ticks.
+- Profile risk direction is controlled by each profile's explicit `risk_rank`;
+  lower ranks are more aggressive. YAML order is not used for safety decisions.
 - Profile changes are applied only at the next window boundary.
 - MVP recovery is disabled: the governor can move to a more conservative
   profile, but it does not automatically move back to aggressive.

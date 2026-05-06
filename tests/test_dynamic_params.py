@@ -20,9 +20,9 @@ from new_poly.strategy.dynamic_params import (
 
 def _profiles() -> list[SignalProfile]:
     return [
-        SignalProfile("aggressive", 100, 240, 0.14, 0.12, 4, min_candidate_trades=12),
-        SignalProfile("balanced", 105, 240, 0.18, 0.16, 3, min_candidate_trades=8),
-        SignalProfile("conservative", 135, 240, 0.22, 0.20, 2, min_candidate_trades=4),
+        SignalProfile("aggressive", 100, 240, 0.14, 0.12, 4, min_candidate_trades=12, risk_rank=0),
+        SignalProfile("balanced", 105, 240, 0.18, 0.16, 3, min_candidate_trades=8, risk_rank=1),
+        SignalProfile("conservative", 135, 240, 0.22, 0.20, 2, min_candidate_trades=4, risk_rank=2),
     ]
 
 
@@ -193,3 +193,27 @@ def test_default_dynamic_config_file_loads_profiles() -> None:
     assert cfg.check_every_windows == 5
     assert cfg.slippage_ticks == 3
     assert cfg.profile("strict").min_candidate_trades == 3
+    assert cfg.profile("strict").risk_rank == 3
+
+
+def test_profile_risk_rank_not_yaml_order_controls_de_risking() -> None:
+    cfg = DynamicConfig(
+        profiles=[
+            SignalProfile("conservative", 135, 240, 0.22, 0.20, 2, min_candidate_trades=4, risk_rank=2),
+            SignalProfile("aggressive", 100, 240, 0.14, 0.12, 4, min_candidate_trades=12, risk_rank=0),
+            SignalProfile("balanced", 105, 240, 0.18, 0.16, 3, min_candidate_trades=8, risk_rank=1),
+        ],
+        active_profile="balanced",
+    )
+    state = DynamicState(active_profile="balanced", failed_health_checks=1)
+    health = HealthCheck(windows=30, closed_trades=20, win_rate=0.40, total_pnl=-1.0, max_drawdown=-2.0, healthy=False, reasons=["pnl_negative"])
+    candidates = [
+        CandidateResult("aggressive", closed_trades=30, win_rate=0.80, total_pnl=5.0, avg_pnl_per_trade=0.166, max_drawdown=-1.0),
+        CandidateResult("conservative", closed_trades=4, win_rate=0.75, total_pnl=0.8, avg_pnl_per_trade=0.2, max_drawdown=-0.5),
+    ]
+
+    decision, _new_state = decide_dynamic_update(health, candidates, cfg, state, mode="paper", current_window_id="m65")
+
+    rejected = {candidate.profile: candidate.rejection_reason for candidate in decision.candidate_results}
+    assert rejected["aggressive"] == "more_aggressive_than_active"
+    assert decision.selected_profile == "conservative"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -300,6 +301,31 @@ def test_scan_configs_filters_min_entries_and_can_sort_by_win_rate() -> None:
 
     assert len(results) == 1
     assert results[0]["entries"] >= 1
+
+
+def test_scan_configs_preserves_base_config_fields() -> None:
+    base = BacktestConfig(
+        early_to_core_age_sec=111.0,
+        core_to_late_age_sec=222.0,
+        profit_protection_start_remaining_sec=12.0,
+        profit_protection_end_remaining_sec=34.0,
+        defensive_take_profit_start_remaining_sec=35.0,
+        defensive_take_profit_end_remaining_sec=67.0,
+    )
+    results = scan_configs(
+        [],
+        early_edges=[0.10],
+        core_edges=[0.08],
+        entry_starts=[60],
+        entry_ends=[250],
+        base_config=base,
+    )
+
+    assert results[0]["entries"] == 0
+    cfg = replace(base, early_required_edge=0.10, core_required_edge=0.08, entry_start_age_sec=60.0, entry_end_age_sec=250.0)
+    assert cfg.early_to_core_age_sec == 111.0
+    assert cfg.core_to_late_age_sec == 222.0
+    assert cfg.defensive_take_profit_end_remaining_sec == 67.0
 
 
 def test_backtest_config_passes_max_entries_to_strategy() -> None:

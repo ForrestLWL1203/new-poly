@@ -258,6 +258,7 @@ new_poly/market/polymarket_live.py
 new_poly/market/market.py
 new_poly/market/series.py
 new_poly/market/stream.py
+new_poly/market/prob_edge_data.py
 new_poly/market/deribit.py
 new_poly/trading/fak_quotes.py
 ```
@@ -268,6 +269,11 @@ Polymarket window discovery, CLOB WebSocket book handling, Deribit DVOL
 snapshots, and FAK quote/depth selection. Do not reuse old `poly-bot` strategy
 modules or old thresholds.
 
+- Shared collector/bot helpers such as `WindowPrices`, K refresh,
+  boundary-open refresh, effective price calculation, token depth summaries,
+  and BTC 5m window rollover live in `new_poly/market/prob_edge_data.py`.
+  Entry scripts should import that module instead of importing from
+  `scripts/collect_prob_edge_data.py`.
 - Basis-adjusted proxy formula:
   use only sources that have both a live price and same-window open price;
   `proxy_live = mean(valid paired live prices)`;
@@ -277,6 +283,10 @@ modules or old thresholds.
   `proxy_binance_basis_adjusted`. `polymarket_price` is a reference field.
 - Deribit BTC DVOL is collected once at startup by default and written as
   `volatility`; use `--dvol-refresh-sec N` only when a run should refresh it.
+- Strategy startup must obtain a valid DVOL snapshot before entering the main
+  loop. Runtime refresh failures must not overwrite the last valid snapshot with
+  an empty one; keep using the previous sigma until `max_dvol_age_sec` marks it
+  stale.
 - `settlement_aligned` means the Polymarket reference source is available and
   the resolution source looks like Chainlink BTC/USD; it does not mean the model
   `S` came from Polymarket.

@@ -14,7 +14,7 @@ from new_poly.strategy.prob_edge import (
     evaluate_entry,
     evaluate_exit,
 )
-from new_poly.strategy.probability import binary_probabilities, binary_probability
+from new_poly.strategy.probability import MIN_SECONDS_LEFT_FOR_D2, binary_probabilities, binary_probability
 from new_poly.strategy.state import StrategyState
 
 
@@ -33,6 +33,15 @@ def test_binary_probabilities_sum_to_one() -> None:
 
     assert probs.up > probs.down
     assert math.isclose(probs.up + probs.down, 1.0, abs_tol=1e-12)
+
+
+def test_binary_probability_uses_minimum_pre_expiry_time_guard() -> None:
+    tiny = binary_probabilities(100.1, 100.0, 0.6, MIN_SECONDS_LEFT_FOR_D2 / 2)
+    guarded = binary_probabilities(100.1, 100.0, 0.6, MIN_SECONDS_LEFT_FOR_D2)
+
+    assert tiny.up == guarded.up
+    assert tiny.d2 == guarded.d2
+    assert binary_probability(100.1, 100.0, 0.6, 0.0) == 1.0
 
 
 def test_strategy_state_tracks_peak_pnl_and_drawdown() -> None:
@@ -360,6 +369,33 @@ def test_entry_uses_phase_edges_and_disables_late() -> None:
     assert final_no_entry.phase == "final_no_entry"
 
 
+def test_entry_phase_boundaries_are_configurable() -> None:
+    cfg = EdgeConfig(
+        entry_start_age_sec=60.0,
+        entry_end_age_sec=260.0,
+        early_to_core_age_sec=90.0,
+        core_to_late_age_sec=210.0,
+        early_required_edge=0.11,
+        core_required_edge=0.07,
+        late_entry_enabled=False,
+    )
+    base = dict(
+        market_slug="m1",
+        remaining_sec=180.0,
+        s_price=100.0,
+        k_price=100.0,
+        sigma_eff=2.0,
+    )
+
+    assert required_edge_for_entry(MarketSnapshot(age_sec=70.0, **base), cfg).phase == "early"
+    core = required_edge_for_entry(MarketSnapshot(age_sec=90.0, **base), cfg)
+    late = required_edge_for_entry(MarketSnapshot(age_sec=220.0, **base), cfg)
+
+    assert core.phase == "core"
+    assert core.required_edge == 0.07
+    assert late.phase == "late_disabled"
+
+
 def test_exit_logic_decay_and_market_overprice() -> None:
     cfg = EdgeConfig(model_decay_buffer=0.02, overprice_buffer=0.02)
     pos = PositionSnapshot(
@@ -606,6 +642,48 @@ def test_late_profit_protection_and_final_force_exit() -> None:
         down_book_age_ms=20.0,
     ), pos, cfg, StrategyState(current_market_slug="m1"))
     assert hold.reason != "final_force_exit"
+
+
+def test_profit_exit_bands_are_configurable() -> None:
+    cfg = EdgeConfig(
+        final_force_exit_remaining_sec=20.0,
+        profit_protection_start_remaining_sec=20.0,
+        profit_protection_end_remaining_sec=45.0,
+        defensive_take_profit_start_remaining_sec=45.0,
+        defensive_take_profit_end_remaining_sec=90.0,
+        protection_profit_min=0.01,
+        defensive_profit_min=0.03,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=1.0,
+        entry_avg_price=0.50,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.10,
+    )
+    base = dict(
+        market_slug="m1",
+        age_sec=220.0,
+        s_price=100.1,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_bid_avg=0.54,
+        up_bid_limit=0.53,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+    state = StrategyState(current_market_slug="m1")
+    state.prob_history = [(216.0, 0.90)]
+
+    defensive = evaluate_exit(MarketSnapshot(remaining_sec=70.0, **base), pos, cfg, state)
+    protected = evaluate_exit(MarketSnapshot(remaining_sec=40.0, **base), pos, cfg, state)
+
+    assert defensive.reason == "defensive_take_profit"
+    assert protected.reason == "profit_protection_exit"
 
 
 def test_logic_decay_still_triggers_inside_last_sixty_seconds() -> None:

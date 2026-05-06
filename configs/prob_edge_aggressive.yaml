@@ -8,6 +8,8 @@ strategy:
   overprice_buffer: 0.02
   entry_start_age_sec: 100
   entry_end_age_sec: 240
+  early_to_core_age_sec: 120
+  core_to_late_age_sec: 240
   final_no_entry_remaining_sec: 30
   max_entries_per_market: 4
   max_book_age_ms: 1000
@@ -16,6 +18,10 @@ strategy:
   late_max_spread: 0.02
   defensive_profit_min: 0.03
   protection_profit_min: 0.01
+  profit_protection_start_remaining_sec: 15
+  profit_protection_end_remaining_sec: 30
+  defensive_take_profit_start_remaining_sec: 30
+  defensive_take_profit_end_remaining_sec: 60
   final_force_exit_remaining_sec: 30.0
   final_hold_min_prob: 0.98
   final_hold_min_bid_avg: 0.97
@@ -61,6 +67,8 @@ runtime:
   warmup_timeout_sec: 8.0
   dvol_refresh_sec: 300
   max_dvol_age_sec: 900
+  dvol_retry_interval_sec: 5
+  dvol_retry_attempts: 10
   settlement_boundary_usd: 5
 
 market_data:

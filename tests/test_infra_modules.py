@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from new_poly.market import stream as stream_module
 from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import DvolSnapshot
+from new_poly.market.prob_edge_data import WindowPrices, effective_price
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
 from new_poly.trading.clob_client import _build_http_client_kwargs
@@ -51,6 +56,19 @@ def test_coinbase_price_feed_history_lookup_helpers() -> None:
     assert feed.first_price_at_or_after(101.0, max_forward_sec=10.0) == 10.5
 
 
+def test_prob_edge_data_effective_price_basis_adjustment_is_shared() -> None:
+    feed = BinancePriceFeed("btcusdt")
+    feed._inject(100.0, 105.0)
+    prices = WindowPrices(k_price=102.0, binance_open_price=100.0)
+
+    price = effective_price(feed, None, prices, coinbase_enabled=False)
+
+    assert price.source == "proxy_binance_basis_adjusted"
+    assert price.proxy == 105.0
+    assert price.proxy_open == 100.0
+    assert price.effective == 107.0
+
+
 def test_price_stream_updates_order_book_from_events() -> None:
     async def on_price(_update):
         return None
@@ -76,6 +94,67 @@ def test_price_stream_updates_order_book_from_events() -> None:
 
     asks = stream.get_latest_ask_levels_with_size(token_id)
     assert asks[0] == (0.5, 5.0)
+
+
+def test_price_stream_level_one_prefers_newer_best_bid_ask_but_keeps_depth_age() -> None:
+    async def on_price(_update):
+        return None
+
+    stream = PriceStream(on_price=on_price)
+    token_id = "token-a"
+    stream._handle_event({
+        "event_type": "book",
+        "asset_id": token_id,
+        "bids": [{"price": "0.49", "size": "10"}],
+        "asks": [{"price": "0.51", "size": "12"}],
+    })
+    stream._books[token_id]["received_at"] = 1.0
+    stream._handle_event({
+        "event_type": "best_bid_ask",
+        "asset_id": token_id,
+        "best_bid": "0.52",
+        "best_ask": "0.53",
+    })
+
+    assert stream.get_latest_best_bid(token_id) == 0.52
+    assert stream.get_latest_best_ask(token_id) == 0.53
+    assert stream.get_latest_best_ask_age(token_id) > 1.0
+
+
+@pytest.mark.asyncio
+async def test_price_stream_ping_failure_closes_ws_for_reconnect(monkeypatch) -> None:
+    async def on_price(_update):
+        return None
+
+    class BrokenPingWs:
+        def __init__(self) -> None:
+            self.closed = False
+            self.transport = None
+
+        async def send(self, _message: str) -> None:
+            raise ConnectionError("send failed")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(stream_module, "PING_INTERVAL", 0.001)
+    stream = PriceStream(on_price=on_price)
+    ws = BrokenPingWs()
+    stream._ws = ws
+    stream._running = True
+    task = asyncio.create_task(stream._ping_loop())
+
+    try:
+        async with asyncio.timeout(1.0):
+            while stream._ws is not None:
+                await asyncio.sleep(0.01)
+    finally:
+        stream._running = False
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert ws.closed is True
+    assert stream._ws is None
 
 
 def test_dvol_snapshot_serializes_sigma_and_age() -> None:

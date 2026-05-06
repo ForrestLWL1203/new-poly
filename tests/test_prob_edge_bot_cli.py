@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.run_prob_edge_bot import (
+    DvolRefreshState,
     WindowPrices,
     _config_log_row,
     _entry_analysis,
@@ -26,9 +27,13 @@ from scripts.run_prob_edge_bot import (
     build_arg_parser,
     build_runtime_options,
     choose_settlement,
+    fetch_valid_dvol_with_retries,
     is_dvol_stale,
+    is_valid_dvol,
+    load_bot_config,
     prune_jsonl_by_retention,
 )
+from new_poly.market.deribit import DvolSnapshot
 from new_poly.strategy.prob_edge import MarketSnapshot, PositionSnapshot, StrategyDecision
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import ExecutionResult
@@ -45,6 +50,8 @@ def test_default_mode_is_paper() -> None:
     assert opts.config.polymarket_price_enabled is True
     assert opts.config.polymarket_stale_reconnect_sec == 5.0
     assert opts.config.polymarket_unhealthy_log_after_sec == 10.0
+    assert opts.config.dvol_retry_interval_sec == 5.0
+    assert opts.config.dvol_retry_attempts == 10
     assert opts.config.coinbase_enabled is False
 
 
@@ -156,6 +163,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.model_decay_buffer == 0.03
     assert opts.config.edge.early_required_edge == 0.16
     assert opts.config.edge.core_required_edge == 0.14
+    assert opts.config.edge.early_to_core_age_sec == 120.0
+    assert opts.config.edge.core_to_late_age_sec == 240.0
     assert opts.config.edge.min_entry_model_prob == 0.35
     assert opts.config.edge.low_price_extra_edge_threshold == 0.30
     assert opts.config.edge.low_price_extra_edge == 0.02
@@ -164,11 +173,41 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.market_disagrees_exit_max_remaining_sec == 60.0
     assert opts.config.edge.market_disagrees_exit_min_loss == 0.03
     assert opts.config.edge.final_force_exit_remaining_sec == 30.0
+    assert opts.config.edge.profit_protection_start_remaining_sec == 15.0
+    assert opts.config.edge.profit_protection_end_remaining_sec == 30.0
+    assert opts.config.edge.defensive_take_profit_start_remaining_sec == 30.0
+    assert opts.config.edge.defensive_take_profit_end_remaining_sec == 60.0
     assert opts.config.polymarket_stale_reconnect_sec == 5.0
     assert opts.config.polymarket_unhealthy_log_after_sec == 10.0
     assert opts.config.edge.polymarket_divergence_exit_bps == 3.0
     assert opts.config.edge.polymarket_divergence_exit_min_age_sec == 3.0
     assert opts.config.coinbase_enabled is False
+
+
+def test_execution_retry_buffer_clamp_is_logged(tmp_path: Path) -> None:
+    config_path = tmp_path / "bad-buffer.yaml"
+    config_path.write_text(
+        """
+execution:
+  buy_price_buffer_ticks: 4
+  buy_retry_price_buffer_ticks: 1
+  sell_price_buffer_ticks: 6
+  sell_retry_price_buffer_ticks: 2
+""",
+        encoding="utf-8",
+    )
+
+    cfg = load_bot_config(config_path)
+    row = _config_log_row(build_runtime_options(build_arg_parser().parse_args(["--config", str(config_path), "--once"])))
+
+    assert cfg.execution.buy_retry_price_buffer_ticks == 4.0
+    assert cfg.execution.sell_retry_price_buffer_ticks == 6.0
+    assert row["execution"]["buy_retry_price_buffer_ticks"] == 4.0
+    assert row["execution"]["sell_retry_price_buffer_ticks"] == 6.0
+    assert row["config_warnings"] == [
+        "buy_retry_price_buffer_ticks_clamped_to_buy_price_buffer_ticks",
+        "sell_retry_price_buffer_ticks_clamped_to_sell_price_buffer_ticks",
+    ]
 
 
 def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Path) -> None:
@@ -306,6 +345,82 @@ def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
 
 def test_dvol_stale_after_configured_age() -> None:
     assert is_dvol_stale(None, now_monotonic=1000.0, max_age_sec=900.0) is True
+
+
+def _dvol(sigma: float | None, fetched_at: float = 100.0) -> DvolSnapshot:
+    return DvolSnapshot(
+        source="deribit_dvol",
+        currency="BTC",
+        dvol=None if sigma is None else sigma * 100.0,
+        sigma=sigma,
+        timestamp_ms=None,
+        fetched_at=fetched_at,
+    )
+
+
+def test_valid_dvol_requires_positive_sigma() -> None:
+    assert is_valid_dvol(_dvol(0.4)) is True
+    assert is_valid_dvol(_dvol(None)) is False
+    assert is_valid_dvol(_dvol(0.0)) is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_valid_dvol_retries_until_success_without_sleep_after_success() -> None:
+    attempts = [_dvol(None), _dvol(None), _dvol(0.42)]
+    sleeps: list[float] = []
+
+    def fetcher() -> DvolSnapshot:
+        return attempts.pop(0)
+
+    async def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    result = await fetch_valid_dvol_with_retries(
+        fetcher=fetcher,
+        retry_interval_sec=5.0,
+        max_retries=10,
+        sleep=sleeper,
+    )
+
+    assert result is not None
+    assert result.sigma == 0.42
+    assert sleeps == [5.0, 5.0]
+
+
+@pytest.mark.asyncio
+async def test_fetch_valid_dvol_returns_none_after_retries_exhausted() -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fetcher() -> DvolSnapshot:
+        nonlocal calls
+        calls += 1
+        return _dvol(None)
+
+    async def sleeper(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    result = await fetch_valid_dvol_with_retries(
+        fetcher=fetcher,
+        retry_interval_sec=5.0,
+        max_retries=2,
+        sleep=sleeper,
+    )
+
+    assert result is None
+    assert calls == 3
+    assert sleeps == [5.0, 5.0]
+
+
+def test_dvol_refresh_state_keeps_last_good_snapshot_on_failed_refresh() -> None:
+    state = DvolRefreshState(current=_dvol(0.39, fetched_at=100.0))
+
+    state.apply_refresh_result(_dvol(None, fetched_at=200.0))
+
+    assert state.current is not None
+    assert state.current.sigma == 0.39
+    assert state.failed_refreshes == 1
+    assert state.last_error == "invalid_dvol"
 
 
 def test_proxy_settlement_flags_boundary_uncertain() -> None:
