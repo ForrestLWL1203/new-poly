@@ -249,3 +249,36 @@ def test_prune_logs_after_window_writes_retention_row() -> None:
     assert row["retention_hours"] == options.log_retention_hours
     assert row["prune_every_windows"] == options.log_prune_every_windows
     assert row["removed_rows"] == 7
+
+
+def test_switch_to_next_window_resets_state_and_stream(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_loop import LoopRuntime, _switch_to_next_window
+
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+        stream = DummyStream()
+        feeds = FeedContext(binance=None, coinbase=None, polymarket=None, stream=stream)
+        first = _window("m1")
+        next_window = _window("m2", offset=5)
+        state = StrategyState(current_market_slug=first.slug, entry_count=3)
+        loop = LoopRuntime(seen_repetitive_skips={(first.slug, "edge_too_small")})
+
+        monkeypatch.setattr("new_poly.bot_loop.find_following_window", lambda window, series: next_window)
+
+        window, prices = await _switch_to_next_window(
+            window=first,
+            series=object(),
+            feeds=feeds,
+            state=state,
+            loop=loop,
+            options=options,
+        )
+
+        assert window is next_window
+        assert isinstance(prices, WindowPrices)
+        assert state.current_market_slug == next_window.slug
+        assert state.entry_count == 0
+        assert loop.seen_repetitive_skips == set()
+        assert stream.switched == [[next_window.up_token, next_window.down_token]]
+
+    asyncio.run(scenario())

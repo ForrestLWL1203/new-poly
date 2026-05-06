@@ -273,6 +273,28 @@ def _prune_logs_after_window_if_needed(
     })
 
 
+async def _switch_to_next_window(
+    *,
+    window: Any,
+    series: MarketSeries,
+    feeds: FeedContext,
+    state: StrategyState,
+    loop: LoopRuntime,
+    options: RuntimeOptions,
+    next_window: Any | None = None,
+) -> tuple[Any, WindowPrices]:
+    if next_window is None:
+        next_window = find_following_window(window, series)
+    prices = WindowPrices()
+    state.reset_for_market(next_window.slug)
+    loop.seen_repetitive_skips.clear()
+    await asyncio.wait_for(feeds.stream.switch_tokens([next_window.up_token, next_window.down_token]), timeout=8.0)
+    if options.mode == "live":
+        await asyncio.to_thread(prefetch_order_params, next_window.up_token)
+        await asyncio.to_thread(prefetch_order_params, next_window.down_token)
+    return next_window, prices
+
+
 async def _handle_window_close(
     *,
     window: Any,
@@ -311,12 +333,13 @@ async def _handle_window_close(
     if apply_pending_dynamic_profile is not None:
         cfg, dynamic_state = apply_pending_dynamic_profile(next_window.slug, cfg)
 
-    window = next_window
-    prices = WindowPrices()
-    state.reset_for_market(window.slug)
-    loop.seen_repetitive_skips.clear()
-    await asyncio.wait_for(feeds.stream.switch_tokens([window.up_token, window.down_token]), timeout=8.0)
-    if options.mode == "live":
-        await asyncio.to_thread(prefetch_order_params, window.up_token)
-        await asyncio.to_thread(prefetch_order_params, window.down_token)
+    window, prices = await _switch_to_next_window(
+        window=window,
+        series=series,
+        feeds=feeds,
+        state=state,
+        loop=loop,
+        options=options,
+        next_window=next_window,
+    )
     return window, prices, cfg, dynamic_state, dynamic_task, False
