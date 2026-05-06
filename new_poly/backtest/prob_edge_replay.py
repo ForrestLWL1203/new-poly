@@ -34,6 +34,13 @@ class BacktestConfig:
     model_decay_buffer: float = 0.03
     entry_start_age_sec: float = 90.0
     entry_end_age_sec: float = 270.0
+    dynamic_entry_enabled: bool = False
+    fast_move_entry_start_age_sec: float = 70.0
+    fast_move_min_abs_sk_usd: float = 80.0
+    fast_move_required_edge: float = 0.22
+    strong_move_entry_start_age_sec: float = 60.0
+    strong_move_min_abs_sk_usd: float = 120.0
+    strong_move_required_edge: float = 0.24
     max_book_age_ms: float = 1000.0
     max_entries_per_market: int = 2
     late_entry_enabled: bool = False
@@ -74,6 +81,13 @@ class BacktestConfig:
             model_decay_buffer=self.model_decay_buffer,
             entry_start_age_sec=self.entry_start_age_sec,
             entry_end_age_sec=self.entry_end_age_sec,
+            dynamic_entry_enabled=self.dynamic_entry_enabled,
+            fast_move_entry_start_age_sec=self.fast_move_entry_start_age_sec,
+            fast_move_min_abs_sk_usd=self.fast_move_min_abs_sk_usd,
+            fast_move_required_edge=self.fast_move_required_edge,
+            strong_move_entry_start_age_sec=self.strong_move_entry_start_age_sec,
+            strong_move_min_abs_sk_usd=self.strong_move_min_abs_sk_usd,
+            strong_move_required_edge=self.strong_move_required_edge,
             max_book_age_ms=self.max_book_age_ms,
             max_entries_per_market=self.max_entries_per_market,
             late_entry_enabled=self.late_entry_enabled,

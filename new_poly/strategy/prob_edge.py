@@ -18,6 +18,13 @@ class EdgeConfig:
     entry_end_age_sec: float = 270.0
     early_to_core_age_sec: float = 120.0
     core_to_late_age_sec: float = 240.0
+    dynamic_entry_enabled: bool = False
+    fast_move_entry_start_age_sec: float = 70.0
+    fast_move_min_abs_sk_usd: float = 80.0
+    fast_move_required_edge: float = 0.22
+    strong_move_entry_start_age_sec: float = 60.0
+    strong_move_min_abs_sk_usd: float = 120.0
+    strong_move_required_edge: float = 0.24
     final_no_entry_remaining_sec: float = 30.0
     max_entries_per_market: int = 2
     max_book_age_ms: float = 1000.0
@@ -133,7 +140,15 @@ def _probs(snapshot: MarketSnapshot):
 def required_edge_for_entry(snapshot: MarketSnapshot, cfg: EdgeConfig) -> EntryPhase:
     if snapshot.remaining_sec <= cfg.final_no_entry_remaining_sec:
         return EntryPhase("final_no_entry", False, None)
-    if snapshot.age_sec < cfg.entry_start_age_sec or snapshot.age_sec > cfg.entry_end_age_sec:
+    if snapshot.age_sec > cfg.entry_end_age_sec:
+        return EntryPhase("outside_window", False, None)
+    if snapshot.age_sec < cfg.entry_start_age_sec:
+        if cfg.dynamic_entry_enabled and snapshot.s_price is not None and snapshot.k_price is not None:
+            abs_sk = abs(snapshot.s_price - snapshot.k_price)
+            if snapshot.age_sec >= cfg.strong_move_entry_start_age_sec and abs_sk >= cfg.strong_move_min_abs_sk_usd:
+                return EntryPhase("strong_move", True, cfg.strong_move_required_edge)
+            if snapshot.age_sec >= cfg.fast_move_entry_start_age_sec and abs_sk >= cfg.fast_move_min_abs_sk_usd:
+                return EntryPhase("fast_move", True, cfg.fast_move_required_edge)
         return EntryPhase("outside_window", False, None)
     if snapshot.age_sec < cfg.early_to_core_age_sec:
         return EntryPhase("early", True, cfg.early_required_edge)

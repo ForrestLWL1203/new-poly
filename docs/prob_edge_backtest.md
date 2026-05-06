@@ -55,6 +55,13 @@ entries:
 ```text
 entry_start_age_sec = 100
 entry_end_age_sec = 240
+dynamic_entry_enabled = false
+strong_move_entry_start_age_sec = 60
+strong_move_min_abs_sk_usd = 120
+strong_move_required_edge = 0.24
+fast_move_entry_start_age_sec = 70
+fast_move_min_abs_sk_usd = 80
+fast_move_required_edge = 0.22
 early_required_edge = 0.16
 core_required_edge = 0.14
 max_entries_per_market = 4

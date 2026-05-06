@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.run_prob_edge_bot import (
+from new_poly.bot_runtime import (
     DvolRefreshState,
     WindowPrices,
     _config_log_row,
@@ -33,6 +33,7 @@ from scripts.run_prob_edge_bot import (
     load_bot_config,
     prune_jsonl_by_retention,
 )
+from scripts.run_prob_edge_bot import LoopRuntime
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.strategy.prob_edge import MarketSnapshot, PositionSnapshot, StrategyDecision
 from new_poly.strategy.state import StrategyState
@@ -233,7 +234,7 @@ def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Pa
 
 
 def test_logger_prune_does_not_reopen_when_retention_disabled(tmp_path: Path) -> None:
-    from scripts.run_prob_edge_bot import JsonlLogger
+    from new_poly.bot_runtime import JsonlLogger
 
     path = tmp_path / "run.jsonl"
     logger = JsonlLogger(path, retention_hours=None)
@@ -245,7 +246,7 @@ def test_logger_prune_does_not_reopen_when_retention_disabled(tmp_path: Path) ->
 
 
 def test_dynamic_payload_helpers_return_explicit_shapes() -> None:
-    from scripts.run_prob_edge_bot import _dynamic_candidate_payload, _dynamic_health_payload
+    from new_poly.bot_runtime import _dynamic_candidate_payload, _dynamic_health_payload
 
     result = {"health": {"closed_trades": 20}, "candidate_results": [{"profile": "balanced"}]}
 
@@ -305,7 +306,7 @@ def test_exit_retry_refresh_commits_to_sell_even_if_signal_no_longer_exits(monke
     def fake_snapshot(*args, **kwargs):
         return snap, {}
 
-    monkeypatch.setattr("scripts.run_prob_edge_bot._snapshot", fake_snapshot)
+    monkeypatch.setattr("new_poly.bot_runtime._snapshot", fake_snapshot)
 
     retry = asyncio.run(
         _refresh_exit_retry_params(
@@ -641,6 +642,13 @@ def test_polymarket_reference_unhealthy_row_is_auditable() -> None:
     assert row["coinbase_started"] is True
 
 
+def test_loop_runtime_does_not_start_polymarket_unhealthy_timer_before_checks() -> None:
+    runtime = LoopRuntime()
+
+    assert runtime.polymarket_unhealthy_since is None
+    assert runtime.polymarket_reference_warning_logged is False
+
+
 def test_config_log_row_contains_non_secret_runtime_shape() -> None:
     args = build_arg_parser().parse_args(["--once"])
     opts = build_runtime_options(args)
@@ -653,6 +661,18 @@ def test_config_log_row_contains_non_secret_runtime_shape() -> None:
     assert row["strategy"]["core_required_edge"] == opts.config.edge.core_required_edge
     assert row["execution"]["amount_usd"] == opts.config.amount_usd
     assert "private_key" not in str(row).lower()
+
+
+def test_dynamic_entry_cli_overrides_config() -> None:
+    parser = build_arg_parser()
+
+    aggressive = build_runtime_options(parser.parse_args(["--config", "configs/prob_edge_aggressive.yaml", "--once"]))
+    disabled = build_runtime_options(parser.parse_args(["--config", "configs/prob_edge_aggressive.yaml", "--once", "--no-dynamic-entry"]))
+    enabled = build_runtime_options(parser.parse_args(["--once", "--dynamic-entry"]))
+
+    assert aggressive.config.edge.dynamic_entry_enabled is False
+    assert disabled.config.edge.dynamic_entry_enabled is False
+    assert enabled.config.edge.dynamic_entry_enabled is True
 
 
 def test_entry_analysis_records_signal_and_fill_edges() -> None:

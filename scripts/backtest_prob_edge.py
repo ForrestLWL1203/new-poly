@@ -44,6 +44,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-decay-buffer", type=float, default=0.03)
     parser.add_argument("--entry-start-age-sec", type=float, default=90.0)
     parser.add_argument("--entry-end-age-sec", type=float, default=270.0)
+    parser.add_argument("--dynamic-entry", action="store_true")
+    parser.add_argument("--fast-move-entry-start-age-sec", type=float, default=70.0)
+    parser.add_argument("--fast-move-min-abs-sk-usd", type=float, default=80.0)
+    parser.add_argument("--fast-move-required-edge", type=float, default=0.22)
+    parser.add_argument("--strong-move-entry-start-age-sec", type=float, default=60.0)
+    parser.add_argument("--strong-move-min-abs-sk-usd", type=float, default=120.0)
+    parser.add_argument("--strong-move-required-edge", type=float, default=0.24)
     parser.add_argument("--max-entries-per-market", type=int, default=2)
     parser.add_argument("--tick-size", type=float, default=0.01)
     parser.add_argument("--min-fair-cap-margin-ticks", type=float, default=0.0)
@@ -92,6 +99,13 @@ def main() -> int:
         model_decay_buffer=args.model_decay_buffer,
         entry_start_age_sec=args.entry_start_age_sec,
         entry_end_age_sec=args.entry_end_age_sec,
+        dynamic_entry_enabled=args.dynamic_entry,
+        fast_move_entry_start_age_sec=args.fast_move_entry_start_age_sec,
+        fast_move_min_abs_sk_usd=args.fast_move_min_abs_sk_usd,
+        fast_move_required_edge=args.fast_move_required_edge,
+        strong_move_entry_start_age_sec=args.strong_move_entry_start_age_sec,
+        strong_move_min_abs_sk_usd=args.strong_move_min_abs_sk_usd,
+        strong_move_required_edge=args.strong_move_required_edge,
         max_entries_per_market=args.max_entries_per_market,
         tick_size=args.tick_size,
         buy_slippage_ticks=buy_slippage_ticks,

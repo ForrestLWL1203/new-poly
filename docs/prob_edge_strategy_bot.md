@@ -78,6 +78,13 @@ python3 scripts/run_prob_edge_bot.py \
   `core_to_late_age_sec <= age <= entry_end_age_sec` is disabled by default
   with `late_entry_enabled = false`. Current tuned configs use `0.16/0.14`
   edge thresholds and `120s/240s` phase boundaries.
+- `dynamic_entry_enabled` can selectively admit earlier entries before
+  `entry_start_age_sec`, but it is disabled by default. When enabled, the
+  current experimental gates are: `60-70s` requires a strong move
+  (`abs(S-K) >= 120`) and `strong_move_required_edge=0.24`; `70-100s` requires
+  a fast move (`abs(S-K) >= 80`) and `fast_move_required_edge=0.22`. If the move
+  condition is not met, the bot stays outside the entry window. Runtime CLI can
+  override the YAML with `--dynamic-entry` or `--no-dynamic-entry`.
 - No new entries in the final 30 seconds.
 - Default notional is `$5` in the MVP profile. The aggressive/live-smoke
   profile uses `$1`.
@@ -131,7 +138,8 @@ Config files:
   candidate. It is aggressive by entry count but stricter by entry quality:
   `100-240s` entry timing, `0.16/0.14` early/core edge thresholds,
   `min_entry_model_prob=0.35`, `max_entries_per_market=4`, and `$1`
-  notional/depth.
+  notional/depth. Dynamic early entry remains available as an explicit
+  experiment via `--dynamic-entry`.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
   profile set. It is disabled unless `--dynamic-params` is passed.
 
@@ -142,6 +150,13 @@ early_required_edge
 core_required_edge
 early_to_core_age_sec
 core_to_late_age_sec
+dynamic_entry_enabled
+fast_move_entry_start_age_sec
+fast_move_min_abs_sk_usd
+fast_move_required_edge
+strong_move_entry_start_age_sec
+strong_move_min_abs_sk_usd
+strong_move_required_edge
 late_entry_enabled
 late_required_edge
 late_max_spread

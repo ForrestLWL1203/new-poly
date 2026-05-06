@@ -10,6 +10,13 @@ strategy:
   entry_end_age_sec: 240
   early_to_core_age_sec: 120
   core_to_late_age_sec: 240
+  dynamic_entry_enabled: false
+  fast_move_entry_start_age_sec: 70
+  fast_move_min_abs_sk_usd: 80
+  fast_move_required_edge: 0.22
+  strong_move_entry_start_age_sec: 60
+  strong_move_min_abs_sk_usd: 120
+  strong_move_required_edge: 0.24
   final_no_entry_remaining_sec: 30
   max_entries_per_market: 4
   max_book_age_ms: 1000

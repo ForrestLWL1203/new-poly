@@ -396,6 +396,44 @@ def test_entry_phase_boundaries_are_configurable() -> None:
     assert late.phase == "late_disabled"
 
 
+def test_dynamic_entry_allows_early_fast_and_strong_moves_only() -> None:
+    cfg = EdgeConfig(
+        entry_start_age_sec=100.0,
+        early_required_edge=0.16,
+        core_required_edge=0.14,
+        dynamic_entry_enabled=True,
+        fast_move_entry_start_age_sec=70.0,
+        fast_move_min_abs_sk_usd=80.0,
+        fast_move_required_edge=0.22,
+        strong_move_entry_start_age_sec=60.0,
+        strong_move_min_abs_sk_usd=120.0,
+        strong_move_required_edge=0.24,
+    )
+    base = dict(
+        market_slug="m1",
+        remaining_sec=220.0,
+        k_price=100.0,
+        sigma_eff=0.6,
+    )
+
+    ordinary_early = required_edge_for_entry(MarketSnapshot(age_sec=65.0, s_price=101.0, **base), cfg)
+    strong = required_edge_for_entry(MarketSnapshot(age_sec=65.0, s_price=221.0, **base), cfg)
+    fast = required_edge_for_entry(MarketSnapshot(age_sec=75.0, s_price=181.0, **base), cfg)
+    regular = required_edge_for_entry(MarketSnapshot(age_sec=100.0, s_price=101.0, **base), cfg)
+
+    assert ordinary_early.allowed is False
+    assert ordinary_early.phase == "outside_window"
+    assert strong.allowed is True
+    assert strong.phase == "strong_move"
+    assert strong.required_edge == 0.24
+    assert fast.allowed is True
+    assert fast.phase == "fast_move"
+    assert fast.required_edge == 0.22
+    assert regular.allowed is True
+    assert regular.phase == "early"
+    assert regular.required_edge == 0.16
+
+
 def test_exit_logic_decay_and_market_overprice() -> None:
     cfg = EdgeConfig(model_decay_buffer=0.02, overprice_buffer=0.02)
     pos = PositionSnapshot(

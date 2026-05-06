@@ -150,8 +150,9 @@ Current default strategy behavior:
   proxy, basis-adjusted once K and proxy open are known.
 - Entry thresholds are time phased. The aggressive profile uses `0.16` for
   `100 <= age < 120`, `0.14` for `120 <= age < 240`, and disables late entry
-  from `240s` onward. The phase boundaries are explicit config fields:
-  `early_to_core_age_sec` and `core_to_late_age_sec`.
+  from `240s` onward. Optional dynamic early entry is available but disabled by
+  default; use `--dynamic-entry` to test `60-70s` strong-move and `70-100s`
+  fast-move entry gates.
 - FAK entry decisions use size-aware `ask_avg` for edge, require
   `ask_limit <= model_prob - required_edge`, require the formula cap to leave
   at least one tick of executable margin, and send BUY hints as
