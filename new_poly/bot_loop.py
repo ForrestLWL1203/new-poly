@@ -14,11 +14,9 @@ from new_poly.bot_runtime import (
     JsonlLogger,
     RuntimeOptions,
     WindowPrices,
-    _backtest_base_config,
     _compact,
     _polymarket_reference_recovered_row,
     _polymarket_reference_unhealthy_row,
-    _run_dynamic_analysis_task,
     choose_settlement,
     effective_price,
     fetch_valid_dvol_with_retries,
@@ -289,6 +287,7 @@ async def _handle_window_close(
     dynamic_cfg: DynamicConfig | None,
     dynamic_state: DynamicState | None,
     dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None,
+    trigger_dynamic_analysis: Callable[[int, str, float, BotConfig], asyncio.Task[tuple[DynamicDecision, DynamicState]] | None] | None = None,
     apply_pending_dynamic_profile: Callable[[str, BotConfig], tuple[BotConfig, DynamicState | None]] | None = None,
 ) -> tuple[Any, WindowPrices, BotConfig, DynamicState | None, asyncio.Task[tuple[DynamicDecision, DynamicState]] | None, bool]:
     _settle_open_position_if_needed(
@@ -303,33 +302,8 @@ async def _handle_window_close(
     if prices.k_price is not None:
         loop.completed_windows += 1
     _prune_logs_after_window_if_needed(loop=loop, logger=logger, options=options)
-    if (
-        dynamic_cfg is not None
-        and dynamic_state is not None
-        and options.jsonl is not None
-        and loop.completed_windows > 0
-        and loop.completed_windows % dynamic_cfg.check_every_windows == 0
-        and dynamic_task is None
-    ):
-        dynamic_task = asyncio.create_task(_run_dynamic_analysis_task(
-            jsonl_path=options.jsonl,
-            dynamic_cfg=dynamic_cfg,
-            dynamic_state=dynamic_state,
-            base_config=_backtest_base_config(cfg),
-            mode=options.mode,
-            current_window_id=window.slug,
-            realized_drawdown=state.drawdown,
-        ))
-    elif dynamic_cfg is not None and dynamic_state is not None and options.jsonl is None and loop.completed_windows > 0 and loop.completed_windows % dynamic_cfg.check_every_windows == 0:
-        logger.write({
-            "ts": dt.datetime.now().astimezone().isoformat(),
-            "event": "dynamic_error",
-            "mode": options.mode,
-            "market_slug": window.slug,
-            "error_type": "missing_jsonl",
-            "message": "--dynamic-params requires --jsonl for analysis",
-            "action": "keep_current",
-        })
+    if trigger_dynamic_analysis is not None:
+        dynamic_task = trigger_dynamic_analysis(loop.completed_windows, window.slug, state.drawdown, cfg)
     if options.windows is not None and loop.completed_windows >= options.windows:
         return window, prices, cfg, dynamic_state, dynamic_task, True
 

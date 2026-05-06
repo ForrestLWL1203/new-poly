@@ -304,6 +304,14 @@ class BotRunner:
             dynamic_cfg=self.dynamic.cfg,
             dynamic_state=self.dynamic.state,
             dynamic_task=self.dynamic.task,
+            trigger_dynamic_analysis=lambda completed_windows, current_window_id, realized_drawdown, cfg: self.dynamic.trigger_analysis_after_window(
+                completed_windows=completed_windows,
+                current_window_id=current_window_id,
+                realized_drawdown=realized_drawdown,
+                cfg=cfg,
+                logger=self.logger,
+                options=self.options,
+            ),
             apply_pending_dynamic_profile=lambda next_window_slug, cfg: self.dynamic.apply_pending_profile(
                 next_window_slug=next_window_slug,
                 cfg=cfg,

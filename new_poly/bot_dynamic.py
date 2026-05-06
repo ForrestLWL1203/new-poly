@@ -11,9 +11,11 @@ from new_poly.bot_runtime import (
     BotConfig,
     JsonlLogger,
     RuntimeOptions,
+    _backtest_base_config,
     _bot_config_with_edge,
     _dynamic_candidate_payload,
     _dynamic_health_payload,
+    _run_dynamic_analysis_task,
 )
 from new_poly.strategy.dynamic_params import (
     DynamicConfig,
@@ -81,6 +83,45 @@ class DynamicParamController:
     ) -> None:
         self.state = state
         self.task = task
+
+    def trigger_analysis_after_window(
+        self,
+        *,
+        completed_windows: int,
+        current_window_id: str,
+        realized_drawdown: float,
+        cfg: BotConfig,
+        logger: JsonlLogger,
+        options: RuntimeOptions,
+    ) -> asyncio.Task[tuple[DynamicDecision, DynamicState]] | None:
+        if self.cfg is None or self.state is None:
+            return self.task
+        should_check = completed_windows > 0 and completed_windows % self.cfg.check_every_windows == 0
+        if not should_check:
+            return self.task
+        if options.jsonl is None:
+            logger.write({
+                "ts": dt.datetime.now().astimezone().isoformat(),
+                "event": "dynamic_error",
+                "mode": options.mode,
+                "market_slug": current_window_id,
+                "error_type": "missing_jsonl",
+                "message": "--dynamic-params requires --jsonl for analysis",
+                "action": "keep_current",
+            })
+            return self.task
+        if self.task is not None:
+            return self.task
+        self.task = asyncio.create_task(_run_dynamic_analysis_task(
+            jsonl_path=options.jsonl,
+            dynamic_cfg=self.cfg,
+            dynamic_state=self.state,
+            base_config=_backtest_base_config(cfg),
+            mode=options.mode,
+            current_window_id=current_window_id,
+            realized_drawdown=realized_drawdown,
+        ))
+        return self.task
 
     def apply_pending_profile(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -267,3 +268,69 @@ def test_dynamic_controller_applies_pending_profile_at_window_boundary(tmp_path)
     assert logger.rows[0]["to_profile"] == "balanced"
     assert logger.rows[0]["health_check"] == {"healthy": False}
     assert logger.rows[0]["candidate_results"] == [{"profile": "balanced"}]
+
+
+def test_dynamic_controller_triggers_analysis_task_at_window_cadence(tmp_path) -> None:
+    options = build_runtime_options(build_arg_parser().parse_args([
+        "--mode",
+        "paper",
+        "--jsonl",
+        str(tmp_path / "strategy.jsonl"),
+    ]))
+    controller = DynamicParamController(cfg=_config(), state=DynamicState(active_profile="aggressive"))
+
+    class Logger:
+        def __init__(self) -> None:
+            self.rows = []
+
+        def write(self, row) -> None:
+            self.rows.append(row)
+
+    async def scenario() -> None:
+        task = controller.trigger_analysis_after_window(
+            completed_windows=10,
+            current_window_id="m10",
+            realized_drawdown=-1.0,
+            cfg=options.config,
+            logger=Logger(),
+            options=options,
+        )
+        assert task is not None
+        controller.task.cancel()
+        await asyncio.gather(controller.task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_controller_reports_missing_jsonl_at_window_cadence() -> None:
+    options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+    controller = DynamicParamController(cfg=_config(), state=DynamicState(active_profile="aggressive"))
+
+    class Logger:
+        def __init__(self) -> None:
+            self.rows = []
+
+        def write(self, row) -> None:
+            self.rows.append(row)
+
+    logger = Logger()
+
+    task = controller.trigger_analysis_after_window(
+        completed_windows=10,
+        current_window_id="m10",
+        realized_drawdown=-1.0,
+        cfg=options.config,
+        logger=logger,
+        options=options,
+    )
+
+    assert task is None
+    assert logger.rows == [{
+        "ts": logger.rows[0]["ts"],
+        "event": "dynamic_error",
+        "mode": "paper",
+        "market_slug": "m10",
+        "error_type": "missing_jsonl",
+        "message": "--dynamic-params requires --jsonl for analysis",
+        "action": "keep_current",
+    }]
