@@ -698,6 +698,30 @@ def test_paper_sell_retry_uses_refreshed_exit_floor(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_paper_sell_uses_local_tick_without_clob_lookup(monkeypatch) -> None:
+    def fail_tick_lookup(token_id):
+        raise AssertionError("paper sell should not query live CLOB tick size")
+
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", fail_tick_lookup)
+
+    async def scenario() -> None:
+        stream = FakeStream()
+        stream.bids["up"] = [(0.45, 10.0)]
+        gateway = PaperExecutionGateway(
+            stream=stream,
+            config=ExecutionConfig(paper_latency_sec=0.0, retry_interval_sec=0.0, retry_count=0),
+        )
+
+        result = await gateway.sell("up", shares=10.0, min_price=0.50, exit_reason="logic_decay_exit")
+
+        assert result.success is True
+        assert result.avg_price == 0.45
+        assert result.total_latency_ms is not None
+        assert result.total_latency_ms < 50
+
+    asyncio.run(scenario())
+
+
 def test_paper_batch_sell_can_partially_exit_large_share_position(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
 

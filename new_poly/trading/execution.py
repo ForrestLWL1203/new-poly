@@ -184,10 +184,11 @@ def _sell_price_hint(
     *,
     sell_price_buffer_ticks: float = 5.0,
     sell_retry_price_buffer_ticks: float = 6.0,
+    tick_size: float | None = None,
 ) -> float | None:
     if min_price is None:
         return None
-    tick = get_tick_size(token_id)
+    tick = float(tick_size) if tick_size is not None else get_tick_size(token_id)
     if tick <= 0:
         tick = 0.01
     buffered = min_price - _sell_aggression_ticks(
@@ -210,10 +211,11 @@ def _sell_price_hint_with_extra(
     extra_buffer_ticks: float,
     sell_price_buffer_ticks: float = 5.0,
     sell_retry_price_buffer_ticks: float = 6.0,
+    tick_size: float | None = None,
 ) -> float | None:
     if min_price is None:
         return None
-    tick = get_tick_size(token_id)
+    tick = float(tick_size) if tick_size is not None else get_tick_size(token_id)
     if tick <= 0:
         tick = 0.01
     base_ticks = _sell_aggression_ticks(
@@ -324,6 +326,7 @@ class PaperExecutionGateway:
                 extra_buffer_ticks=extra,
                 sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
+                tick_size=0.01,
             )
             fill = _avg_sell_fill_partial(remaining_levels, part, effective_min)
             if fill is None:
@@ -439,6 +442,7 @@ class PaperExecutionGateway:
                 attempt,
                 sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
+                tick_size=0.01,
             )
             if _should_batch_exit(shares, min_price, self.config):
                 fill = self._paper_batch_sell_fill(token_id, levels, shares, min_price, exit_reason, attempt)

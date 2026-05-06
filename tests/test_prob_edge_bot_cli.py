@@ -33,7 +33,7 @@ from new_poly.bot_runtime import (
     load_bot_config,
     prune_jsonl_by_retention,
 )
-from scripts.run_prob_edge_bot import LoopRuntime
+from new_poly.bot_loop import LoopRuntime
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.strategy.prob_edge import MarketSnapshot, PositionSnapshot, StrategyDecision
 from new_poly.strategy.state import StrategyState
