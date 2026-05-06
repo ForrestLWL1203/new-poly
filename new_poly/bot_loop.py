@@ -32,7 +32,7 @@ from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
-from new_poly.strategy.dynamic_params import DynamicConfig, DynamicDecision, DynamicState
+from new_poly.strategy.dynamic_params import DynamicDecision, DynamicState
 from new_poly.strategy.dynamic_params import save_dynamic_state
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.clob_client import prefetch_order_params
@@ -57,6 +57,16 @@ class DvolRuntime:
     refresh_task: asyncio.Task | None
     refresh_market_slug: str | None
     next_refresh: float
+
+
+@dataclass
+class WindowCloseResult:
+    window: Any
+    prices: WindowPrices
+    cfg: BotConfig
+    dynamic_state: DynamicState | None
+    dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None
+    should_stop: bool
 
 
 @dataclass
@@ -306,12 +316,11 @@ async def _handle_window_close(
     loop: LoopRuntime,
     logger: JsonlLogger,
     series: MarketSeries,
-    dynamic_cfg: DynamicConfig | None,
     dynamic_state: DynamicState | None,
     dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None,
     trigger_dynamic_analysis: Callable[[int, str, float, BotConfig], asyncio.Task[tuple[DynamicDecision, DynamicState]] | None] | None = None,
     apply_pending_dynamic_profile: Callable[[str, BotConfig], tuple[BotConfig, DynamicState | None]] | None = None,
-) -> tuple[Any, WindowPrices, BotConfig, DynamicState | None, asyncio.Task[tuple[DynamicDecision, DynamicState]] | None, bool]:
+) -> WindowCloseResult:
     _settle_open_position_if_needed(
         window=window,
         prices=prices,
@@ -327,7 +336,7 @@ async def _handle_window_close(
     if trigger_dynamic_analysis is not None:
         dynamic_task = trigger_dynamic_analysis(loop.completed_windows, window.slug, state.drawdown, cfg)
     if options.windows is not None and loop.completed_windows >= options.windows:
-        return window, prices, cfg, dynamic_state, dynamic_task, True
+        return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, True)
 
     next_window = find_following_window(window, series)
     if apply_pending_dynamic_profile is not None:
@@ -342,4 +351,4 @@ async def _handle_window_close(
         options=options,
         next_window=next_window,
     )
-    return window, prices, cfg, dynamic_state, dynamic_task, False
+    return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, False)

@@ -284,14 +284,7 @@ class BotRunner:
         )
 
     async def roll_window(self) -> bool:
-        (
-            window,
-            prices,
-            self.cfg,
-            dynamic_state,
-            dynamic_task,
-            should_stop,
-        ) = await _handle_window_close(
+        result = await _handle_window_close(
             window=self.active.window,
             prices=self.active.prices,
             cfg=self.cfg,
@@ -301,7 +294,6 @@ class BotRunner:
             loop=self.loop,
             logger=self.logger,
             series=self.series,
-            dynamic_cfg=self.dynamic.cfg,
             dynamic_state=self.dynamic.state,
             dynamic_task=self.dynamic.task,
             trigger_dynamic_analysis=lambda completed_windows, current_window_id, realized_drawdown, cfg: self.dynamic.trigger_analysis_after_window(
@@ -319,9 +311,10 @@ class BotRunner:
                 options=self.options,
             ),
         )
-        self.dynamic.update_after_window_close(state=dynamic_state, task=dynamic_task)
-        self.set_window_context(WindowContext(window=window, prices=prices))
-        return should_stop
+        self.cfg = result.cfg
+        self.dynamic.update_after_window_close(state=result.dynamic_state, task=result.dynamic_task)
+        self.set_window_context(WindowContext(window=result.window, prices=result.prices))
+        return result.should_stop
 
     async def close(self) -> None:
         close_context = self.context or self.startup_context

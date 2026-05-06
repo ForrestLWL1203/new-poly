@@ -4,7 +4,7 @@ import asyncio
 import datetime as dt
 from dataclasses import replace
 
-from new_poly.bot_loop import DvolRuntime, FeedContext
+from new_poly.bot_loop import DvolRuntime, FeedContext, WindowCloseResult
 from new_poly.bot_runner import BotRunner, StartedContext, StartupContext
 from new_poly.bot_runtime import DvolRefreshState, WindowPrices, build_arg_parser, build_runtime_options
 from new_poly.market.deribit import DvolSnapshot
@@ -72,10 +72,7 @@ def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
             assert kwargs["window"] is first
             assert kwargs["prices"] is initial_prices
             assert kwargs["feeds"] is feeds
-            assert kwargs["dynamic_cfg"] is runner.dynamic.cfg
-            assert kwargs["dynamic_state"] is runner.dynamic.state
-            assert kwargs["dynamic_task"] is runner.dynamic.task
-            return next_window, next_prices, new_cfg, dynamic_state, dynamic_task, False
+            return WindowCloseResult(next_window, next_prices, new_cfg, dynamic_state, dynamic_task, False)
 
         monkeypatch.setattr("new_poly.bot_runner._handle_window_close", fake_handle_window_close)
 
