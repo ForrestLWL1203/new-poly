@@ -39,6 +39,7 @@ from new_poly.market.prob_edge_data import (
 from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.stream import PriceStream
 from new_poly.backtest.prob_edge_replay import BacktestConfig
+from new_poly.bot_log_schema import _compact
 from new_poly.strategy.dynamic_params import (
     DynamicConfig,
     DynamicDecision,
@@ -46,7 +47,7 @@ from new_poly.strategy.dynamic_params import (
     analyze_dynamic_params,
 )
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
-from new_poly.strategy.state import PositionSnapshot, StrategyState
+from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import (
     BuyRetryParams,
     ExecutionConfig,
@@ -433,10 +434,6 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
     )
 
 
-def _compact(value: float | None, digits: int = 6) -> float | None:
-    return round(float(value), digits) if value is not None else None
-
-
 def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
     cfg = options.config
     row = {
@@ -486,54 +483,6 @@ def _dynamic_health_payload(last_check_result: dict[str, Any]) -> dict[str, Any]
 def _dynamic_candidate_payload(last_check_result: dict[str, Any]) -> list[Any]:
     value = last_check_result.get("candidate_results")
     return value if isinstance(value, list) else []
-
-
-def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
-    fill_price = result.avg_price if result is not None and result.success else None
-    row = {
-        "order_intent": "entry",
-        "entry_side": decision.side,
-        "entry_phase": decision.phase,
-        "entry_required_edge": _compact(decision.required_edge),
-        "entry_model_prob": _compact(decision.model_prob),
-        "entry_signal_price": _compact(decision.price),
-        "entry_best_ask": _compact(decision.best_ask),
-        "entry_fair_cap": _compact(decision.limit_price),
-        "entry_depth_limit_price": _compact(decision.depth_limit_price),
-        "entry_edge_signal": _compact(decision.edge),
-        "entry_price": _compact(fill_price),
-        "entry_shares": _compact(result.filled_size if result is not None and result.success else None),
-        "entry_edge_at_fill": _compact(decision.model_prob - fill_price) if decision.model_prob is not None and fill_price is not None else None,
-        "order_attempt": result.attempt if result is not None else None,
-        "order_total_latency_ms": result.total_latency_ms if result is not None else None,
-    }
-    if result is not None and result.timing:
-        row["order_timing"] = result.timing
-    return row
-
-
-def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
-    fill_price = result.avg_price if result is not None and result.success else None
-    row = {
-        "order_intent": "exit",
-        "exit_side": decision.side,
-        "exit_reason": decision.reason,
-        "exit_model_prob": _compact(decision.model_prob),
-        "exit_signal_bid_avg": _compact(decision.price),
-        "exit_min_price": _compact(decision.limit_price),
-        "exit_profit_per_share": _compact(decision.profit_now),
-        "exit_prob_stagnant": decision.prob_stagnant,
-        "exit_prob_delta_3s": _compact(decision.prob_delta_3s),
-        "exit_prob_drop_delta": _compact(decision.prob_drop_delta),
-        "exit_polymarket_divergence_bps": _compact(decision.polymarket_divergence_bps, 3),
-        "exit_price": _compact(fill_price),
-        "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
-        "order_attempt": result.attempt if result is not None else None,
-        "order_total_latency_ms": result.total_latency_ms if result is not None else None,
-    }
-    if result is not None and result.timing:
-        row["order_timing"] = result.timing
-    return row
 
 
 PRICE_RUNTIME_FIELDS = {"price_source", "s_price", "k_price", "basis_bps"}
@@ -654,31 +603,6 @@ def _reference_meta(meta: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key in fields
         if key in meta and (value := meta.get(key)) is not None and value != "missing"
-    }
-
-
-def _decision_log(decision: StrategyDecision) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in decision.__dict__.items()
-        if value is not None
-    }
-
-
-def _position_log(position: PositionSnapshot | None, *, compact: bool) -> dict[str, Any] | None:
-    if position is None:
-        return None
-    if not compact:
-        return position.__dict__
-    return {
-        "market_slug": position.market_slug,
-        "token_side": position.token_side,
-        "entry_time": _compact(position.entry_time),
-        "entry_avg_price": _compact(position.entry_avg_price),
-        "filled_shares": _compact(position.filled_shares),
-        "entry_model_prob": _compact(position.entry_model_prob),
-        "entry_edge": _compact(position.entry_edge),
-        "exit_status": position.exit_status,
     }
 
 

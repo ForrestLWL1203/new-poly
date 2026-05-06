@@ -5,15 +5,11 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from new_poly.bot_log_schema import _compact, _decision_log, _entry_analysis, _exit_analysis, _position_log
 from new_poly.bot_runtime import (
     BotConfig,
     RuntimeOptions,
     WindowPrices,
-    _compact,
-    _decision_log,
-    _entry_analysis,
-    _exit_analysis,
-    _position_log,
     _refresh_entry_retry_params,
     _refresh_exit_retry_params,
 )

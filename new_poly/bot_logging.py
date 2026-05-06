@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from new_poly.bot_log_schema import _compact, _position_log
 from new_poly.bot_loop import DvolRuntime, LoopRuntime
 from new_poly.bot_runtime import (
     JsonlLogger,
     RuntimeOptions,
-    _compact,
-    _position_log,
     _runtime_log_meta,
     _should_attach_reference_meta,
     _should_write_row,

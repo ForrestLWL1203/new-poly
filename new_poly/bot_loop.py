@@ -8,13 +8,13 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from new_poly.bot_log_schema import _compact
 from new_poly.bot_runtime import (
     BotConfig,
     DvolRefreshState,
     JsonlLogger,
     RuntimeOptions,
     WindowPrices,
-    _compact,
     _polymarket_reference_recovered_row,
     _polymarket_reference_unhealthy_row,
     choose_settlement,

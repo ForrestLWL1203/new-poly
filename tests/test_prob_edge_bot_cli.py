@@ -10,12 +10,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from new_poly.bot_log_schema import (
+    _entry_analysis,
+    _exit_analysis,
+)
 from new_poly.bot_runtime import (
     DvolRefreshState,
     WindowPrices,
     _config_log_row,
-    _entry_analysis,
-    _exit_analysis,
     _polymarket_reference_unhealthy_row,
     _price_analysis,
     _should_attach_reference_meta,
