@@ -9,6 +9,7 @@ from new_poly.bot_runner import BotRunner, StartedContext, StartupContext
 from new_poly.bot_runtime import DvolRefreshState, WindowPrices, build_arg_parser, build_runtime_options
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.market import MarketWindow
+from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.strategy.prob_edge import MarketSnapshot
 from new_poly.strategy.dynamic_params import DynamicConfig, DynamicState, SignalProfile
 
@@ -178,3 +179,50 @@ def test_prepare_tick_context_collects_snapshot_and_row(monkeypatch) -> None:
         assert tick.reference_meta == {}
 
     asyncio.run(scenario())
+
+
+def test_settle_open_position_writes_settlement_row(monkeypatch) -> None:
+    options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+    logger = DummyLogger()
+    feeds = FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream())
+    window = _window("m1")
+    prices = WindowPrices(k_price=100.0)
+    state = StrategyState()
+    state.record_entry(PositionSnapshot(
+        market_slug=window.slug,
+        token_side="up",
+        token_id=window.up_token,
+        entry_time=120.0,
+        entry_avg_price=0.40,
+        filled_shares=2.0,
+        entry_model_prob=0.70,
+        entry_edge=0.30,
+    ))
+
+    monkeypatch.setattr("new_poly.bot_loop.effective_price", lambda *args, **kwargs: type(
+        "Price",
+        (),
+        {"effective": 105.0},
+    )())
+
+    from new_poly.bot_loop import _settle_open_position_if_needed
+
+    _settle_open_position_if_needed(
+        window=window,
+        prices=prices,
+        cfg=options.config,
+        options=options,
+        feeds=feeds,
+        state=state,
+        logger=logger,
+    )
+
+    assert state.open_position is None
+    assert state.realized_pnl == 1.2
+    assert len(logger.rows) == 1
+    row = logger.rows[0]
+    assert row["event"] == "settlement"
+    assert row["market_slug"] == window.slug
+    assert row["winning_side"] == "up"
+    assert row["settlement_proxy_price"] == 105.0
+    assert row["settlement_pnl"] == 1.2

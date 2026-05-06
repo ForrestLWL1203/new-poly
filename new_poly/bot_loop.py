@@ -216,6 +216,47 @@ async def _advance_dvol_refresh(
     return sigma_eff, dvol_stale
 
 
+def _settle_open_position_if_needed(
+    *,
+    window: Any,
+    prices: WindowPrices,
+    cfg: BotConfig,
+    options: RuntimeOptions,
+    feeds: FeedContext,
+    state: StrategyState,
+    logger: JsonlLogger,
+) -> None:
+    if not state.has_position or state.open_position is None:
+        return
+    settlement_price = effective_price(
+        feeds.binance,
+        feeds.coinbase,
+        prices,
+        coinbase_enabled=cfg.coinbase_enabled,
+        polymarket_feed=feeds.polymarket,
+        polymarket_enabled=cfg.polymarket_price_enabled,
+    ).effective
+    settlement = choose_settlement(prices, settlement_price, boundary_usd=cfg.settlement_boundary_usd)
+    settled_position = state.open_position
+    if settlement["winning_side"] is not None:
+        pnl = state.record_settlement(settlement["winning_side"])
+    else:
+        pnl = state.record_exit(settled_position.entry_avg_price, "unsettled_missing_price")
+    logger.write({
+        "ts": dt.datetime.now().astimezone().isoformat(),
+        "mode": options.mode,
+        "event": "settlement",
+        "market_slug": window.slug,
+        **settlement,
+        "settlement_price": _compact(settlement.get("settlement_price"), 2),
+        "settlement_proxy_price": _compact(settlement_price, 2),
+        "k_price": _compact(prices.k_price, 2),
+        "position": settled_position.__dict__,
+        "settlement_pnl": _compact(pnl, 4),
+        "realized_pnl": _compact(state.realized_pnl, 4),
+    })
+
+
 async def _handle_window_close(
     *,
     window: Any,
@@ -231,34 +272,15 @@ async def _handle_window_close(
     dynamic_state: DynamicState | None,
     dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None,
 ) -> tuple[Any, WindowPrices, BotConfig, DynamicState | None, asyncio.Task[tuple[DynamicDecision, DynamicState]] | None, bool]:
-    if state.has_position and state.open_position is not None:
-        settlement_price = effective_price(
-            feeds.binance,
-            feeds.coinbase,
-            prices,
-            coinbase_enabled=cfg.coinbase_enabled,
-            polymarket_feed=feeds.polymarket,
-            polymarket_enabled=cfg.polymarket_price_enabled,
-        ).effective
-        settlement = choose_settlement(prices, settlement_price, boundary_usd=cfg.settlement_boundary_usd)
-        settled_position = state.open_position
-        if settlement["winning_side"] is not None:
-            pnl = state.record_settlement(settlement["winning_side"])
-        else:
-            pnl = state.record_exit(settled_position.entry_avg_price, "unsettled_missing_price")
-        logger.write({
-            "ts": dt.datetime.now().astimezone().isoformat(),
-            "mode": options.mode,
-            "event": "settlement",
-            "market_slug": window.slug,
-            **settlement,
-            "settlement_price": _compact(settlement.get("settlement_price"), 2),
-            "settlement_proxy_price": _compact(settlement_price, 2),
-            "k_price": _compact(prices.k_price, 2),
-            "position": settled_position.__dict__,
-            "settlement_pnl": _compact(pnl, 4),
-            "realized_pnl": _compact(state.realized_pnl, 4),
-        })
+    _settle_open_position_if_needed(
+        window=window,
+        prices=prices,
+        cfg=cfg,
+        options=options,
+        feeds=feeds,
+        state=state,
+        logger=logger,
+    )
     if prices.k_price is not None:
         loop.completed_windows += 1
     if loop.completed_windows > 0 and loop.completed_windows % options.log_prune_every_windows == 0:
