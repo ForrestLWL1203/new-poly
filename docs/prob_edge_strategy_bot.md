@@ -620,7 +620,10 @@ max_entries_per_market
 ```
 
 It never changes notional size, depth notional, exit thresholds, FAK retry
-settings, or volatility settings.
+settings, volatility settings, or dynamic-entry fast/strong-move toggles. The
+`dynamic_entry_enabled`, `fast_move_*`, and `strong_move_*` fields are
+startup-level strategy controls; if you want to test them, pass the config/CLI
+choice at process start and evaluate it as a separate profile family.
 
 Default behavior:
 

@@ -216,7 +216,7 @@ async def _advance_dvol_refresh(
                 "error": error,
             }),
         ))
-    dvol_stale = is_dvol_stale(dvol.state.current, now_monotonic=time.monotonic(), max_age_sec=cfg.max_dvol_age_sec)
+    dvol_stale = is_dvol_stale(dvol.state.current, now_wall=time.time(), max_age_sec=cfg.max_dvol_age_sec)
     sigma_eff = None if dvol_stale or dvol.state.current is None else dvol.state.current.sigma
     return sigma_eff, dvol_stale
 

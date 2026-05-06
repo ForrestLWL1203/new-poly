@@ -326,6 +326,8 @@ class PaperExecutionGateway:
                 extra_buffer_ticks=extra,
                 sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
+                # Paper uses BTC 5m's observed 0.01 tick for deterministic
+                # replay; live mode still asks CLOB for the token tick size.
                 tick_size=0.01,
             )
             fill = _avg_sell_fill_partial(remaining_levels, part, effective_min)
@@ -442,6 +444,8 @@ class PaperExecutionGateway:
                 attempt,
                 sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
+                # Paper uses BTC 5m's observed 0.01 tick for deterministic
+                # replay; live mode still asks CLOB for the token tick size.
                 tick_size=0.01,
             )
             if _should_batch_exit(shares, min_price, self.config):

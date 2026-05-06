@@ -674,8 +674,8 @@ async def _noop_price_update(_update) -> None:
     return None
 
 
-def is_dvol_stale(volatility: DvolSnapshot | None, *, now_monotonic: float, max_age_sec: float) -> bool:
-    return volatility is None or now_monotonic - volatility.fetched_at > max_age_sec
+def is_dvol_stale(volatility: DvolSnapshot | None, *, now_wall: float, max_age_sec: float) -> bool:
+    return volatility is None or now_wall - volatility.fetched_at > max_age_sec
 
 
 def is_valid_dvol(volatility: DvolSnapshot | None) -> bool:

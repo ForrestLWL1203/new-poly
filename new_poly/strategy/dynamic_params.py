@@ -27,6 +27,9 @@ class SignalProfile:
     risk_rank: int = 0
 
     def apply_to(self, edge: EdgeConfig) -> EdgeConfig:
+        # Dynamic profiles only de-risk the core signal band at window
+        # boundaries. Dynamic-entry fast/strong-move controls are startup-level
+        # strategy toggles and are intentionally not changed by profile flips.
         return replace(
             edge,
             entry_start_age_sec=float(self.entry_start_age_sec),

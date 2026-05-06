@@ -347,7 +347,9 @@ def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
 
 
 def test_dvol_stale_after_configured_age() -> None:
-    assert is_dvol_stale(None, now_monotonic=1000.0, max_age_sec=900.0) is True
+    assert is_dvol_stale(None, now_wall=1000.0, max_age_sec=900.0) is True
+    assert is_dvol_stale(_dvol(0.4, fetched_at=1_778_000_000.0), now_wall=1_778_000_901.0, max_age_sec=900.0) is True
+    assert is_dvol_stale(_dvol(0.4, fetched_at=1_778_000_000.0), now_wall=1_778_000_899.0, max_age_sec=900.0) is False
 
 
 def _dvol(sigma: float | None, fetched_at: float = 100.0) -> DvolSnapshot:
