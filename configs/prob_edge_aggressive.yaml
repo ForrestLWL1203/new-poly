@@ -43,13 +43,14 @@ strategy:
   low_price_extra_edge_threshold: 0.30
   low_price_extra_edge: 0.02
   cross_source_max_bps: 5.0
-  market_disagrees_exit_threshold: 0.30
-  market_disagrees_exit_max_remaining_sec: 60.0
+  market_disagrees_exit_threshold: 0.25
+  market_disagrees_exit_max_remaining_sec: 90.0
   market_disagrees_exit_min_loss: 0.03
   market_disagrees_exit_min_age_sec: 3.0
   market_disagrees_exit_max_profit: 0.01
   polymarket_divergence_exit_bps: 3.0
   polymarket_divergence_exit_min_age_sec: 3.0
+  logic_decay_reentry_cooldown_sec: 30.0
 
 execution:
   amount_usd: 1.0

@@ -86,6 +86,9 @@ python3 scripts/run_prob_edge_bot.py \
   condition is not met, the bot stays outside the entry window. Runtime CLI can
   override the YAML with `--dynamic-entry` or `--no-dynamic-entry`.
 - No new entries in the final 30 seconds.
+- After a `logic_decay_exit`, the bot blocks same-side re-entry for
+  `logic_decay_reentry_cooldown_sec` seconds. Current configs use `30s`. The
+  opposite side can still enter if it has fresh edge.
 - Default notional is `$5` in the MVP profile. The aggressive/live-smoke
   profile uses `$1`.
 - Default max successful entries per market is `2`.
@@ -230,9 +233,10 @@ The probability helper clamps the pre-expiry `d2` time input to a minimum
 does not rely on sub-second model probabilities for live risk because new entry
 is already closed and `final_force_exit` handles the final seconds.
 
-The initial `market_disagrees_exit_threshold` default is `0.30`. A looser
-`0.20` threshold caught more bid/model deterioration but over-exited in replay;
-`0.30` is the current dry-run candidate.
+The current `market_disagrees_exit_threshold` default is `0.25`, active for
+positions with `remaining_sec <= 90`. A 12-window dry-run replay favored this
+over the older `0.30 / 60s` guard, but it remains a candidate parameter that
+needs larger-sample validation.
 
 ## FAK Price Logic
 
@@ -430,7 +434,8 @@ late-window profit protection:
 - `logic_decay_exit`: model probability falls below entry cost by
   `model_decay_buffer`. Current configs use `0.03`, chosen over `0.02/0.04`
   after replay because it slightly reduced early false exits without materially
-  increasing drawdown.
+  increasing drawdown. A same-side cooldown follows this exit so a signal that
+  was just invalidated cannot immediately re-open in the same direction.
 - `market_overprice_exit`: executable bid is above model probability by `0.02`.
 - `defensive_take_profit`: when
   `defensive_take_profit_start_remaining_sec < remaining_sec <= defensive_take_profit_end_remaining_sec`,

@@ -54,8 +54,6 @@ def _clob_diag_should_attach(
     event = str(row.get("event") or "tick")
     if event in {"order_no_fill", "exit", "partial_exit"}:
         return True
-    if state.has_position:
-        return True
     if decision is not None and decision.reason in {"stale_book", "stale_book_wait", "risk_exit"}:
         return True
     depth_age_ms = diag.get("last_depth_update_age_ms")

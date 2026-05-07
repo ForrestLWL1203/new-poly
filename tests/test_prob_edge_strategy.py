@@ -296,6 +296,66 @@ def test_low_price_entry_requires_extra_edge_when_configured() -> None:
     assert math.isclose(strict_decision.required_edge or 0.0, 0.22)
 
 
+def test_logic_decay_exit_blocks_same_side_reentry_during_cooldown() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, logic_decay_reentry_cooldown_sec=30.0)
+    state = StrategyState(current_market_slug="m1")
+    state.last_exit_reason = "logic_decay_exit"
+    state.last_exit_side = "up"
+    state.last_exit_age_sec = 150.0
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=170.0,
+        remaining_sec=130.0,
+        s_price=100.2,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_ask_avg=0.40,
+        up_ask_limit=0.40,
+        up_best_ask=0.40,
+        up_ask_depth_ok=True,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        down_ask_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "logic_decay_cooldown"
+
+
+def test_logic_decay_exit_cooldown_is_side_specific() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, logic_decay_reentry_cooldown_sec=30.0)
+    state = StrategyState(current_market_slug="m1")
+    state.last_exit_reason = "logic_decay_exit"
+    state.last_exit_side = "up"
+    state.last_exit_age_sec = 150.0
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=170.0,
+        remaining_sec=130.0,
+        s_price=99.8,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_ask_avg=0.90,
+        up_ask_limit=0.90,
+        up_ask_depth_ok=True,
+        down_ask_avg=0.40,
+        down_ask_limit=0.40,
+        down_best_ask=0.40,
+        down_ask_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "enter"
+    assert decision.side == "down"
+
+
 def test_entry_rejects_cross_source_divergence() -> None:
     cfg = EdgeConfig(core_required_edge=0.05, cross_source_max_bps=5.0)
     state = StrategyState(current_market_slug="m1")

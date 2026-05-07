@@ -58,6 +58,7 @@ class EdgeConfig:
     market_disagrees_exit_max_profit: float = 0.01
     polymarket_divergence_exit_bps: float = 3.0
     polymarket_divergence_exit_min_age_sec: float = 3.0
+    logic_decay_reentry_cooldown_sec: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,16 @@ def _source_divergent(snapshot: MarketSnapshot, cfg: EdgeConfig) -> bool:
     )
 
 
+def _logic_decay_cooldown_active(snapshot: MarketSnapshot, state: StrategyState, side: str, cfg: EdgeConfig) -> bool:
+    return (
+        cfg.logic_decay_reentry_cooldown_sec > 0.0
+        and state.last_exit_reason == "logic_decay_exit"
+        and state.last_exit_side == side
+        and state.last_exit_age_sec is not None
+        and snapshot.age_sec - state.last_exit_age_sec < cfg.logic_decay_reentry_cooldown_sec
+    )
+
+
 def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, model_prob: float, bid: float, profit_now: float, cfg: EdgeConfig) -> float | None:
     if cfg.market_disagrees_exit_threshold <= 0.0:
         return None
@@ -249,13 +260,16 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
     rejected_low_model_prob = False
     assert phase.required_edge is not None
     attempted_required_edges: list[float] = []
+    rejected_cooldown = False
     if snapshot.up_ask_depth_ok and snapshot.up_ask_avg is not None and snapshot.up_ask_limit is not None:
         up_edge = probs.up - snapshot.up_ask_avg
         up_required_edge = _entry_required_edge(phase.required_edge, snapshot.up_ask_avg, cfg)
         attempted_required_edges.append(up_required_edge)
         up_fair_cap = probs.up - up_required_edge
         if up_edge >= up_required_edge:
-            if probs.up < cfg.min_entry_model_prob:
+            if _logic_decay_cooldown_active(snapshot, state, "up", cfg):
+                rejected_cooldown = True
+            elif probs.up < cfg.min_entry_model_prob:
                 rejected_low_model_prob = True
             elif _entry_depth_ok(snapshot.up_ask_limit, snapshot.up_ask_safety_limit, up_fair_cap, cfg) and _spread_ok(snapshot, "up", cfg, phase):
                 candidates.append(StrategyDecision("enter", "edge", "up", model_prob=probs.up, price=snapshot.up_ask_avg, limit_price=up_fair_cap, depth_limit_price=snapshot.up_ask_limit, best_ask=snapshot.up_best_ask, edge=up_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=up_required_edge))
@@ -265,12 +279,16 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
         attempted_required_edges.append(down_required_edge)
         down_fair_cap = probs.down - down_required_edge
         if down_edge >= down_required_edge:
-            if probs.down < cfg.min_entry_model_prob:
+            if _logic_decay_cooldown_active(snapshot, state, "down", cfg):
+                rejected_cooldown = True
+            elif probs.down < cfg.min_entry_model_prob:
                 rejected_low_model_prob = True
             elif _entry_depth_ok(snapshot.down_ask_limit, snapshot.down_ask_safety_limit, down_fair_cap, cfg) and _spread_ok(snapshot, "down", cfg, phase):
                 candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_ask_avg, limit_price=down_fair_cap, depth_limit_price=snapshot.down_ask_limit, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=down_required_edge))
     if not candidates:
         effective_required_edge = max(attempted_required_edges) if attempted_required_edges else phase.required_edge
+        if rejected_cooldown:
+            return StrategyDecision(action="skip", reason="logic_decay_cooldown", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
         if rejected_low_model_prob:
             return StrategyDecision(action="skip", reason="model_prob_too_low", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
         return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)

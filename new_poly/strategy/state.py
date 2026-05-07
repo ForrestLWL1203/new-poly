@@ -28,6 +28,8 @@ class StrategyState:
     realized_pnl: float = 0.0
     peak_pnl: float = 0.0
     last_exit_reason: str | None = None
+    last_exit_side: str | None = None
+    last_exit_age_sec: float | None = None
     prob_history: list[tuple[float, float]] | None = None
 
     @property
@@ -43,6 +45,8 @@ class StrategyState:
         self.open_position = None
         self.entry_count = 0
         self.last_exit_reason = None
+        self.last_exit_side = None
+        self.last_exit_age_sec = None
         self.prob_history = []
 
     def record_entry(self, position: PositionSnapshot) -> None:
@@ -50,9 +54,10 @@ class StrategyState:
         self.entry_count += 1
         self.prob_history = []
 
-    def record_partial_exit(self, exit_price: float, shares: float, reason: str) -> tuple[float, bool]:
+    def record_partial_exit(self, exit_price: float, shares: float, reason: str, exit_age_sec: float | None = None) -> tuple[float, bool]:
         if self.open_position is None:
             return 0.0, True
+        exit_side = self.open_position.token_side
         exit_shares = min(max(0.0, shares), self.open_position.filled_shares)
         pnl = (exit_price - self.open_position.entry_avg_price) * exit_shares
         self.realized_pnl += pnl
@@ -64,12 +69,14 @@ class StrategyState:
             self.open_position = None
             self.prob_history = []
         self.last_exit_reason = reason
+        self.last_exit_side = exit_side
+        self.last_exit_age_sec = exit_age_sec
         return pnl, closed
 
-    def record_exit(self, exit_price: float, reason: str) -> float:
+    def record_exit(self, exit_price: float, reason: str, exit_age_sec: float | None = None) -> float:
         if self.open_position is None:
             return 0.0
-        pnl, _closed = self.record_partial_exit(exit_price, self.open_position.filled_shares, reason)
+        pnl, _closed = self.record_partial_exit(exit_price, self.open_position.filled_shares, reason, exit_age_sec)
         return pnl
 
     def record_settlement(self, winning_side: str) -> float:
@@ -82,6 +89,8 @@ class StrategyState:
         self.open_position.exit_status = "settled"
         self.open_position = None
         self.last_exit_reason = "settled"
+        self.last_exit_side = None
+        self.last_exit_age_sec = None
         self.prob_history = []
         return pnl
 

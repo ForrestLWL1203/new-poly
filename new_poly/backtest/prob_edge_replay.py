@@ -70,6 +70,7 @@ class BacktestConfig:
     market_disagrees_exit_max_profit: float = 0.01
     polymarket_divergence_exit_bps: float = 3.0
     polymarket_divergence_exit_min_age_sec: float = 3.0
+    logic_decay_reentry_cooldown_sec: float = 30.0
     honor_order_events: bool = False
 
     def edge_config(self) -> EdgeConfig:
@@ -111,6 +112,7 @@ class BacktestConfig:
             market_disagrees_exit_max_profit=self.market_disagrees_exit_max_profit,
             polymarket_divergence_exit_bps=self.polymarket_divergence_exit_bps,
             polymarket_divergence_exit_min_age_sec=self.polymarket_divergence_exit_min_age_sec,
+            logic_decay_reentry_cooldown_sec=self.logic_decay_reentry_cooldown_sec,
         )
 
 
@@ -395,7 +397,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         reason = str(row.get("exit_reason") or _analysis(row).get("exit_reason") or (row.get("decision") or {}).get("reason") or "event_exit")
                         filled = _float(_order(row).get("filled_size"))
                         if row.get("event") == "partial_exit" and filled is not None:
-                            pnl, closed = state.record_partial_exit(exit_price, filled, reason)
+                            pnl, closed = state.record_partial_exit(exit_price, filled, reason, float(row.get("age_sec") or 0.0))
                             active_trade["partial_pnl"] = round(float(active_trade.get("partial_pnl") or 0.0) + pnl, 6)
                             active_trade.setdefault("partial_exits", []).append({
                                 "age_sec": float(row.get("age_sec") or 0.0),
@@ -407,7 +409,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                             if not closed:
                                 continue
                         else:
-                            pnl = state.record_exit(exit_price, reason)
+                            pnl = state.record_exit(exit_price, reason, float(row.get("age_sec") or 0.0))
                         exit_age = float(row.get("age_sec") or 0.0)
                         total_pnl = round(float(active_trade.get("partial_pnl") or 0.0) + pnl, 6)
                         active_trade.update({
@@ -443,7 +445,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     exit_age = retry_snap.age_sec if retry_snap is not None else snap.age_sec
                     if retry_snap is not None:
                         skip_next_row = True
-                    pnl = state.record_exit(exit_price, decision.reason)
+                    pnl = state.record_exit(exit_price, decision.reason, exit_age)
                     active_trade.update({
                         "exit_age_sec": exit_age,
                         "exit_reason": decision.reason,
@@ -533,7 +535,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                 if is_uncertain:
                     settlement_uncertain += 1
             else:
-                pnl = state.record_exit(state.open_position.entry_avg_price, "unsettled_no_settlement_side")
+                pnl = state.record_exit(state.open_position.entry_avg_price, "unsettled_no_settlement_side", 300.0)
                 total_pnl = round(float(active_trade.get("partial_pnl") or 0.0) + pnl, 6)
                 active_trade.update({
                     "exit_age_sec": 300.0,

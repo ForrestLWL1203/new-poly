@@ -67,7 +67,7 @@ async def handle_open_position_tick(
     if options.analysis_logs:
         row["analysis"] = {"price_sources": price_analysis, **_exit_analysis(decision, result)}
     if result.success:
-        pnl, closed = state.record_partial_exit(result.avg_price, result.filled_size, decision.reason)
+        pnl, closed = state.record_partial_exit(result.avg_price, result.filled_size, decision.reason, snap.age_sec)
         row["event"] = "exit" if closed else "partial_exit"
         row["exit_reason"] = decision.reason
         row["exit_price"] = _compact(result.avg_price)

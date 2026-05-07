@@ -305,6 +305,7 @@ def load_bot_config(path: Path) -> BotConfig:
         market_disagrees_exit_max_profit=float(_deep_get(raw, ("strategy", "market_disagrees_exit_max_profit"), 0.01)),
         polymarket_divergence_exit_bps=float(_deep_get(raw, ("strategy", "polymarket_divergence_exit_bps"), 3.0)),
         polymarket_divergence_exit_min_age_sec=float(_deep_get(raw, ("strategy", "polymarket_divergence_exit_min_age_sec"), 3.0)),
+        logic_decay_reentry_cooldown_sec=float(_deep_get(raw, ("strategy", "logic_decay_reentry_cooldown_sec"), 30.0)),
     )
     execution_raw = ExecutionConfig(
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.0)),
@@ -762,6 +763,7 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         market_disagrees_exit_max_profit=cfg.edge.market_disagrees_exit_max_profit,
         polymarket_divergence_exit_bps=cfg.edge.polymarket_divergence_exit_bps,
         polymarket_divergence_exit_min_age_sec=cfg.edge.polymarket_divergence_exit_min_age_sec,
+        logic_decay_reentry_cooldown_sec=cfg.edge.logic_decay_reentry_cooldown_sec,
     )
 
 

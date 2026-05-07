@@ -14,6 +14,7 @@ from new_poly.bot_log_schema import (
     _entry_analysis,
     _exit_analysis,
 )
+from new_poly.bot_logging import _clob_diag_should_attach
 from new_poly.bot_runtime import (
     DvolRefreshState,
     WindowPrices,
@@ -172,8 +173,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.low_price_extra_edge_threshold == 0.30
     assert opts.config.edge.low_price_extra_edge == 0.02
     assert opts.config.edge.cross_source_max_bps == 5.0
-    assert opts.config.edge.market_disagrees_exit_threshold == 0.30
-    assert opts.config.edge.market_disagrees_exit_max_remaining_sec == 60.0
+    assert opts.config.edge.market_disagrees_exit_threshold == 0.25
+    assert opts.config.edge.market_disagrees_exit_max_remaining_sec == 90.0
     assert opts.config.edge.market_disagrees_exit_min_loss == 0.03
     assert opts.config.edge.final_force_exit_remaining_sec == 30.0
     assert opts.config.edge.profit_protection_start_remaining_sec == 15.0
@@ -611,6 +612,50 @@ def test_reference_meta_only_attaches_for_analysis_or_active_risk_context() -> N
     assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=False, decision=exit_decision) is True
     assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=False, decision=None) is False
     assert _should_attach_reference_meta({}, analysis_logs=True, has_position=True, decision=hold_decision) is False
+
+
+def test_clob_diag_skips_routine_edge_intact_position_ticks() -> None:
+    opts = build_runtime_options(build_arg_parser().parse_args(["--once", "--analysis-logs"]))
+    state = StrategyState()
+    state.open_position = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.4,
+        filled_shares=1.0,
+        entry_model_prob=0.6,
+        entry_edge=0.2,
+    )
+
+    assert _clob_diag_should_attach(
+        diag={"last_depth_update_age_ms": 20, "event_counts_since_read": {"price_change": 10}},
+        options=opts,
+        state=state,
+        row={"event": "tick"},
+        decision=StrategyDecision(action="hold", reason="edge_intact"),
+    ) is False
+
+
+def test_clob_diag_attaches_for_stale_or_order_events() -> None:
+    opts = build_runtime_options(build_arg_parser().parse_args(["--once", "--analysis-logs"]))
+    state = StrategyState()
+    diag = {"last_depth_update_age_ms": 1500, "event_counts_since_read": {}}
+
+    assert _clob_diag_should_attach(
+        diag=diag,
+        options=opts,
+        state=state,
+        row={"event": "tick"},
+        decision=StrategyDecision(action="hold", reason="stale_book_wait"),
+    ) is True
+    assert _clob_diag_should_attach(
+        diag={"last_depth_update_age_ms": 20},
+        options=opts,
+        state=state,
+        row={"event": "order_no_fill"},
+        decision=StrategyDecision(action="exit", reason="logic_decay_exit"),
+    ) is True
 
 
 def test_warmup_warning_row_reports_missing_binance_tick() -> None:
