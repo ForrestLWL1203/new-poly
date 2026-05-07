@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from new_poly import config
 from new_poly.market.stream import PriceStream
-from .clob_client import get_client, get_order_options, get_token_balance
+from .clob_client import get_client, get_order_options, get_token_balance, reset_clob_http_client
 from .fak_quotes import buffer_buy_price_hint, get_tick_size
 
 BUY = "BUY"
@@ -539,6 +539,18 @@ def _is_invalid_amount_error(exc: Exception) -> bool:
     return "invalid amounts" in text and "maker and taker amount" in text
 
 
+def _is_live_request_exception(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "request exception" in text:
+        return True
+    if "readtimeout" in text or "read operation timed out" in text or "timed out" in text:
+        return True
+    context = getattr(exc, "__context__", None) or getattr(exc, "__cause__", None)
+    if context is not None and context is not exc:
+        return _is_live_request_exception(context)
+    return False
+
+
 def _order_id_from_error(exc: Exception) -> str | None:
     match = re.search(r"['\"]orderID['\"]\s*:\s*['\"]([^'\"]+)['\"]", str(exc))
     return match.group(1) if match else None
@@ -800,6 +812,9 @@ class LiveFakExecutionGateway:
             latency_ms = round((time.monotonic() - start) * 1000)
             if _is_fak_no_match_error(exc):
                 return ExecutionResult(False, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+            if _is_live_request_exception(exc):
+                reset_clob_http_client()
+                return ExecutionResult(False, message="live order request exception", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
             raise
         latency_ms = round((time.monotonic() - start) * 1000)
         if not isinstance(responses, list):
@@ -869,6 +884,17 @@ class LiveFakExecutionGateway:
                     success=False,
                     order_id=_order_id_from_error(exc),
                     message="live invalid amount",
+                    mode="live",
+                    latency_ms=latency_ms,
+                    total_latency_ms=latency_ms,
+                    timing=timing,
+                )
+            if _is_live_request_exception(exc):
+                reset_clob_http_client()
+                return ExecutionResult(
+                    success=False,
+                    order_id=_order_id_from_error(exc),
+                    message="live order request exception",
                     mode="live",
                     latency_ms=latency_ms,
                     total_latency_ms=latency_ms,

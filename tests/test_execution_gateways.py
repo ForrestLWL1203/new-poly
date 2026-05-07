@@ -574,6 +574,30 @@ def test_live_post_no_match_exception_is_no_fill_with_latency(monkeypatch) -> No
     assert result.total_latency_ms == result.latency_ms
 
 
+def test_live_post_request_exception_is_no_fill_not_crash(monkeypatch) -> None:
+    class Client:
+        def create_market_order(self, args, options=None):
+            return {"signed": True}
+
+        def post_order(self, signed, order_type):
+            raise RuntimeError("PolyApiException[status_code=None, error_message=Request exception!]")
+
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: Client())
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True)
+    resets = []
+    monkeypatch.setattr("new_poly.trading.execution.reset_clob_http_client", lambda: resets.append(True))
+
+    result = gateway._post("up", 1.0, "BUY", 0.50)
+
+    assert result.success is False
+    assert result.message == "live order request exception"
+    assert result.latency_ms is not None
+    assert result.total_latency_ms == result.latency_ms
+    assert result.timing["post_order_ms"] >= 0
+    assert resets == [True]
+
+
 def test_paper_buy_uses_depth_limit_not_average() -> None:
     async def scenario() -> None:
         stream = FakeStream()

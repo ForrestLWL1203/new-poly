@@ -22,7 +22,10 @@ def _build_http_client_kwargs() -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "http2": True,
         "limits": httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
-        "timeout": httpx.Timeout(10.0, connect=2.0),
+        # Trading decisions expire quickly in 5m markets. Keep connect short
+        # and cap read/write waits so one degraded CLOB HTTP stream cannot
+        # freeze the strategy loop for most of an entry/exit window.
+        "timeout": httpx.Timeout(3.0, connect=2.0, pool=1.0),
     }
     if proxy:
         kwargs["proxy"] = proxy
@@ -39,6 +42,12 @@ def _configure_proxy() -> None:
         # multi-strategy process should split this into an explicit client
         # factory instead of sharing this global SDK helper.
         _http_helpers._http_client = _http_helpers._http_client.__class__(**_build_http_client_kwargs())
+
+
+def reset_clob_http_client() -> None:
+    """Drop the SDK helper HTTP client so the next request uses a fresh pool."""
+
+    _configure_proxy()
 
 
 def load_polymarket_config(path: Path | None = None) -> dict[str, Any]:
