@@ -5,6 +5,7 @@ Subscribes to a set of token IDs and emits price updates via async callback.
 """
 
 import asyncio
+import datetime as dt
 import json
 import logging
 import time
@@ -22,6 +23,10 @@ log = logging.getLogger(__name__)
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 PING_INTERVAL = 10  # seconds
 IDLE_CHECK_INTERVAL = 1.0  # seconds
+
+
+def _utc_ts() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
 @dataclass
@@ -86,6 +91,8 @@ class PriceStream:
         self._last_event_type: str | None = None
         self._event_counts_since_read: Counter[str] = Counter()
         self._depth_events_since_read: int = 0
+        self._connected_at: float = 0.0
+        self._reconnect_count: int = 0
 
     def get_latest_price(self, token_id: str) -> Optional[float]:
         """Get the latest cached midpoint for a token (sync read)."""
@@ -413,8 +420,15 @@ class PriceStream:
         self._books.clear()
         self._last_message_at = time.monotonic()
         self._last_depth_update_at = self._last_message_at
+        self._connected_at = self._last_message_at
         if log_reconnect:
-            log_event(log, logging.WARNING, WS, {"action": "RECONNECTED"})
+            self._reconnect_count += 1
+            log_event(log, logging.WARNING, WS, {
+                "ts": _utc_ts(),
+                "action": "RECONNECTED",
+                "reconnect_count": self._reconnect_count,
+                "subscribed_tokens": len(self._connected_tokens),
+            })
 
     async def _ping_loop(self) -> None:
         """Send ``{}`` every PING_INTERVAL seconds to keep the connection alive."""
@@ -463,10 +477,18 @@ class PriceStream:
             if idle_kind is None or idle_sec is None:
                 continue
 
+            connection_age_sec = now - self._connected_at if self._connected_at > 0 else None
             log.warning(
-                "CLOB WS %s idle for %.2fs; forcing reconnect",
+                "ts=%s CLOB WS %s idle for %.2fs; forcing reconnect; connection_age_sec=%s; "
+                "subscribed_tokens=%d; last_event_type=%s; event_counts=%s; depth_events=%d",
+                _utc_ts(),
                 idle_kind,
                 idle_sec,
+                round(connection_age_sec, 2) if connection_age_sec is not None else None,
+                len(self._connected_tokens),
+                self._last_event_type,
+                dict(self._event_counts_since_read),
+                self._depth_events_since_read,
             )
             async with self._connection_lock:
                 if self._ws is not ws or not self._running:
