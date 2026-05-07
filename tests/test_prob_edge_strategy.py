@@ -1097,11 +1097,11 @@ def test_market_disagrees_exit_triggers_when_bid_ratio_breaks_late() -> None:
         market_slug="m1",
         age_sec=145.0,
         remaining_sec=45.0,
-        s_price=100.05,
+        s_price=100.0,
         k_price=100.0,
         sigma_eff=0.6,
-        up_bid_avg=0.26,
-        up_bid_limit=0.25,
+        up_bid_avg=0.10,
+        up_bid_limit=0.10,
         up_bid_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
@@ -1142,6 +1142,42 @@ def test_market_disagrees_exit_does_not_fire_while_profitable() -> None:
         up_bid_avg=0.37,
         up_bid_limit=0.36,
         up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg)
+
+    assert decision.reason != "market_disagrees_exit"
+
+
+def test_market_disagrees_exit_does_not_fire_when_model_prob_improves() -> None:
+    cfg = EdgeConfig(
+        market_disagrees_exit_threshold=0.20,
+        market_disagrees_exit_max_remaining_sec=60.0,
+        market_disagrees_exit_min_loss=0.03,
+        market_disagrees_exit_min_age_sec=3.0,
+        market_disagrees_exit_max_profit=0.01,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="down",
+        token_id="down-token",
+        entry_time=100.0,
+        entry_avg_price=0.38,
+        filled_shares=10.0,
+        entry_model_prob=0.536,
+        entry_edge=0.156,
+    )
+
+    decision = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=108.0,
+        remaining_sec=54.0,
+        s_price=99.995,
+        k_price=100.0,
+        sigma_eff=0.389,
+        down_bid_avg=0.24,
+        down_bid_limit=0.24,
+        down_bid_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     ), pos, cfg)

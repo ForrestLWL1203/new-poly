@@ -228,6 +228,8 @@ def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, m
         return None
     if position.entry_model_prob <= 0.0 or model_prob <= 0.0:
         return None
+    if model_prob >= position.entry_model_prob:
+        return None
     entry_ratio = position.entry_avg_price / position.entry_model_prob
     current_ratio = bid / model_prob
     disagreement = entry_ratio - current_ratio
