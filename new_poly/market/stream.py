@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 PING_INTERVAL = 10  # seconds
+IDLE_CHECK_INTERVAL = 1.0  # seconds
 
 
 @dataclass
@@ -77,7 +78,9 @@ class PriceStream:
         # Background tasks
         self._ping_task: Optional[asyncio.Task] = None
         self._recv_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
         self._connection_lock = asyncio.Lock()
+        self._last_message_at: float = 0.0
 
     def get_latest_price(self, token_id: str) -> Optional[float]:
         """Get the latest cached midpoint for a token (sync read)."""
@@ -248,6 +251,7 @@ class PriceStream:
             await self._reconnect_locked(log_reconnect=False)
         self._ping_task = asyncio.create_task(self._ping_loop())
         self._recv_task = asyncio.create_task(self._recv_loop())
+        self._watchdog_task = asyncio.create_task(self._idle_watchdog_loop())
 
     async def switch_tokens(self, new_token_ids: list[str]) -> None:
         """
@@ -280,6 +284,7 @@ class PriceStream:
                     log.debug("Unsubscribed from %s", old_token_ids)
 
                 await self._subscribe(new_token_ids)
+                self._last_message_at = time.monotonic()
             except websockets.ConnectionClosed as e:
                 log.warning("WS switch_tokens failed on closed connection: %s", e)
                 await self._reconnect_locked()
@@ -296,6 +301,10 @@ class PriceStream:
             self._recv_task.cancel()
             tasks.append(self._recv_task)
             self._recv_task = None
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            tasks.append(self._watchdog_task)
+            self._watchdog_task = None
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         if self._ws:
@@ -370,6 +379,7 @@ class PriceStream:
         await self._subscribe(self._connected_tokens)
         self._prices.clear()
         self._books.clear()
+        self._last_message_at = time.monotonic()
         if log_reconnect:
             log_event(log, logging.WARNING, WS, {"action": "RECONNECTED"})
 
@@ -397,6 +407,40 @@ class PriceStream:
                             self._ws = None
                     continue
 
+    async def _idle_watchdog_loop(self) -> None:
+        """Reconnect if the CLOB market stream silently stops sending data."""
+        while self._running:
+            await asyncio.sleep(IDLE_CHECK_INTERVAL)
+            ws = self._ws
+            if ws is None or not self._running:
+                continue
+            last_message_at = self._last_message_at
+            if last_message_at <= 0:
+                continue
+            idle_sec = time.monotonic() - last_message_at
+            if idle_sec <= config.CLOB_WS_IDLE_RECONNECT_SEC:
+                continue
+
+            log.warning(
+                "CLOB WS idle for %.2fs; forcing reconnect",
+                idle_sec,
+            )
+            async with self._connection_lock:
+                if self._ws is not ws or not self._running:
+                    continue
+                if time.monotonic() - self._last_message_at <= config.CLOB_WS_IDLE_RECONNECT_SEC:
+                    continue
+                try:
+                    transport = getattr(ws, "transport", None)
+                    if transport is not None:
+                        transport.abort()
+                    else:
+                        await ws.close()
+                except Exception:
+                    pass
+                self._ws = None
+                self._last_message_at = time.monotonic()
+
     async def _recv_loop(self) -> None:
         """Continuously receive and dispatch WebSocket messages, with reconnection."""
         reconnect_delay = config.WS_RECONNECT_DELAY
@@ -410,6 +454,7 @@ class PriceStream:
                             await self._reconnect_locked()
 
                 async for msg in self._ws:
+                    self._last_message_at = time.monotonic()
                     self._dispatch(msg)
                     consecutive_failures = 0
                     reconnect_delay = config.WS_RECONNECT_DELAY
