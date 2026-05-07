@@ -503,6 +503,72 @@ def test_exit_logic_decay_and_market_overprice() -> None:
     assert overprice.reason == "market_overprice_exit"
 
 
+def test_exit_waits_on_stale_book_before_final_window() -> None:
+    cfg = EdgeConfig(final_force_exit_remaining_sec=30.0, max_book_age_ms=1000.0)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=120.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.20,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=150.0,
+        remaining_sec=90.0,
+        s_price=100.1,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_bid_avg=0.41,
+        up_bid_limit=0.40,
+        up_bid_depth_ok=True,
+        up_book_age_ms=8_000.0,
+        down_book_age_ms=8_000.0,
+    )
+
+    decision = evaluate_exit(snap, pos, cfg)
+
+    assert decision.action == "hold"
+    assert decision.reason == "stale_book_wait"
+    assert decision.model_prob is not None
+
+
+def test_exit_final_force_uses_stale_book_near_window_end() -> None:
+    cfg = EdgeConfig(final_force_exit_remaining_sec=30.0, max_book_age_ms=1000.0)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="down",
+        token_id="down-token",
+        entry_time=250.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.20,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=275.0,
+        remaining_sec=25.0,
+        s_price=99.9,
+        k_price=100.0,
+        sigma_eff=0.55,
+        down_bid_avg=0.42,
+        down_bid_limit=0.41,
+        down_bid_depth_ok=True,
+        up_book_age_ms=8_000.0,
+        down_book_age_ms=8_000.0,
+    )
+
+    decision = evaluate_exit(snap, pos, cfg)
+
+    assert decision.action == "exit"
+    assert decision.reason == "final_force_exit"
+    assert decision.limit_price == 0.41
+
+
 def _divergence_position(side: str) -> PositionSnapshot:
     return PositionSnapshot(
         market_slug="m1",

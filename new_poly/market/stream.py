@@ -8,8 +8,9 @@ import asyncio
 import json
 import logging
 import time
+from collections import Counter
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import websockets
 
@@ -81,6 +82,10 @@ class PriceStream:
         self._watchdog_task: Optional[asyncio.Task] = None
         self._connection_lock = asyncio.Lock()
         self._last_message_at: float = 0.0
+        self._last_depth_update_at: float = 0.0
+        self._last_event_type: str | None = None
+        self._event_counts_since_read: Counter[str] = Counter()
+        self._depth_events_since_read: int = 0
 
     def get_latest_price(self, token_id: str) -> Optional[float]:
         """Get the latest cached midpoint for a token (sync read)."""
@@ -240,6 +245,29 @@ class PriceStream:
         """Update the price callback (used when reusing WS for a new window)."""
         self._on_price = callback
 
+    def diagnostics(self, *, reset_counts: bool = False) -> dict[str, Any]:
+        """Return compact WebSocket health diagnostics.
+
+        Message freshness and executable-depth freshness are intentionally
+        separate: CLOB can keep sending BBO/trade events while level sizes are
+        no longer being refreshed.
+        """
+        now = time.monotonic()
+        message_age = now - self._last_message_at if self._last_message_at > 0 else None
+        depth_age = now - self._last_depth_update_at if self._last_depth_update_at > 0 else None
+        row = {
+            "last_message_age_ms": round(message_age * 1000) if message_age is not None else None,
+            "last_depth_update_age_ms": round(depth_age * 1000) if depth_age is not None else None,
+            "last_event_type": self._last_event_type,
+            "event_counts_since_read": dict(self._event_counts_since_read),
+            "depth_events_since_read": self._depth_events_since_read,
+            "subscribed_tokens": len(self._connected_tokens),
+        }
+        if reset_counts:
+            self._event_counts_since_read.clear()
+            self._depth_events_since_read = 0
+        return row
+
     async def connect(self, token_ids: list[str]) -> None:
         """
         Connect to the WebSocket and subscribe to the given token IDs.
@@ -264,6 +292,9 @@ class PriceStream:
         # Clear stale cached prices from previous window
         self._prices.clear()
         self._books.clear()
+        self._last_depth_update_at = time.monotonic()
+        self._event_counts_since_read.clear()
+        self._depth_events_since_read = 0
 
         old_token_ids = list(self._connected_tokens)
         # Subscribe to new tokens
@@ -285,6 +316,7 @@ class PriceStream:
 
                 await self._subscribe(new_token_ids)
                 self._last_message_at = time.monotonic()
+                self._last_depth_update_at = self._last_message_at
             except websockets.ConnectionClosed as e:
                 log.warning("WS switch_tokens failed on closed connection: %s", e)
                 await self._reconnect_locked()
@@ -380,6 +412,7 @@ class PriceStream:
         self._prices.clear()
         self._books.clear()
         self._last_message_at = time.monotonic()
+        self._last_depth_update_at = self._last_message_at
         if log_reconnect:
             log_event(log, logging.WARNING, WS, {"action": "RECONNECTED"})
 
@@ -408,27 +441,40 @@ class PriceStream:
                     continue
 
     async def _idle_watchdog_loop(self) -> None:
-        """Reconnect if the CLOB market stream silently stops sending data."""
+        """Reconnect if the CLOB market stream silently stops sending data or depth."""
         while self._running:
             await asyncio.sleep(IDLE_CHECK_INTERVAL)
             ws = self._ws
             if ws is None or not self._running:
                 continue
-            last_message_at = self._last_message_at
-            if last_message_at <= 0:
-                continue
-            idle_sec = time.monotonic() - last_message_at
-            if idle_sec <= config.CLOB_WS_IDLE_RECONNECT_SEC:
+            now = time.monotonic()
+            idle_kind: str | None = None
+            idle_sec: float | None = None
+            if self._last_message_at > 0 and now - self._last_message_at > config.CLOB_WS_IDLE_RECONNECT_SEC:
+                idle_kind = "message"
+                idle_sec = now - self._last_message_at
+            elif (
+                self._connected_tokens
+                and self._last_depth_update_at > 0
+                and now - self._last_depth_update_at > config.CLOB_DEPTH_IDLE_RECONNECT_SEC
+            ):
+                idle_kind = "depth"
+                idle_sec = now - self._last_depth_update_at
+            if idle_kind is None or idle_sec is None:
                 continue
 
             log.warning(
-                "CLOB WS idle for %.2fs; forcing reconnect",
+                "CLOB WS %s idle for %.2fs; forcing reconnect",
+                idle_kind,
                 idle_sec,
             )
             async with self._connection_lock:
                 if self._ws is not ws or not self._running:
                     continue
-                if time.monotonic() - self._last_message_at <= config.CLOB_WS_IDLE_RECONNECT_SEC:
+                now = time.monotonic()
+                if idle_kind == "message" and now - self._last_message_at <= config.CLOB_WS_IDLE_RECONNECT_SEC:
+                    continue
+                if idle_kind == "depth" and now - self._last_depth_update_at <= config.CLOB_DEPTH_IDLE_RECONNECT_SEC:
                     continue
                 try:
                     transport = getattr(ws, "transport", None)
@@ -440,6 +486,7 @@ class PriceStream:
                     pass
                 self._ws = None
                 self._last_message_at = time.monotonic()
+                self._last_depth_update_at = self._last_message_at
 
     async def _recv_loop(self) -> None:
         """Continuously receive and dispatch WebSocket messages, with reconnection."""
@@ -506,6 +553,8 @@ class PriceStream:
         """Handle a single WebSocket event — dispatches async callback via schedule."""
         event_type = ev.get("event_type", "")
         asset_id = ev.get("asset_id", "")
+        self._last_event_type = str(event_type or "missing")
+        self._event_counts_since_read[self._last_event_type] += 1
 
         log.debug(
             "WS event | type=%s asset_id=%s price=%s side=%s bid=%s ask=%s",
@@ -578,6 +627,8 @@ class PriceStream:
             "asks": asks,
             "received_at": received_at,
         }
+        self._last_depth_update_at = received_at
+        self._depth_events_since_read += 1
 
         best_bid = bids[0][0] if bids else None
         best_ask = asks[0][0] if asks else None
@@ -661,7 +712,9 @@ class PriceStream:
                 best_ask_received_at=ask_received_at,
             )
             self._prices[asset_id] = update
-            self._apply_price_change_to_book(asset_id, side, price, change.get("size"))
+            if self._apply_price_change_to_book(asset_id, side, price, change.get("size")):
+                self._last_depth_update_at = received_at
+                self._depth_events_since_read += 1
             self._schedule_callback(update)
 
     def _handle_last_trade(self, ev: dict) -> None:
@@ -711,17 +764,17 @@ class PriceStream:
         side: str,
         price: float,
         size_raw,
-    ) -> None:
+    ) -> bool:
         book = self._books.get(asset_id)
         if book is None:
-            return
+            return False
         try:
             size = float(size_raw)
         except (TypeError, ValueError):
-            return
+            return False
         side_key = "bids" if side == "BUY" else "asks" if side == "SELL" else None
         if side_key is None:
-            return
+            return False
         levels = list(book.get(side_key, []))
         updated = False
         kept: list[tuple[float, float]] = []
@@ -737,6 +790,7 @@ class PriceStream:
         kept.sort(key=lambda pair: pair[0], reverse=(side_key == "bids"))
         book[side_key] = kept
         book["received_at"] = time.monotonic()
+        return True
 
     def _schedule_callback(self, update: PriceUpdate) -> None:
         """Schedule the async callback on the running event loop."""

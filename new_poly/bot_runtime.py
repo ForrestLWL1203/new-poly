@@ -524,6 +524,7 @@ PRICE_ANALYSIS_FIELDS = {
     "lead_binance_side_disagrees_with_polymarket",
     "lead_coinbase_side_disagrees_with_polymarket",
     "lead_proxy_side_disagrees_with_polymarket",
+    "clob_ws",
 }
 
 
@@ -827,6 +828,7 @@ def _snapshot(
     lead_polymarket_side = side_vs_k(price.polymarket, prices.k_price)
     up = token_state(stream, window.up_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
     down = token_state(stream, window.down_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
+    clob_ws = stream.diagnostics(reset_counts=True) if hasattr(stream, "diagnostics") else {}
     snap = MarketSnapshot(
         market_slug=window.slug,
         age_sec=age_sec,
@@ -915,6 +917,7 @@ def _snapshot(
             if lead_proxy_side is not None and lead_polymarket_side is not None
             else None
         ),
+        "clob_ws": clob_ws,
         "up": up,
         "down": down,
     }

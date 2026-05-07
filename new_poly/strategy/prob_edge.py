@@ -280,8 +280,6 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
 def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: EdgeConfig, state: StrategyState | None = None) -> StrategyDecision:
     if _missing_model_inputs(snapshot):
         return StrategyDecision(action="exit", reason="risk_exit")
-    if _stale_books(snapshot, cfg):
-        return StrategyDecision(action="exit", reason="risk_exit")
 
     probs = _probs(snapshot)
     if position.token_side == "up":
@@ -294,6 +292,14 @@ def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: Edg
         bid = snapshot.down_bid_avg
         bid_limit = snapshot.down_bid_limit
         depth_ok = snapshot.down_bid_depth_ok
+
+    if _stale_books(snapshot, cfg):
+        if snapshot.remaining_sec > cfg.final_force_exit_remaining_sec:
+            return StrategyDecision(action="hold", reason="stale_book_wait", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down)
+        if depth_ok and bid is not None and bid_limit is not None:
+            profit_now = bid - position.entry_avg_price
+            return StrategyDecision(action="exit", reason="final_force_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now)
+        return StrategyDecision(action="exit", reason="risk_exit", side=position.token_side, model_prob=model_prob, up_prob=probs.up, down_prob=probs.down)
 
     if not depth_ok or bid is None or bid_limit is None:
         return StrategyDecision(action="hold", reason="missing_exit_depth", side=position.token_side, model_prob=model_prob, up_prob=probs.up, down_prob=probs.down)

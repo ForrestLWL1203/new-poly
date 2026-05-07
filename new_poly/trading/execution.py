@@ -435,7 +435,8 @@ class PaperExecutionGateway:
                     min_price = refreshed.min_price
                     exit_reason = refreshed.exit_reason
             book_start = time.monotonic()
-            levels = self.stream.get_latest_bid_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
+            depth_max_age = None if exit_reason == "final_force_exit" else self.config.max_book_age_sec
+            levels = self.stream.get_latest_bid_levels_with_size(token_id, max_age_sec=depth_max_age)
             book_read_ms += _ms_since(book_start)
             effective_min = _sell_price_hint(
                 token_id,

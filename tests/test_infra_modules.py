@@ -95,6 +95,12 @@ def test_price_stream_updates_order_book_from_events() -> None:
     asks = stream.get_latest_ask_levels_with_size(token_id)
     assert asks[0] == (0.5, 5.0)
 
+    diag = stream.diagnostics(reset_counts=True)
+    assert diag["event_counts_since_read"]["book"] == 1
+    assert diag["event_counts_since_read"]["price_change"] == 1
+    assert diag["depth_events_since_read"] == 2
+    assert stream.diagnostics()["event_counts_since_read"] == {}
+
 
 def test_price_stream_level_one_prefers_newer_best_bid_ask_but_keeps_depth_age() -> None:
     async def on_price(_update):
@@ -177,6 +183,44 @@ async def test_price_stream_idle_watchdog_closes_silent_ws(monkeypatch) -> None:
     stream._ws = ws
     stream._running = True
     stream._last_message_at = stream_module.time.monotonic() - 1.0
+    task = asyncio.create_task(stream._idle_watchdog_loop())
+
+    try:
+        async with asyncio.timeout(1.0):
+            while stream._ws is not None:
+                await asyncio.sleep(0.01)
+    finally:
+        stream._running = False
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert ws.closed is True
+    assert stream._ws is None
+
+
+@pytest.mark.asyncio
+async def test_price_stream_depth_watchdog_closes_bbo_only_ws(monkeypatch) -> None:
+    async def on_price(_update):
+        return None
+
+    class BboOnlyWs:
+        def __init__(self) -> None:
+            self.closed = False
+            self.transport = None
+
+        async def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(stream_module, "IDLE_CHECK_INTERVAL", 0.001)
+    monkeypatch.setattr(stream_module.config, "CLOB_WS_IDLE_RECONNECT_SEC", 100.0)
+    monkeypatch.setattr(stream_module.config, "CLOB_DEPTH_IDLE_RECONNECT_SEC", 0.001)
+    stream = PriceStream(on_price=on_price)
+    ws = BboOnlyWs()
+    stream._ws = ws
+    stream._running = True
+    stream._connected_tokens = ["token-a", "token-b"]
+    stream._last_message_at = stream_module.time.monotonic()
+    stream._last_depth_update_at = stream_module.time.monotonic() - 1.0
     task = asyncio.create_task(stream._idle_watchdog_loop())
 
     try:
