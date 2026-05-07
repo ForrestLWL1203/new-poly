@@ -110,14 +110,42 @@ def get_tick_size(token_id: str) -> float:
     return value
 
 
-def prefetch_order_params(token_id: str) -> None:
+def prefetch_order_params(token_id: str, *, raise_on_error: bool = True) -> dict[str, Any]:
     if token_id in _order_params_cache:
-        return
+        tick_str, neg_risk = _order_params_cache[token_id]
+        return {
+            "ok": True,
+            "token_id": token_id,
+            "cached": True,
+            "tick_size": tick_str,
+            "neg_risk": neg_risk,
+        }
     client = get_client()
-    tick_str = client.get_tick_size(token_id)
-    _tick_size_cache[token_id] = float(tick_str)
-    neg_risk = bool(client.get_neg_risk(token_id))
+    tick_str: str | None = None
+    try:
+        tick_str = str(client.get_tick_size(token_id))
+        _tick_size_cache[token_id] = float(tick_str)
+        neg_risk = bool(client.get_neg_risk(token_id))
+    except Exception as exc:
+        if raise_on_error:
+            raise
+        return {
+            "ok": False,
+            "token_id": token_id,
+            "cached": False,
+            "tick_size": tick_str,
+            "failed_operation": "get_tick_size" if tick_str is None else "get_neg_risk",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
     _order_params_cache[token_id] = (tick_str, neg_risk)
+    return {
+        "ok": True,
+        "token_id": token_id,
+        "cached": False,
+        "tick_size": tick_str,
+        "neg_risk": neg_risk,
+    }
 
 
 def get_order_options(token_id: str):

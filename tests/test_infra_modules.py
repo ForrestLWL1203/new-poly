@@ -15,6 +15,7 @@ from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.prob_edge_data import WindowPrices, effective_price
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
+from new_poly.trading import clob_client as clob_client_module
 from new_poly.trading.clob_client import _build_http_client_kwargs
 
 
@@ -125,6 +126,27 @@ def test_price_stream_level_one_prefers_newer_best_bid_ask_but_keeps_depth_age()
     assert stream.get_latest_best_bid(token_id) == 0.52
     assert stream.get_latest_best_ask(token_id) == 0.53
     assert stream.get_latest_best_ask_age(token_id) > 1.0
+
+
+def test_prefetch_order_params_reports_failed_api_without_raising(monkeypatch) -> None:
+    class Client:
+        def get_tick_size(self, _token_id: str) -> str:
+            return "0.01"
+
+        def get_neg_risk(self, _token_id: str) -> bool:
+            raise TimeoutError("neg risk timeout")
+
+    monkeypatch.setattr(clob_client_module, "get_client", lambda: Client())
+    clob_client_module._tick_size_cache.clear()
+    clob_client_module._order_params_cache.clear()
+
+    result = clob_client_module.prefetch_order_params("token-a", raise_on_error=False)
+
+    assert result["ok"] is False
+    assert result["failed_operation"] == "get_neg_risk"
+    assert result["tick_size"] == "0.01"
+    assert "neg risk timeout" in result["error"]
+    assert clob_client_module.get_tick_size("token-a") == 0.01
 
 
 @pytest.mark.asyncio

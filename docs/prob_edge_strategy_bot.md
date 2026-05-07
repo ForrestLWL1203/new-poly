@@ -521,6 +521,18 @@ while a position is open, or when an exit decision needs that reference context.
 Idle long-running live ticks omit it to keep logs small. Full price-source
 diagnostics are reserved for analysis/order rows.
 
+Live runs can also emit `clob_prefetch_failed` during startup or window
+switching. This means the latency-only CLOB metadata warmup failed on either
+`get_tick_size` or `get_neg_risk`; the row includes `failed_operation` and the
+bot continues without treating it as a strategy failure.
+
+Before every entry or exit FAK call, the bot writes an `order_intent` row. This
+row is emitted before awaiting the CLOB response and includes the token id,
+side, signal price, fair cap or exit floor, and intended amount/shares. The
+subsequent `entry`, `exit`, `partial_exit`, or `order_no_fill` row records the
+response. If `POST /order` times out after Polymarket has already matched the
+order, the intent row still proves which order the bot attempted.
+
 When analysis logs are enabled, the bot first writes a `config` row containing
 the non-secret strategy, execution, risk, and runtime parameters used for the run.
 Rows also include BTC source diagnostics under `analysis.price_sources`, but

@@ -17,6 +17,44 @@ from new_poly.strategy.prob_edge import evaluate_entry, evaluate_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 
 
+def _order_intent_row(
+    *,
+    row: dict[str, Any],
+    intent: str,
+    token_id: str,
+    decision,
+    price_analysis: dict[str, Any],
+    options: RuntimeOptions,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    out = {
+        "ts": row.get("ts"),
+        "mode": options.mode,
+        "event": "order_intent",
+        "market_slug": row.get("market_slug"),
+        "age_sec": row.get("age_sec"),
+        "remaining_sec": row.get("remaining_sec"),
+        "order_intent": intent,
+        "token_id": token_id,
+        "side": decision.side,
+        f"{intent}_side": decision.side,
+        "reason": decision.reason,
+        "model_prob": _compact(decision.model_prob),
+        "signal_price": _compact(decision.price),
+        "limit_price": _compact(decision.limit_price),
+        "best_ask": _compact(decision.best_ask),
+        "depth_limit_price": _compact(decision.depth_limit_price),
+        "edge": _compact(decision.edge),
+        "phase": decision.phase,
+        "required_edge": _compact(decision.required_edge),
+    }
+    if extra:
+        out.update(extra)
+    if options.analysis_logs:
+        out["analysis"] = {"price_sources": price_analysis}
+    return out
+
+
 def _apply_closed_trade_risk(row: dict[str, Any], *, state: StrategyState, cfg: BotConfig, pnl: float) -> None:
     event = state.apply_closed_trade_risk(
         pnl,
@@ -40,6 +78,7 @@ async def handle_open_position_tick(
     state: StrategyState,
     sigma_eff: float | None,
     price_analysis: dict[str, Any],
+    logger=None,
 ) -> Any:
     assert state.open_position is not None
     decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
@@ -54,6 +93,19 @@ async def handle_open_position_tick(
         return decision
 
     exiting_position = replace(state.open_position)
+    if logger is not None:
+        logger.write(_order_intent_row(
+            row=row,
+            intent="exit",
+            token_id=state.open_position.token_id,
+            decision=decision,
+            price_analysis=price_analysis,
+            options=options,
+            extra={
+                "shares": _compact(state.open_position.filled_shares),
+                "exit_reason": decision.reason,
+            },
+        ))
     result = await gateway.sell(
         state.open_position.token_id,
         state.open_position.filled_shares,
@@ -118,6 +170,7 @@ async def handle_flat_tick(
     state: StrategyState,
     sigma_eff: float | None,
     price_analysis: dict[str, Any],
+    logger=None,
 ) -> Any:
     decision = evaluate_entry(snap, state, cfg.edge)
     row["decision"] = _decision_log(decision)
@@ -125,6 +178,16 @@ async def handle_flat_tick(
         return decision
 
     token_id = window.up_token if decision.side == "up" else window.down_token
+    if logger is not None:
+        logger.write(_order_intent_row(
+            row=row,
+            intent="entry",
+            token_id=token_id,
+            decision=decision,
+            price_analysis=price_analysis,
+            options=options,
+            extra={"amount_usd": _compact(cfg.amount_usd)},
+        ))
     result = await gateway.buy(
         token_id,
         cfg.amount_usd,

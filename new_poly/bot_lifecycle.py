@@ -20,7 +20,6 @@ from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.stream import PriceStream
-from new_poly.trading.clob_client import prefetch_order_params
 from new_poly.trading.execution import LiveFakExecutionGateway, PaperExecutionGateway
 
 
@@ -99,7 +98,7 @@ async def startup_dvol_runtime(*, cfg: BotConfig, options: RuntimeOptions, logge
     return dvol
 
 
-async def start_market_feeds(*, feeds: FeedContext, cfg: BotConfig, options: RuntimeOptions, window) -> None:
+async def start_market_feeds(*, feeds: FeedContext, cfg: BotConfig, options: RuntimeOptions, logger: JsonlLogger, window) -> None:
     feeds.binance = BinancePriceFeed("btcusdt")
     await feeds.binance.start()
     if feeds.polymarket is not None:
@@ -108,9 +107,6 @@ async def start_market_feeds(*, feeds: FeedContext, cfg: BotConfig, options: Run
         feeds.coinbase = CoinbaseBtcPriceFeed()
         await feeds.coinbase.start()
     await feeds.stream.connect([window.up_token, window.down_token])
-    if options.mode == "live":
-        await asyncio.to_thread(prefetch_order_params, window.up_token)
-        await asyncio.to_thread(prefetch_order_params, window.down_token)
 
 
 async def warmup_binance(*, feeds: FeedContext, cfg: BotConfig, options: RuntimeOptions, logger: JsonlLogger, market_slug: str) -> None:

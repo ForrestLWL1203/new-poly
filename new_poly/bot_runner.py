@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import traceback
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -17,6 +18,7 @@ from new_poly.bot_loop import (
     WindowContext,
     _advance_dvol_refresh,
     _handle_window_close,
+    _prefetch_live_order_params,
     _refresh_window_inputs,
 )
 from new_poly.bot_lifecycle import create_feeds, create_gateway, close_runtime, start_market_feeds, warmup_binance
@@ -108,7 +110,13 @@ class BotRunner:
                 return 1
             return await self.run_loop()
         except Exception as exc:
-            self.logger.write({"ts": dt.datetime.now().astimezone().isoformat(), "event": "error", "error": str(exc)})
+            self.logger.write({
+                "ts": dt.datetime.now().astimezone().isoformat(),
+                "event": "error",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            })
             return 1
         finally:
             await self.close()
@@ -125,7 +133,26 @@ class BotRunner:
 
     async def start_first_window(self) -> None:
         self.set_window_context(WindowContext(window=find_initial_window(self.series), prices=WindowPrices()))
-        await start_market_feeds(feeds=self.active.feeds, cfg=self.cfg, options=self.options, window=self.active.window)
+        await start_market_feeds(
+            feeds=self.active.feeds,
+            cfg=self.cfg,
+            options=self.options,
+            logger=self.logger,
+            window=self.active.window,
+        )
+        if self.options.mode == "live":
+            await _prefetch_live_order_params(
+                token_side="up",
+                token_id=self.active.window.up_token,
+                market_slug=self.active.window.slug,
+                logger=self.logger,
+            )
+            await _prefetch_live_order_params(
+                token_side="down",
+                token_id=self.active.window.down_token,
+                market_slug=self.active.window.slug,
+                logger=self.logger,
+            )
         await warmup_binance(
             feeds=self.active.feeds,
             cfg=self.cfg,
@@ -268,6 +295,7 @@ class BotRunner:
                 state=self.state,
                 sigma_eff=sigma_eff,
                 price_analysis=price_analysis,
+                logger=self.logger,
             )
         return await handle_flat_tick(
             row=row,
@@ -281,6 +309,7 @@ class BotRunner:
             state=self.state,
             sigma_eff=sigma_eff,
             price_analysis=price_analysis,
+            logger=self.logger,
         )
 
     async def roll_window(self) -> bool:

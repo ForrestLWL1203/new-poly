@@ -81,6 +81,20 @@ class LoopRuntime:
             self.seen_repetitive_skips = set()
 
 
+async def _prefetch_live_order_params(*, token_side: str, token_id: str, market_slug: str, logger: JsonlLogger) -> dict[str, Any]:
+    result = await asyncio.to_thread(prefetch_order_params, token_id, raise_on_error=False)
+    if not result.get("ok"):
+        logger.write({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "event": "clob_prefetch_failed",
+            "market_slug": market_slug,
+            "token_side": token_side,
+            **result,
+            "action": "continue_without_prefetch",
+        })
+    return result
+
+
 async def _drain_dynamic_task(
     *,
     dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None,
@@ -299,6 +313,7 @@ async def _switch_to_next_window(
     state: StrategyState,
     loop: LoopRuntime,
     options: RuntimeOptions,
+    logger: JsonlLogger,
     next_window: Any | None = None,
 ) -> tuple[Any, WindowPrices]:
     if next_window is None:
@@ -308,8 +323,18 @@ async def _switch_to_next_window(
     loop.seen_repetitive_skips.clear()
     await asyncio.wait_for(feeds.stream.switch_tokens([next_window.up_token, next_window.down_token]), timeout=8.0)
     if options.mode == "live":
-        await asyncio.to_thread(prefetch_order_params, next_window.up_token)
-        await asyncio.to_thread(prefetch_order_params, next_window.down_token)
+        await _prefetch_live_order_params(
+            token_side="up",
+            token_id=next_window.up_token,
+            market_slug=next_window.slug,
+            logger=logger,
+        )
+        await _prefetch_live_order_params(
+            token_side="down",
+            token_id=next_window.down_token,
+            market_slug=next_window.slug,
+            logger=logger,
+        )
     return next_window, prices
 
 
@@ -364,6 +389,7 @@ async def _handle_window_close(
         state=state,
         loop=loop,
         options=options,
+        logger=logger,
         next_window=next_window,
     )
     return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, False)

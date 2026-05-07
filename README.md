@@ -176,6 +176,11 @@ Current default strategy behavior:
   `retry_interval_sec=0.0`.
 - A live CLOB `FAK no match` response is treated as `order_no_fill`, not a
   fatal bot error, and records the failed POST latency for later diagnostics.
+- Before every entry/exit FAK attempt, the bot writes an `order_intent` row with
+  side, token id, signal price, fair cap/floor, and amount/shares. The later
+  `entry`, `exit`, or `order_no_fill` row records the response. This keeps an
+  audit trail even if `POST /order` times out after Polymarket already matched
+  the order.
 - Global safety stops are intentionally simple. Current configs pause new
   entries for 3 completed windows after 5 consecutive losing closed trades.
   Existing positions can still exit during a pause. In live mode, if the CLOB
@@ -196,6 +201,11 @@ Current default strategy behavior:
   waiting on connection setup during FAK posting. This mutates the SDK's
   process-wide helper client and is intended for the current single-bot,
   single-account process model.
+- Live startup and window switches try to prefetch CLOB order metadata
+  (`get_tick_size`, `get_neg_risk`) for latency. These calls are diagnostics and
+  cache warmers only: if they time out, the bot logs `clob_prefetch_failed`
+  with `failed_operation` and continues. Actual order creation can still fall
+  back to SDK defaults or cached tick data.
 
 Paper smoke test:
 

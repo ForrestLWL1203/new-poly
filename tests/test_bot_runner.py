@@ -40,6 +40,14 @@ class DummyStream:
         self.switched.append(list(token_ids))
 
 
+class DummyGateway:
+    async def buy(self, *args, **kwargs):
+        return kwargs.get("result")
+
+    async def sell(self, *args, **kwargs):
+        return kwargs.get("result")
+
+
 def _window(slug: str, *, offset: int = 0) -> MarketWindow:
     start = dt.datetime(2026, 5, 6, 0, 0, tzinfo=dt.timezone.utc) + dt.timedelta(minutes=offset)
     return MarketWindow(
@@ -51,6 +59,153 @@ def _window(slug: str, *, offset: int = 0) -> MarketWindow:
         slug=slug,
         resolution_source="test",
     )
+
+
+def test_entry_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_flat_tick
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+        logger = DummyLogger()
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=130.0,
+            remaining_sec=170.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        decision = StrategyDecision(
+            action="enter",
+            reason="edge",
+            side="down",
+            model_prob=0.70,
+            price=0.37,
+            limit_price=0.56,
+            depth_limit_price=0.37,
+            best_ask=0.37,
+            edge=0.33,
+            phase="core",
+            required_edge=0.14,
+        )
+        gateway_started = asyncio.Event()
+        release_gateway = asyncio.Event()
+
+        class BlockingGateway:
+            async def buy(self, *args, **kwargs):
+                gateway_started.set()
+                await release_gateway.wait()
+                return ExecutionResult(True, filled_size=2.0, avg_price=0.37, message="MATCHED")
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_entry", lambda *_args, **_kwargs: decision)
+
+        task = asyncio.create_task(handle_flat_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=BlockingGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        ))
+        await gateway_started.wait()
+
+        assert logger.rows
+        assert logger.rows[0]["event"] == "order_intent"
+        assert logger.rows[0]["order_intent"] == "entry"
+        assert logger.rows[0]["entry_side"] == "down"
+        assert logger.rows[0]["limit_price"] == 0.56
+
+        release_gateway.set()
+        await task
+
+    asyncio.run(scenario())
+
+
+def test_exit_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_open_position_tick
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+        logger = DummyLogger()
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=150.0,
+            remaining_sec=150.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.record_entry(PositionSnapshot(
+            market_slug="m1",
+            token_side="down",
+            token_id=window.down_token,
+            entry_time=130.0,
+            entry_avg_price=0.37,
+            filled_shares=2.0,
+            entry_model_prob=0.70,
+            entry_edge=0.33,
+        ))
+        decision = StrategyDecision(
+            action="exit",
+            reason="logic_decay_exit",
+            side="down",
+            model_prob=0.30,
+            price=0.31,
+            limit_price=0.26,
+            profit_now=-0.06,
+        )
+        gateway_started = asyncio.Event()
+        release_gateway = asyncio.Event()
+
+        class BlockingGateway:
+            async def sell(self, *args, **kwargs):
+                gateway_started.set()
+                await release_gateway.wait()
+                return ExecutionResult(False, message="UNMATCHED")
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_exit", lambda *_args, **_kwargs: decision)
+
+        task = asyncio.create_task(handle_open_position_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=BlockingGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        ))
+        await gateway_started.wait()
+
+        assert logger.rows
+        assert logger.rows[0]["event"] == "order_intent"
+        assert logger.rows[0]["order_intent"] == "exit"
+        assert logger.rows[0]["exit_side"] == "down"
+        assert logger.rows[0]["exit_reason"] == "logic_decay_exit"
+        assert logger.rows[0]["shares"] == 2.0
+
+        release_gateway.set()
+        await task
+
+    asyncio.run(scenario())
 
 
 def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
@@ -178,6 +333,49 @@ def test_prepare_tick_context_collects_snapshot_and_row(monkeypatch) -> None:
         assert tick.row["sigma_source"] == "test_dvol"
         assert tick.price_analysis == {"s_price": 101.0, "k_price": 100.0}
         assert tick.reference_meta == {}
+
+    asyncio.run(scenario())
+
+
+def test_start_first_window_logs_live_prefetch_failures(monkeypatch) -> None:
+    async def scenario() -> None:
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+        ]))
+        runner = BotRunner(options)
+        runner.logger = DummyLogger()
+        feeds = FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream())
+        runner.startup_context = StartupContext(feeds=feeds, gateway=object())
+        window = _window("m1")
+        monkeypatch.setattr("new_poly.bot_runner.find_initial_window", lambda _series: window)
+
+        async def fake_start_market_feeds(**_kwargs):
+            return None
+
+        async def fake_warmup_binance(**_kwargs):
+            return None
+
+        async def fake_prefetch_live_order_params(**kwargs):
+            kwargs["logger"].write({
+                "event": "clob_prefetch_failed",
+                "market_slug": kwargs["market_slug"],
+                "token_side": kwargs["token_side"],
+                "failed_operation": "get_neg_risk",
+                "action": "continue_without_prefetch",
+            })
+            return {"ok": False}
+
+        monkeypatch.setattr("new_poly.bot_runner.start_market_feeds", fake_start_market_feeds)
+        monkeypatch.setattr("new_poly.bot_runner.warmup_binance", fake_warmup_binance)
+        monkeypatch.setattr("new_poly.bot_runner._prefetch_live_order_params", fake_prefetch_live_order_params)
+
+        await runner.start_first_window()
+
+        failures = [row for row in runner.logger.rows if row.get("event") == "clob_prefetch_failed"]
+        assert [row["token_side"] for row in failures] == ["up", "down"]
+        assert runner.active.window is window
 
     asyncio.run(scenario())
 
@@ -317,6 +515,7 @@ def test_switch_to_next_window_resets_state_and_stream(monkeypatch) -> None:
             state=state,
             loop=loop,
             options=options,
+            logger=DummyLogger(),
         )
 
         assert window is next_window
