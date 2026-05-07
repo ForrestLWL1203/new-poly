@@ -60,6 +60,8 @@ execution:
   batch_exit_min_notional_usd: 5
   batch_exit_slices: [0.4, 0.3, 1.0]
   batch_exit_extra_buffer_ticks: [0, 3, 6]
+  live_min_sell_shares: 0.01
+  live_min_sell_notional_usd: 0.0
 
 risk:
   consecutive_loss_limit: 5

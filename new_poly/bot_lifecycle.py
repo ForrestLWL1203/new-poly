@@ -52,6 +52,8 @@ def create_gateway(*, options: RuntimeOptions, cfg: BotConfig, feeds: FeedContex
             batch_exit_min_notional_usd=cfg.execution.batch_exit_min_notional_usd,
             batch_exit_slices=cfg.execution.batch_exit_slices,
             batch_exit_extra_buffer_ticks=cfg.execution.batch_exit_extra_buffer_ticks,
+            live_min_sell_shares=cfg.execution.live_min_sell_shares,
+            live_min_sell_notional_usd=cfg.execution.live_min_sell_notional_usd,
         )
     return PaperExecutionGateway(stream=feeds.stream, config=cfg.execution)
 

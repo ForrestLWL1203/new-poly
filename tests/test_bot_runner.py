@@ -208,6 +208,78 @@ def test_exit_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_dust_sell_result_closes_residual_without_crashing(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_open_position_tick
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper", "--analysis-logs"]))
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=150.0,
+            remaining_sec=150.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.record_entry(PositionSnapshot(
+            market_slug="m1",
+            token_side="down",
+            token_id=window.down_token,
+            entry_time=130.0,
+            entry_avg_price=0.76,
+            filled_shares=0.005787,
+            entry_model_prob=0.70,
+            entry_edge=0.33,
+        ))
+        decision = StrategyDecision(
+            action="exit",
+            reason="logic_decay_exit",
+            side="down",
+            model_prob=0.30,
+            price=0.64,
+            limit_price=0.64,
+        )
+
+        class DustGateway:
+            async def sell(self, *args, **kwargs):
+                return ExecutionResult(
+                    False,
+                    message="live dust sell skipped: shares below minimum",
+                    mode="live",
+                    attempt=0,
+                    total_latency_ms=0,
+                    timing={"dust_shares": 0.005787, "min_live_sell_shares": 0.01},
+                )
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_exit", lambda *_args, **_kwargs: decision)
+
+        await handle_open_position_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=DustGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=DummyLogger(),
+        )
+
+        assert row["event"] == "dust_position"
+        assert row["exit_reason"] == "dust_position"
+        assert state.open_position is None
+        assert row["exit_pnl"] == -0.0044
+
+    asyncio.run(scenario())
+
+
 def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
     async def scenario() -> None:
         options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))

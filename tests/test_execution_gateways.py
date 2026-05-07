@@ -46,8 +46,8 @@ class FakeStream:
 
 
 class SequencedLiveGateway(LiveFakExecutionGateway):
-    def __init__(self, responses, *, retry_interval_sec=0.0):
-        super().__init__(live_risk_ack=True, retry_interval_sec=retry_interval_sec)
+    def __init__(self, responses, *, retry_interval_sec=0.0, **kwargs):
+        super().__init__(live_risk_ack=True, retry_interval_sec=retry_interval_sec, **kwargs)
         self.responses = list(responses)
         self.calls = []
 
@@ -434,6 +434,20 @@ def test_live_sell_no_balance_is_not_an_order_attempt(monkeypatch) -> None:
     assert gateway.calls == []
 
 
+def test_live_sell_dust_shares_are_not_posted(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.005787)
+    gateway = SequencedLiveGateway([], live_min_sell_shares=0.01)
+
+    result = asyncio.run(gateway.sell("up", shares=0.005787, min_price=0.64, exit_reason="logic_decay_exit"))
+
+    assert result.success is False
+    assert result.attempt == 0
+    assert result.message == "live dust sell skipped: shares below minimum"
+    assert result.timing["dust_shares"] == pytest.approx(0.005787)
+    assert result.timing["min_live_sell_shares"] == pytest.approx(0.01)
+    assert gateway.calls == []
+
+
 def test_live_post_matched_without_fill_fields_is_success(monkeypatch) -> None:
     class Client:
         def create_market_order(self, args, options=None):
@@ -570,7 +584,7 @@ def test_paper_buy_records_compact_timing_telemetry() -> None:
     asyncio.run(scenario())
 
 
-def test_live_post_keeps_detailed_timing_empty(monkeypatch) -> None:
+def test_live_post_records_detailed_timing(monkeypatch) -> None:
     class Client:
         def create_market_order(self, args, options=None):
             return {"signed": True}
@@ -591,7 +605,10 @@ def test_live_post_keeps_detailed_timing_empty(monkeypatch) -> None:
     result = gateway._post("up", 1.0, "BUY", 0.60)
 
     assert result.success is True
-    assert result.timing == {}
+    assert result.timing["create_order_ms"] >= 0
+    assert result.timing["post_order_ms"] >= 0
+    assert result.timing["wall_latency_ms"] >= 0
+    assert result.timing["response_at_epoch_ms"] >= result.timing["sent_at_epoch_ms"]
 
 
 def test_paper_retry_uses_one_latency_plus_retry_interval() -> None:

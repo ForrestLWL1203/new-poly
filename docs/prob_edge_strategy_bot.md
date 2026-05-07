@@ -204,6 +204,8 @@ batch_exit_min_shares
 batch_exit_min_notional_usd
 batch_exit_slices
 batch_exit_extra_buffer_ticks
+live_min_sell_shares
+live_min_sell_notional_usd
 polymarket_price_enabled
 max_polymarket_price_age_sec
 polymarket_stale_reconnect_sec
@@ -532,6 +534,18 @@ side, signal price, fair cap or exit floor, and intended amount/shares. The
 subsequent `entry`, `exit`, `partial_exit`, or `order_no_fill` row records the
 response. If `POST /order` times out after Polymarket has already matched the
 order, the intent row still proves which order the bot attempted.
+
+Live FAK responses include timing telemetry under `order.timing` when available:
+`create_order_ms`, `post_order_ms`, `sent_at_epoch_ms`, `response_at_epoch_ms`,
+and `wall_latency_ms`. This separates local signing/build time from the actual
+CLOB `POST /order` round trip.
+
+Very small residual live positions are treated as dust. If remaining sellable
+shares are below `live_min_sell_shares` (default `0.01`) or below an optional
+`live_min_sell_notional_usd` threshold, the bot does not call `POST /order`.
+It emits `dust_position`, writes off the tiny residual at zero value, and keeps
+the process alive. This avoids CLOB `invalid amounts, maker and taker amount
+must be higher than 0` errors on sub-cent residual shares after partial exits.
 
 When analysis logs are enabled, the bot first writes a `config` row containing
 the non-secret strategy, execution, risk, and runtime parameters used for the run.

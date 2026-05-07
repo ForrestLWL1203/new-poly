@@ -140,6 +140,17 @@ async def handle_open_position_tick(
         if options.analysis_logs:
             row["position_before_exit"] = _position_log(exiting_position, compact=False)
             row["position_after_exit"] = _position_log(state.open_position, compact=False)
+    elif result.message.startswith("live dust sell skipped"):
+        pnl = state.record_exit(0.0, "dust_position", snap.age_sec)
+        row["event"] = "dust_position"
+        row["exit_reason"] = "dust_position"
+        row["exit_price"] = 0.0
+        row["exit_shares"] = _compact(exiting_position.filled_shares)
+        row["exit_pnl"] = _compact(pnl, 4)
+        row["order_intent"] = "exit"
+        if options.analysis_logs:
+            row["position_before_exit"] = _position_log(exiting_position, compact=False)
+            row["position_after_exit"] = _position_log(state.open_position, compact=False)
     elif (
         options.mode == "live"
         and cfg.risk.stop_on_live_no_sellable_balance

@@ -158,6 +158,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.batch_exit_min_notional_usd == 5.0
     assert opts.config.execution.batch_exit_slices == (0.4, 0.3, 1.0)
     assert opts.config.execution.batch_exit_extra_buffer_ticks == (0.0, 3.0, 6.0)
+    assert opts.config.execution.live_min_sell_shares == 0.01
+    assert opts.config.execution.live_min_sell_notional_usd == 0.0
     assert opts.config.execution.paper_latency_sec == 0.0
     assert opts.config.execution.retry_interval_sec == 0.0
     assert opts.config.interval_sec == 0.5

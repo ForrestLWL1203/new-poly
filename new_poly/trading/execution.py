@@ -33,6 +33,8 @@ class ExecutionConfig:
     batch_exit_min_notional_usd: float = 5.0
     batch_exit_slices: tuple[float, ...] = (0.4, 0.3, 1.0)
     batch_exit_extra_buffer_ticks: tuple[float, ...] = (0.0, 3.0, 6.0)
+    live_min_sell_shares: float = 0.01
+    live_min_sell_notional_usd: float = 0.0
 
     def normalization_warnings(self) -> tuple[str, ...]:
         warnings: list[str] = []
@@ -489,9 +491,53 @@ def _is_fak_no_match_error(exc: Exception) -> bool:
     return "no orders found to match" in text and "fak" in text
 
 
+def _is_invalid_amount_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "invalid amounts" in text and "maker and taker amount" in text
+
+
 def _order_id_from_error(exc: Exception) -> str | None:
     match = re.search(r"['\"]orderID['\"]\s*:\s*['\"]([^'\"]+)['\"]", str(exc))
     return match.group(1) if match else None
+
+
+def _live_dust_sell_result(
+    *,
+    shares: float,
+    min_price: float | None,
+    min_sell_shares: float,
+    min_sell_notional_usd: float,
+) -> ExecutionResult | None:
+    notional = shares * min_price if min_price is not None else None
+    if min_sell_shares > 0 and shares < min_sell_shares:
+        return ExecutionResult(
+            False,
+            message="live dust sell skipped: shares below minimum",
+            mode="live",
+            attempt=0,
+            total_latency_ms=0,
+            timing={
+                "dust_shares": shares,
+                "min_live_sell_shares": min_sell_shares,
+                "dust_notional_usd": notional,
+                "min_live_sell_notional_usd": min_sell_notional_usd,
+            },
+        )
+    if min_sell_notional_usd > 0 and notional is not None and notional < min_sell_notional_usd:
+        return ExecutionResult(
+            False,
+            message="live dust sell skipped: notional below minimum",
+            mode="live",
+            attempt=0,
+            total_latency_ms=0,
+            timing={
+                "dust_shares": shares,
+                "min_live_sell_shares": min_sell_shares,
+                "dust_notional_usd": notional,
+                "min_live_sell_notional_usd": min_sell_notional_usd,
+            },
+        )
+    return None
 
 
 class LiveFakExecutionGateway:
@@ -510,6 +556,8 @@ class LiveFakExecutionGateway:
         batch_exit_min_notional_usd: float = 5.0,
         batch_exit_slices: tuple[float, ...] = (0.4, 0.3, 1.0),
         batch_exit_extra_buffer_ticks: tuple[float, ...] = (0.0, 3.0, 6.0),
+        live_min_sell_shares: float = 0.01,
+        live_min_sell_notional_usd: float = 0.0,
     ) -> None:
         if not live_risk_ack:
             raise ValueError("live mode requires --i-understand-live-risk")
@@ -519,6 +567,8 @@ class LiveFakExecutionGateway:
         self.buy_retry_price_buffer_ticks = max(self.buy_price_buffer_ticks, float(buy_retry_price_buffer_ticks))
         self.sell_price_buffer_ticks = max(0.0, float(sell_price_buffer_ticks))
         self.sell_retry_price_buffer_ticks = max(self.sell_price_buffer_ticks, float(sell_retry_price_buffer_ticks))
+        self.live_min_sell_shares = max(0.0, float(live_min_sell_shares))
+        self.live_min_sell_notional_usd = max(0.0, float(live_min_sell_notional_usd))
         self.batch_config = ExecutionConfig(
             batch_exit_enabled=bool(batch_exit_enabled),
             batch_exit_min_shares=max(0.0, float(batch_exit_min_shares)),
@@ -527,6 +577,8 @@ class LiveFakExecutionGateway:
             batch_exit_extra_buffer_ticks=tuple(float(value) for value in batch_exit_extra_buffer_ticks),
             sell_price_buffer_ticks=self.sell_price_buffer_ticks,
             sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+            live_min_sell_shares=self.live_min_sell_shares,
+            live_min_sell_notional_usd=self.live_min_sell_notional_usd,
         )
 
     async def buy(
@@ -586,6 +638,14 @@ class LiveFakExecutionGateway:
                 total_latency_ms=0,
                 fatal_stop_reason="live_no_sellable_balance",
             )
+        dust = _live_dust_sell_result(
+            shares=amount,
+            min_price=min_price,
+            min_sell_shares=self.live_min_sell_shares,
+            min_sell_notional_usd=self.live_min_sell_notional_usd,
+        )
+        if dust is not None:
+            return dust
         last = ExecutionResult(False, message="live sell not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
@@ -619,6 +679,14 @@ class LiveFakExecutionGateway:
             amount = min(shares, balance or 0.0)
             if amount <= 0:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
+            dust = _live_dust_sell_result(
+                shares=amount,
+                min_price=min_price,
+                min_sell_shares=self.live_min_sell_shares,
+                min_sell_notional_usd=self.live_min_sell_notional_usd,
+            )
+            if dust is not None:
+                return _with_attempt(dust, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
         return last
 
     def _post_batch_sell(self, token_id: str, shares: float, min_price: float | None, exit_reason: str | None, attempt: int) -> ExecutionResult:
@@ -692,14 +760,28 @@ class LiveFakExecutionGateway:
         from py_clob_client_v2.order_builder.constants import BUY as SDK_BUY, SELL as SDK_SELL
 
         start = time.monotonic()
+        wall_start = time.time()
         client = get_client()
         sdk_side = SDK_BUY if side == BUY else SDK_SELL
         args = MarketOrderArgs(token_id=token_id, amount=amount, side=sdk_side, order_type=OrderType.FAK, price=price_hint or 0)
+        create_start = time.monotonic()
         signed = client.create_market_order(args, options=get_order_options(token_id))
+        create_order_ms = _ms_since(create_start)
+        post_start = time.monotonic()
+        sent_at_epoch_ms = round(time.time() * 1000)
         try:
             resp = client.post_order(signed, OrderType.FAK)
         except Exception as exc:
+            response_at_epoch_ms = round(time.time() * 1000)
+            post_order_ms = _ms_since(post_start)
             latency_ms = round((time.monotonic() - start) * 1000)
+            timing = {
+                "create_order_ms": create_order_ms,
+                "post_order_ms": post_order_ms,
+                "sent_at_epoch_ms": sent_at_epoch_ms,
+                "response_at_epoch_ms": response_at_epoch_ms,
+                "wall_latency_ms": response_at_epoch_ms - round(wall_start * 1000),
+            }
             if _is_fak_no_match_error(exc):
                 return ExecutionResult(
                     success=False,
@@ -708,8 +790,21 @@ class LiveFakExecutionGateway:
                     mode="live",
                     latency_ms=latency_ms,
                     total_latency_ms=latency_ms,
+                    timing=timing,
+                )
+            if _is_invalid_amount_error(exc):
+                return ExecutionResult(
+                    success=False,
+                    order_id=_order_id_from_error(exc),
+                    message="live invalid amount",
+                    mode="live",
+                    latency_ms=latency_ms,
+                    total_latency_ms=latency_ms,
+                    timing=timing,
                 )
             raise
+        response_at_epoch_ms = round(time.time() * 1000)
+        post_order_ms = _ms_since(post_start)
         latency_ms = round((time.monotonic() - start) * 1000)
         order_id = resp.get("orderID") or resp.get("orderId") or resp.get("id")
         filled = _safe_float(resp.get("sizeFilled", resp.get("filledSize", 0)))
@@ -726,4 +821,11 @@ class LiveFakExecutionGateway:
             mode="live",
             latency_ms=latency_ms,
             total_latency_ms=latency_ms,
+            timing={
+                "create_order_ms": create_order_ms,
+                "post_order_ms": post_order_ms,
+                "sent_at_epoch_ms": sent_at_epoch_ms,
+                "response_at_epoch_ms": response_at_epoch_ms,
+                "wall_latency_ms": response_at_epoch_ms - round(wall_start * 1000),
+            },
         )

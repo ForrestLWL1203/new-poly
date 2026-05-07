@@ -330,6 +330,8 @@ def load_bot_config(path: Path) -> BotConfig:
         batch_exit_min_notional_usd=float(_deep_get(raw, ("execution", "batch_exit_min_notional_usd"), 5.0)),
         batch_exit_slices=_float_tuple(_deep_get(raw, ("execution", "batch_exit_slices"), None), (0.4, 0.3, 1.0)),
         batch_exit_extra_buffer_ticks=_float_tuple(_deep_get(raw, ("execution", "batch_exit_extra_buffer_ticks"), None), (0.0, 3.0, 6.0)),
+        live_min_sell_shares=float(_deep_get(raw, ("execution", "live_min_sell_shares"), 0.01)),
+        live_min_sell_notional_usd=float(_deep_get(raw, ("execution", "live_min_sell_notional_usd"), 0.0)),
     )
     execution_warnings = execution_raw.normalization_warnings()
     execution = execution_raw.normalized()
@@ -414,6 +416,8 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
             batch_exit_min_notional_usd=cfg.execution.batch_exit_min_notional_usd,
             batch_exit_slices=cfg.execution.batch_exit_slices,
             batch_exit_extra_buffer_ticks=cfg.execution.batch_exit_extra_buffer_ticks,
+            live_min_sell_shares=cfg.execution.live_min_sell_shares,
+            live_min_sell_notional_usd=cfg.execution.live_min_sell_notional_usd,
         )
         cfg = replace(cfg, execution=execution, amount_usd=float(args.amount_usd))
     if args.interval_sec is not None:
