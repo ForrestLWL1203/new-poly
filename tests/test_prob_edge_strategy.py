@@ -326,6 +326,66 @@ def test_logic_decay_exit_blocks_same_side_reentry_during_cooldown() -> None:
     assert decision.reason == "logic_decay_cooldown"
 
 
+def test_risk_exit_blocks_same_side_reentry_during_cooldown() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, logic_decay_reentry_cooldown_sec=30.0)
+    state = StrategyState(current_market_slug="m1")
+    state.last_exit_reason = "polymarket_divergence_exit"
+    state.last_exit_side = "up"
+    state.last_exit_age_sec = 150.0
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=170.0,
+        remaining_sec=130.0,
+        s_price=100.2,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_ask_avg=0.40,
+        up_ask_limit=0.40,
+        up_best_ask=0.40,
+        up_ask_depth_ok=True,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        down_ask_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "risk_exit_cooldown"
+
+
+def test_profit_exit_does_not_block_same_side_reentry() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, logic_decay_reentry_cooldown_sec=30.0)
+    state = StrategyState(current_market_slug="m1")
+    state.last_exit_reason = "market_overprice_exit"
+    state.last_exit_side = "up"
+    state.last_exit_age_sec = 150.0
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=170.0,
+        remaining_sec=130.0,
+        s_price=100.2,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_ask_avg=0.40,
+        up_ask_limit=0.40,
+        up_best_ask=0.40,
+        up_ask_depth_ok=True,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        down_ask_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "enter"
+    assert decision.side == "up"
+
+
 def test_logic_decay_exit_cooldown_is_side_specific() -> None:
     cfg = EdgeConfig(core_required_edge=0.05, logic_decay_reentry_cooldown_sec=30.0)
     state = StrategyState(current_market_slug="m1")
