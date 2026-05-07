@@ -176,6 +176,12 @@ Current default strategy behavior:
   `retry_interval_sec=0.0`.
 - A live CLOB `FAK no match` response is treated as `order_no_fill`, not a
   fatal bot error, and records the failed POST latency for later diagnostics.
+- Global safety stops are intentionally simple. Current configs pause new
+  entries for 3 completed windows after 5 consecutive losing closed trades.
+  Existing positions can still exit during a pause. In live mode, if the CLOB
+  balance check says there are no sellable shares for an open position, the bot
+  writes `fatal_stop` and exits instead of continuing with a broken accounting
+  state.
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
 - Exits include logic decay, market-overprice exits, market-disagrees exits for
   late losing positions whose bid/model ratio deteriorates, final-60s defensive

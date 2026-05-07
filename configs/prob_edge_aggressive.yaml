@@ -69,6 +69,11 @@ execution:
   batch_exit_slices: [0.4, 0.3, 1.0]
   batch_exit_extra_buffer_ticks: [0, 3, 6]
 
+risk:
+  consecutive_loss_limit: 5
+  loss_pause_windows: 3
+  stop_on_live_no_sellable_balance: true
+
 runtime:
   interval_sec: 0.5
   warmup_timeout_sec: 8.0

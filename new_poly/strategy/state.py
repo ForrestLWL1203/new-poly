@@ -31,6 +31,10 @@ class StrategyState:
     last_exit_side: str | None = None
     last_exit_age_sec: float | None = None
     prob_history: list[tuple[float, float]] | None = None
+    consecutive_losses: int = 0
+    loss_pause_remaining_windows: int = 0
+    loss_pause_started_market_slug: str | None = None
+    fatal_stop_reason: str | None = None
 
     @property
     def has_position(self) -> bool:
@@ -110,3 +114,48 @@ class StrategyState:
             return None
         _ts, old_prob = max(candidates, key=lambda item: item[0])
         return model_prob - old_prob
+
+    def apply_closed_trade_risk(self, pnl: float, *, loss_limit: int, pause_windows: int) -> dict[str, object] | None:
+        if loss_limit <= 0:
+            return None
+        if pnl > 0:
+            self.consecutive_losses = 0
+            return {"event": "loss_streak_updated", "consecutive_losses": 0, "pnl": pnl}
+        if pnl == 0:
+            return None
+        self.consecutive_losses += 1
+        if self.consecutive_losses >= loss_limit and pause_windows > 0:
+            self.loss_pause_remaining_windows = max(self.loss_pause_remaining_windows, pause_windows)
+            self.loss_pause_started_market_slug = self.current_market_slug
+            return {
+                "event": "loss_pause_started",
+                "consecutive_losses": self.consecutive_losses,
+                "loss_limit": loss_limit,
+                "pause_windows": pause_windows,
+                "pause_remaining_windows": self.loss_pause_remaining_windows,
+                "pnl": pnl,
+            }
+        return {
+            "event": "loss_streak_updated",
+            "consecutive_losses": self.consecutive_losses,
+            "loss_limit": loss_limit,
+            "pnl": pnl,
+        }
+
+    def advance_loss_pause_after_window(self, market_slug: str) -> dict[str, object] | None:
+        if self.loss_pause_remaining_windows <= 0:
+            return None
+        if self.loss_pause_started_market_slug == market_slug:
+            return None
+        self.loss_pause_remaining_windows = max(0, self.loss_pause_remaining_windows - 1)
+        event = {
+            "event": "loss_pause_window",
+            "market_slug": market_slug,
+            "pause_remaining_windows": self.loss_pause_remaining_windows,
+            "consecutive_losses": self.consecutive_losses,
+        }
+        if self.loss_pause_remaining_windows == 0:
+            self.consecutive_losses = 0
+            self.loss_pause_started_market_slug = None
+            event["pause_completed"] = True
+        return event

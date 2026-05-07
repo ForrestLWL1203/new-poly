@@ -17,6 +17,16 @@ from new_poly.strategy.prob_edge import evaluate_entry, evaluate_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 
 
+def _apply_closed_trade_risk(row: dict[str, Any], *, state: StrategyState, cfg: BotConfig, pnl: float) -> None:
+    event = state.apply_closed_trade_risk(
+        pnl,
+        loss_limit=cfg.risk.consecutive_loss_limit,
+        pause_windows=cfg.risk.loss_pause_windows,
+    )
+    if event is not None:
+        row["risk_event"] = event
+
+
 async def handle_open_position_tick(
     *,
     row: dict[str, Any],
@@ -73,9 +83,20 @@ async def handle_open_position_tick(
         row["exit_price"] = _compact(result.avg_price)
         row["exit_shares"] = _compact(result.filled_size)
         row["exit_pnl"] = _compact(pnl, 4)
+        if closed:
+            _apply_closed_trade_risk(row, state=state, cfg=cfg, pnl=pnl)
         if options.analysis_logs:
             row["position_before_exit"] = _position_log(exiting_position, compact=False)
             row["position_after_exit"] = _position_log(state.open_position, compact=False)
+    elif (
+        options.mode == "live"
+        and cfg.risk.stop_on_live_no_sellable_balance
+        and result.fatal_stop_reason is not None
+    ):
+        state.fatal_stop_reason = result.fatal_stop_reason
+        row["event"] = "fatal_stop"
+        row["fatal_stop_reason"] = result.fatal_stop_reason
+        row["order_intent"] = "exit"
     else:
         row["event"] = "order_no_fill"
         row["order_intent"] = "exit"

@@ -726,6 +726,26 @@ def test_dynamic_entry_cli_overrides_config() -> None:
     assert enabled.config.edge.dynamic_entry_enabled is True
 
 
+def test_global_risk_config_defaults_and_cli_overrides() -> None:
+    parser = build_arg_parser()
+    default = build_runtime_options(parser.parse_args(["--once"]))
+    overridden = build_runtime_options(parser.parse_args([
+        "--once",
+        "--consecutive-loss-limit",
+        "7",
+        "--loss-pause-windows",
+        "4",
+        "--no-stop-on-live-no-sellable-balance",
+    ]))
+
+    assert default.config.risk.consecutive_loss_limit == 5
+    assert default.config.risk.loss_pause_windows == 3
+    assert default.config.risk.stop_on_live_no_sellable_balance is True
+    assert overridden.config.risk.consecutive_loss_limit == 7
+    assert overridden.config.risk.loss_pause_windows == 4
+    assert overridden.config.risk.stop_on_live_no_sellable_balance is False
+
+
 def test_entry_analysis_records_signal_and_fill_edges() -> None:
     decision = StrategyDecision(
         action="enter",

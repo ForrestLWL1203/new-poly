@@ -62,6 +62,7 @@ class ExecutionResult:
     attempt: int = 1
     total_latency_ms: int | None = None
     timing: dict[str, Any] = field(default_factory=dict)
+    fatal_stop_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -577,7 +578,14 @@ class LiveFakExecutionGateway:
         balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
         amount = min(shares, balance or 0.0)
         if amount <= 0:
-            return ExecutionResult(False, message="live no sellable balance", mode="live", attempt=0, total_latency_ms=0)
+            return ExecutionResult(
+                False,
+                message="live no sellable balance",
+                mode="live",
+                attempt=0,
+                total_latency_ms=0,
+                fatal_stop_reason="live_no_sellable_balance",
+            )
         last = ExecutionResult(False, message="live sell not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):

@@ -248,6 +248,8 @@ def _adverse_polymarket_divergence(snapshot: MarketSnapshot, position: PositionS
 def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConfig) -> StrategyDecision:
     if state.has_position:
         return StrategyDecision(action="skip", reason="already_holding")
+    if state.loss_pause_remaining_windows > 0:
+        return StrategyDecision(action="skip", reason="loss_pause")
     if state.entry_count >= cfg.max_entries_per_market:
         return StrategyDecision(action="skip", reason="max_entries")
     phase = required_edge_for_entry(snapshot, cfg)

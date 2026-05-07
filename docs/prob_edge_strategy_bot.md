@@ -91,6 +91,14 @@ python3 scripts/run_prob_edge_bot.py \
   for `logic_decay_reentry_cooldown_sec` seconds. Current configs use `30s`.
   The opposite side can still enter if it has fresh edge, and profit exits do
   not trigger this cooldown.
+- Global loss protection is separate from same-side cooldown. Current configs
+  use `risk.consecutive_loss_limit=5` and `risk.loss_pause_windows=3`: after 5
+  consecutive losing closed trades, the bot skips all new entries for the next
+  3 completed windows. Open positions still follow normal exit logic.
+- Live mode treats "no sellable balance" on an exit as a hard accounting
+  failure when `risk.stop_on_live_no_sellable_balance=true`. The bot writes a
+  `fatal_stop` row and exits instead of continuing after the position balance
+  has become unrecoverable.
 - Default notional is `$5` in the MVP profile. The aggressive/live-smoke
   profile uses `$1`.
 - Default max successful entries per market is `2`.
@@ -514,7 +522,7 @@ Idle long-running live ticks omit it to keep logs small. Full price-source
 diagnostics are reserved for analysis/order rows.
 
 When analysis logs are enabled, the bot first writes a `config` row containing
-the non-secret strategy, execution, and runtime parameters used for the run.
+the non-secret strategy, execution, risk, and runtime parameters used for the run.
 Rows also include BTC source diagnostics under `analysis.price_sources`, but
 only for the active pricing path:
 

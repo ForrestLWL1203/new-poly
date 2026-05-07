@@ -430,6 +430,7 @@ def test_live_sell_no_balance_is_not_an_order_attempt(monkeypatch) -> None:
     assert result.success is False
     assert result.attempt == 0
     assert result.total_latency_ms == 0
+    assert result.fatal_stop_reason == "live_no_sellable_balance"
     assert gateway.calls == []
 
 

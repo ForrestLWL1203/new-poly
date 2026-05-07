@@ -61,9 +61,17 @@ DEFAULT_DYNAMIC_STATE = REPO_ROOT / "data" / "prob-edge-dynamic-state.json"
 
 
 @dataclass(frozen=True)
+class RiskConfig:
+    consecutive_loss_limit: int = 5
+    loss_pause_windows: int = 3
+    stop_on_live_no_sellable_balance: bool = True
+
+
+@dataclass(frozen=True)
 class BotConfig:
     edge: EdgeConfig
     execution: ExecutionConfig
+    risk: RiskConfig
     amount_usd: float
     interval_sec: float
     warmup_timeout_sec: float
@@ -329,6 +337,11 @@ def load_bot_config(path: Path) -> BotConfig:
     return BotConfig(
         edge=edge,
         execution=execution,
+        risk=RiskConfig(
+            consecutive_loss_limit=max(0, int(_deep_get(raw, ("risk", "consecutive_loss_limit"), 5))),
+            loss_pause_windows=max(0, int(_deep_get(raw, ("risk", "loss_pause_windows"), 3))),
+            stop_on_live_no_sellable_balance=bool(_deep_get(raw, ("risk", "stop_on_live_no_sellable_balance"), True)),
+        ),
         amount_usd=amount_usd,
         interval_sec=float(_deep_get(raw, ("runtime", "interval_sec"), 0.5)),
         warmup_timeout_sec=float(_deep_get(raw, ("runtime", "warmup_timeout_sec"), 8.0)),
@@ -376,6 +389,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--polymarket-divergence-exit-bps", type=float)
     parser.add_argument("--dynamic-entry", dest="dynamic_entry_enabled", action="store_true", default=None)
     parser.add_argument("--no-dynamic-entry", dest="dynamic_entry_enabled", action="store_false")
+    parser.add_argument("--consecutive-loss-limit", type=int)
+    parser.add_argument("--loss-pause-windows", type=int)
+    parser.add_argument("--stop-on-live-no-sellable-balance", dest="stop_on_live_no_sellable_balance", action="store_true", default=None)
+    parser.add_argument("--no-stop-on-live-no-sellable-balance", dest="stop_on_live_no_sellable_balance", action="store_false")
     return parser
 
 
@@ -413,6 +430,15 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         cfg = replace(cfg, edge=replace(cfg.edge, polymarket_divergence_exit_bps=max(0.0, float(args.polymarket_divergence_exit_bps))))
     if args.dynamic_entry_enabled is not None:
         cfg = replace(cfg, edge=replace(cfg.edge, dynamic_entry_enabled=bool(args.dynamic_entry_enabled)))
+    if args.consecutive_loss_limit is not None:
+        cfg = replace(cfg, risk=replace(cfg.risk, consecutive_loss_limit=max(0, int(args.consecutive_loss_limit))))
+    if args.loss_pause_windows is not None:
+        cfg = replace(cfg, risk=replace(cfg.risk, loss_pause_windows=max(0, int(args.loss_pause_windows))))
+    if args.stop_on_live_no_sellable_balance is not None:
+        cfg = replace(cfg, risk=replace(
+            cfg.risk,
+            stop_on_live_no_sellable_balance=bool(args.stop_on_live_no_sellable_balance),
+        ))
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
     if args.dynamic_params and args.jsonl is None:
@@ -452,6 +478,7 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
             **asdict(cfg.execution),
             "amount_usd": cfg.amount_usd,
         },
+        "risk": asdict(cfg.risk),
         "runtime": {
             "interval_sec": cfg.interval_sec,
             "warmup_timeout_sec": cfg.warmup_timeout_sec,

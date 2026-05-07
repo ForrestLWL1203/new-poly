@@ -11,6 +11,7 @@ from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.market import MarketWindow
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.strategy.prob_edge import MarketSnapshot
+from new_poly.strategy.prob_edge import StrategyDecision
 from new_poly.strategy.dynamic_params import DynamicConfig, DynamicState, SignalProfile
 
 
@@ -54,7 +55,7 @@ def _window(slug: str, *, offset: int = 0) -> MarketWindow:
 
 def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
     async def scenario() -> None:
-        options = build_runtime_options(build_arg_parser().parse_args(["--once"]))
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
         runner = BotRunner(options)
         runner.logger = DummyLogger()
         stream = DummyStream()
@@ -177,6 +178,53 @@ def test_prepare_tick_context_collects_snapshot_and_row(monkeypatch) -> None:
         assert tick.row["sigma_source"] == "test_dvol"
         assert tick.price_analysis == {"s_price": 101.0, "k_price": 100.0}
         assert tick.reference_meta == {}
+
+    asyncio.run(scenario())
+
+
+def test_run_tick_stops_after_fatal_stop(monkeypatch) -> None:
+    async def scenario() -> None:
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+        runner = BotRunner(options)
+        runner.logger = DummyLogger()
+        feeds = FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream())
+        window = _window("m1")
+        runner.startup_context = StartupContext(feeds=feeds, gateway=object())
+        runner.context = StartedContext(feeds=feeds, gateway=object(), window=window, prices=WindowPrices(k_price=100.0))
+        runner.dvol = DvolRuntime(
+            state=DvolRefreshState(DvolSnapshot(
+                source="test_dvol",
+                currency="BTC",
+                dvol=60.0,
+                sigma=0.6,
+                timestamp_ms=1,
+                fetched_at=1.0,
+            )),
+            refresh_task=None,
+            refresh_market_slug=None,
+            next_refresh=999999999.0,
+        )
+        tick = type("Tick", (), {
+            "row": {"event": "fatal_stop", "market_slug": window.slug},
+            "snap": object(),
+            "sigma_eff": 0.6,
+            "price_analysis": {},
+            "reference_meta": {},
+        })()
+
+        async def fake_prepare_tick_context():
+            return tick
+
+        async def fake_handle_strategy_tick(**kwargs):
+            runner.state.fatal_stop_reason = "live_no_sellable_balance"
+            return StrategyDecision(action="skip", reason="fatal_stop")
+
+        monkeypatch.setattr(runner, "prepare_tick_context", fake_prepare_tick_context)
+        monkeypatch.setattr(runner, "handle_strategy_tick", fake_handle_strategy_tick)
+
+        should_stop = await runner.run_tick()
+
+        assert should_stop is True
 
     asyncio.run(scenario())
 

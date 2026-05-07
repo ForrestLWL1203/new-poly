@@ -247,7 +247,7 @@ def _settle_open_position_if_needed(
         pnl = state.record_settlement(settlement["winning_side"])
     else:
         pnl = state.record_exit(settled_position.entry_avg_price, "unsettled_missing_price")
-    logger.write({
+    row = {
         "ts": dt.datetime.now().astimezone().isoformat(),
         "mode": options.mode,
         "event": "settlement",
@@ -259,7 +259,15 @@ def _settle_open_position_if_needed(
         "position": settled_position.__dict__,
         "settlement_pnl": _compact(pnl, 4),
         "realized_pnl": _compact(state.realized_pnl, 4),
-    })
+    }
+    risk_event = state.apply_closed_trade_risk(
+        pnl,
+        loss_limit=cfg.risk.consecutive_loss_limit,
+        pause_windows=cfg.risk.loss_pause_windows,
+    )
+    if risk_event is not None:
+        row["risk_event"] = risk_event
+    logger.write(row)
 
 
 def _prune_logs_after_window_if_needed(
@@ -332,6 +340,13 @@ async def _handle_window_close(
     )
     if prices.k_price is not None:
         loop.completed_windows += 1
+    pause_event = state.advance_loss_pause_after_window(window.slug)
+    if pause_event is not None:
+        logger.write({
+            "ts": dt.datetime.now().astimezone().isoformat(),
+            "mode": options.mode,
+            **pause_event,
+        })
     _prune_logs_after_window_if_needed(loop=loop, logger=logger, options=options)
     if trigger_dynamic_analysis is not None:
         dynamic_task = trigger_dynamic_analysis(loop.completed_windows, window.slug, state.drawdown, cfg)

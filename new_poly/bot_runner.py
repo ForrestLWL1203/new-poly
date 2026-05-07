@@ -168,7 +168,7 @@ class BotRunner:
             price_analysis=tick.price_analysis,
         )
         self.write_tick_context(tick, decision)
-        return self.options.once
+        return self.options.once or self.state.fatal_stop_reason is not None
 
     async def prepare_tick_context(self) -> TickContext:
         await self.refresh_window_inputs()

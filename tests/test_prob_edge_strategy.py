@@ -65,6 +65,61 @@ def test_strategy_state_tracks_peak_pnl_and_drawdown() -> None:
     assert math.isclose(state.drawdown, -3.0)
 
 
+def test_strategy_state_pauses_after_consecutive_losses() -> None:
+    state = StrategyState(current_market_slug="m1")
+
+    events = [
+        state.apply_closed_trade_risk(-0.10, loss_limit=5, pause_windows=3)
+        for _ in range(4)
+    ]
+    assert [event["event"] for event in events] == ["loss_streak_updated"] * 4
+    assert state.consecutive_losses == 4
+    assert state.loss_pause_remaining_windows == 0
+
+    event = state.apply_closed_trade_risk(-0.10, loss_limit=5, pause_windows=3)
+
+    assert event["event"] == "loss_pause_started"
+    assert state.consecutive_losses == 5
+    assert state.loss_pause_remaining_windows == 3
+    assert state.loss_pause_started_market_slug == "m1"
+
+
+def test_strategy_state_loss_pause_consumes_future_windows_only() -> None:
+    state = StrategyState(current_market_slug="m1")
+    state.apply_closed_trade_risk(-0.10, loss_limit=1, pause_windows=3)
+
+    assert state.advance_loss_pause_after_window("m1") is None
+    assert state.loss_pause_remaining_windows == 3
+
+    event = state.advance_loss_pause_after_window("m2")
+
+    assert event is not None
+    assert event["event"] == "loss_pause_window"
+    assert event["pause_remaining_windows"] == 2
+
+
+def test_entry_skips_during_global_loss_pause() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05)
+    state = StrategyState(current_market_slug="m1", loss_pause_remaining_windows=2)
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=130.0,
+        remaining_sec=170.0,
+        s_price=101.0,
+        k_price=100.0,
+        sigma_eff=0.6,
+        up_best_ask=0.40,
+        up_ask_avg=0.40,
+        down_best_ask=0.60,
+        down_ask_avg=0.60,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "loss_pause"
+
+
 def test_strategy_state_partial_exit_keeps_remaining_position() -> None:
     state = StrategyState()
     state.record_entry(PositionSnapshot("m1", "up", "up-token", 1.0, 0.20, 100.0, 0.5, 0.3))
