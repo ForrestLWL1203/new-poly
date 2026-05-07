@@ -151,6 +151,13 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert not hasattr(opts.config.execution, "depth_safety_multiplier")
     assert opts.config.execution.buy_price_buffer_ticks == 2.0
     assert opts.config.execution.buy_retry_price_buffer_ticks == 4.0
+    assert opts.config.execution.buy_dynamic_buffer_enabled is True
+    assert opts.config.execution.buy_dynamic_buffer_attempt1_room_frac == 0.45
+    assert opts.config.execution.buy_dynamic_buffer_attempt2_room_frac == 0.65
+    assert opts.config.execution.buy_dynamic_buffer_attempt1_max_ticks == 5.0
+    assert opts.config.execution.buy_dynamic_buffer_attempt2_max_ticks == 8.0
+    assert opts.config.execution.buy_dynamic_buffer_min_reserved_edge == 0.02
+    assert opts.config.execution.buy_dynamic_buffer_reserved_room_frac == 0.25
     assert opts.config.execution.sell_price_buffer_ticks == 5.0
     assert opts.config.execution.sell_retry_price_buffer_ticks == 6.0
     assert opts.config.execution.batch_exit_enabled is True

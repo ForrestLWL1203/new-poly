@@ -26,6 +26,13 @@ class ExecutionConfig:
     retry_interval_sec: float = 0.0
     buy_price_buffer_ticks: float = 2.0
     buy_retry_price_buffer_ticks: float = 4.0
+    buy_dynamic_buffer_enabled: bool = True
+    buy_dynamic_buffer_attempt1_room_frac: float = 0.45
+    buy_dynamic_buffer_attempt2_room_frac: float = 0.65
+    buy_dynamic_buffer_attempt1_max_ticks: float = 5.0
+    buy_dynamic_buffer_attempt2_max_ticks: float = 8.0
+    buy_dynamic_buffer_min_reserved_edge: float = 0.02
+    buy_dynamic_buffer_reserved_room_frac: float = 0.25
     sell_price_buffer_ticks: float = 5.0
     sell_retry_price_buffer_ticks: float = 6.0
     batch_exit_enabled: bool = False
@@ -101,6 +108,42 @@ def _retry_skipped(result: ExecutionResult, *, attempt: int, total_latency_ms: i
 
 def _ms_since(start: float) -> int:
     return round((time.monotonic() - start) * 1000)
+
+
+def _dynamic_buy_price_hint(
+    token_id: str,
+    best_ask: float | None,
+    max_price: float | None,
+    *,
+    attempt: int,
+    enabled: bool,
+    fallback_buffer_ticks: float,
+    attempt1_room_frac: float,
+    attempt2_room_frac: float,
+    attempt1_max_ticks: float,
+    attempt2_max_ticks: float,
+    min_reserved_edge: float,
+    reserved_room_frac: float,
+) -> float | None:
+    if best_ask is None:
+        return None
+    if not enabled or max_price is None:
+        return buffer_buy_price_hint(token_id, best_ask, buffer_ticks=fallback_buffer_ticks, max_price=max_price)
+    tick = get_tick_size(token_id)
+    if tick <= 0:
+        tick = 0.01
+    fair_room = max(0.0, max_price - best_ask)
+    if fair_room <= 0:
+        return buffer_buy_price_hint(token_id, best_ask, buffer_ticks=fallback_buffer_ticks, max_price=max_price)
+    room_frac = attempt1_room_frac if attempt == 0 else attempt2_room_frac
+    max_ticks = attempt1_max_ticks if attempt == 0 else attempt2_max_ticks
+    reserved = max(0.0, min_reserved_edge, fair_room * max(0.0, reserved_room_frac))
+    max_hint = max(best_ask, max_price - reserved)
+    desired = best_ask + min(fair_room * max(0.0, room_frac), max(0.0, max_ticks) * tick)
+    capped = min(desired, max_hint, max_price)
+    rounded = min(capped, max_price)
+    rounded = round(max(0.0, min(1.0, rounded)), 6)
+    return rounded
 
 
 def _avg_buy_fill(levels: list[tuple[float, float]], amount_usd: float, max_price: float | None) -> tuple[float, float] | None:
@@ -549,6 +592,13 @@ class LiveFakExecutionGateway:
         retry_interval_sec: float = 0.0,
         buy_price_buffer_ticks: float = 2.0,
         buy_retry_price_buffer_ticks: float = 4.0,
+        buy_dynamic_buffer_enabled: bool = True,
+        buy_dynamic_buffer_attempt1_room_frac: float = 0.45,
+        buy_dynamic_buffer_attempt2_room_frac: float = 0.65,
+        buy_dynamic_buffer_attempt1_max_ticks: float = 5.0,
+        buy_dynamic_buffer_attempt2_max_ticks: float = 8.0,
+        buy_dynamic_buffer_min_reserved_edge: float = 0.02,
+        buy_dynamic_buffer_reserved_room_frac: float = 0.25,
         sell_price_buffer_ticks: float = 5.0,
         sell_retry_price_buffer_ticks: float = 6.0,
         batch_exit_enabled: bool = False,
@@ -565,11 +615,25 @@ class LiveFakExecutionGateway:
         self.retry_interval_sec = max(0.0, float(retry_interval_sec))
         self.buy_price_buffer_ticks = max(0.0, float(buy_price_buffer_ticks))
         self.buy_retry_price_buffer_ticks = max(self.buy_price_buffer_ticks, float(buy_retry_price_buffer_ticks))
+        self.buy_dynamic_buffer_enabled = bool(buy_dynamic_buffer_enabled)
+        self.buy_dynamic_buffer_attempt1_room_frac = max(0.0, float(buy_dynamic_buffer_attempt1_room_frac))
+        self.buy_dynamic_buffer_attempt2_room_frac = max(0.0, float(buy_dynamic_buffer_attempt2_room_frac))
+        self.buy_dynamic_buffer_attempt1_max_ticks = max(0.0, float(buy_dynamic_buffer_attempt1_max_ticks))
+        self.buy_dynamic_buffer_attempt2_max_ticks = max(0.0, float(buy_dynamic_buffer_attempt2_max_ticks))
+        self.buy_dynamic_buffer_min_reserved_edge = max(0.0, float(buy_dynamic_buffer_min_reserved_edge))
+        self.buy_dynamic_buffer_reserved_room_frac = max(0.0, float(buy_dynamic_buffer_reserved_room_frac))
         self.sell_price_buffer_ticks = max(0.0, float(sell_price_buffer_ticks))
         self.sell_retry_price_buffer_ticks = max(self.sell_price_buffer_ticks, float(sell_retry_price_buffer_ticks))
         self.live_min_sell_shares = max(0.0, float(live_min_sell_shares))
         self.live_min_sell_notional_usd = max(0.0, float(live_min_sell_notional_usd))
         self.batch_config = ExecutionConfig(
+            buy_dynamic_buffer_enabled=self.buy_dynamic_buffer_enabled,
+            buy_dynamic_buffer_attempt1_room_frac=self.buy_dynamic_buffer_attempt1_room_frac,
+            buy_dynamic_buffer_attempt2_room_frac=self.buy_dynamic_buffer_attempt2_room_frac,
+            buy_dynamic_buffer_attempt1_max_ticks=self.buy_dynamic_buffer_attempt1_max_ticks,
+            buy_dynamic_buffer_attempt2_max_ticks=self.buy_dynamic_buffer_attempt2_max_ticks,
+            buy_dynamic_buffer_min_reserved_edge=self.buy_dynamic_buffer_min_reserved_edge,
+            buy_dynamic_buffer_reserved_room_frac=self.buy_dynamic_buffer_reserved_room_frac,
             batch_exit_enabled=bool(batch_exit_enabled),
             batch_exit_min_shares=max(0.0, float(batch_exit_min_shares)),
             batch_exit_min_notional_usd=max(0.0, float(batch_exit_min_notional_usd)),
@@ -595,11 +659,19 @@ class LiveFakExecutionGateway:
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
             buffer_ticks = self.buy_price_buffer_ticks if attempt == 0 else self.buy_retry_price_buffer_ticks
-            price_hint = buffer_buy_price_hint(
+            price_hint = _dynamic_buy_price_hint(
                 token_id,
                 base_price,
-                buffer_ticks=buffer_ticks,
-                max_price=max_price,
+                max_price,
+                attempt=attempt,
+                enabled=self.buy_dynamic_buffer_enabled,
+                fallback_buffer_ticks=buffer_ticks,
+                attempt1_room_frac=self.buy_dynamic_buffer_attempt1_room_frac,
+                attempt2_room_frac=self.buy_dynamic_buffer_attempt2_room_frac,
+                attempt1_max_ticks=self.buy_dynamic_buffer_attempt1_max_ticks,
+                attempt2_max_ticks=self.buy_dynamic_buffer_attempt2_max_ticks,
+                min_reserved_edge=self.buy_dynamic_buffer_min_reserved_edge,
+                reserved_room_frac=self.buy_dynamic_buffer_reserved_room_frac,
             )
             last = await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)
             if last.success or attempt >= self.retry_count:

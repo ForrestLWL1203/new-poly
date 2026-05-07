@@ -199,6 +199,13 @@ polymarket_divergence_exit_bps
 polymarket_divergence_exit_min_age_sec
 retry_count
 retry_interval_sec
+buy_dynamic_buffer_enabled
+buy_dynamic_buffer_attempt1_room_frac
+buy_dynamic_buffer_attempt2_room_frac
+buy_dynamic_buffer_attempt1_max_ticks
+buy_dynamic_buffer_attempt2_max_ticks
+buy_dynamic_buffer_min_reserved_edge
+buy_dynamic_buffer_reserved_room_frac
 batch_exit_enabled
 batch_exit_min_shares
 batch_exit_min_notional_usd
@@ -546,6 +553,22 @@ shares are below `live_min_sell_shares` (default `0.01`) or below an optional
 It emits `dust_position`, writes off the tiny residual at zero value, and keeps
 the process alive. This avoids CLOB `invalid amounts, maker and taker amount
 must be higher than 0` errors on sub-cent residual shares after partial exits.
+
+BUY FAK hints use a dynamic fair-room buffer when
+`buy_dynamic_buffer_enabled=true`. Instead of always posting `best_ask + N`
+ticks, the bot computes `fair_room = fair_cap - best_ask`, reserves
+`max(buy_dynamic_buffer_min_reserved_edge, fair_room *
+buy_dynamic_buffer_reserved_room_frac)`, and posts:
+
+```text
+attempt 1 room = min(5 ticks, fair_room * 0.45)
+attempt 2 room = min(8 ticks, fair_room * 0.65)
+hint <= fair_cap - reserved_edge
+```
+
+This lets thick-edge entries compete more aggressively while keeping a reserved
+edge cushion. If disabled, BUY hints fall back to the fixed
+`buy_price_buffer_ticks` / `buy_retry_price_buffer_ticks` ladder.
 
 When analysis logs are enabled, the bot first writes a `config` row containing
 the non-secret strategy, execution, risk, and runtime parameters used for the run.
