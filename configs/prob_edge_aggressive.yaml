@@ -55,7 +55,6 @@ strategy:
 execution:
   amount_usd: 1.0
   depth_notional: 1.0
-  depth_safety_multiplier: 1.5
   paper_latency_sec: 0.0
   max_book_age_sec: 1.0
   retry_count: 1

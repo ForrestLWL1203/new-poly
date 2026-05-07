@@ -90,16 +90,12 @@ class MarketSnapshot:
     down_ask_avg: float | None = None
     up_ask_limit: float | None = None
     down_ask_limit: float | None = None
-    up_ask_safety_limit: float | None = None
-    down_ask_safety_limit: float | None = None
     up_best_ask: float | None = None
     down_best_ask: float | None = None
     up_bid_avg: float | None = None
     down_bid_avg: float | None = None
     up_bid_limit: float | None = None
     down_bid_limit: float | None = None
-    up_ask_depth_ok: bool = False
-    down_ask_depth_ok: bool = False
     up_bid_depth_ok: bool = False
     down_bid_depth_ok: bool = False
     up_book_age_ms: float | None = None

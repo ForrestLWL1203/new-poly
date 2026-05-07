@@ -294,11 +294,12 @@ Live-oriented configs add a one-tick fair-cap margin:
 fair_cap - best_ask >= min_fair_cap_margin_ticks * tick_size
 ```
 
-`ask_avg`, `ask_limit`, and `ask_safety_limit` are still logged for analysis and
-collector/backtest diagnostics, but they no longer gate BUY entry. This is
-deliberate: CLOB sometimes refreshes BBO without fresh depth snapshots. The
-strategy now trusts fresh BBO plus model cap, then lets FAK/no-fill decide
-whether executable depth actually exists.
+`ask_avg` and `ask_limit` are still logged for analysis, but they no longer gate
+BUY entry. Collector-only runs may also emit `ask_safety_limit` and
+`ask_depth_ok` as depth diagnostics. This is deliberate: CLOB sometimes
+refreshes BBO without fresh depth snapshots. The strategy now trusts fresh BBO
+plus model cap, then lets FAK/no-fill decide whether executable depth actually
+exists.
 
 Live FAK BUY price hinting uses best ask as the buffer base:
 

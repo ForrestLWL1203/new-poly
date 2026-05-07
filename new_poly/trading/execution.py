@@ -21,7 +21,6 @@ SELL = "SELL"
 class ExecutionConfig:
     paper_latency_sec: float = 0.0
     depth_notional: float = 5.0
-    depth_safety_multiplier: float = 1.0
     max_book_age_sec: float = 1.0
     retry_count: int = 1
     retry_interval_sec: float = 0.0

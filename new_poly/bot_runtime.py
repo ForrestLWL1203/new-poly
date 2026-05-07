@@ -310,7 +310,6 @@ def load_bot_config(path: Path) -> BotConfig:
     execution_raw = ExecutionConfig(
         paper_latency_sec=float(_deep_get(raw, ("execution", "paper_latency_sec"), 0.0)),
         depth_notional=float(_deep_get(raw, ("execution", "depth_notional"), 5.0)),
-        depth_safety_multiplier=float(_deep_get(raw, ("execution", "depth_safety_multiplier"), 1.0)),
         max_book_age_sec=float(_deep_get(raw, ("execution", "max_book_age_sec"), 1.0)),
         retry_count=int(_deep_get(raw, ("execution", "retry_count"), 1)),
         retry_interval_sec=float(_deep_get(raw, ("execution", "retry_interval_sec"), 0.0)),
@@ -386,7 +385,6 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         execution = ExecutionConfig(
             paper_latency_sec=cfg.execution.paper_latency_sec,
             depth_notional=float(args.amount_usd),
-            depth_safety_multiplier=cfg.execution.depth_safety_multiplier,
             max_book_age_sec=cfg.execution.max_book_age_sec,
             retry_count=cfg.execution.retry_count,
             retry_interval_sec=cfg.execution.retry_interval_sec,
@@ -834,15 +832,15 @@ def _snapshot(
         stream,
         window.up_token,
         cfg.amount_usd,
-        cfg.execution.depth_safety_multiplier,
         top_max_age_sec=cfg.execution.max_book_age_sec,
+        include_ask_safety=False,
     )
     down = token_state(
         stream,
         window.down_token,
         cfg.amount_usd,
-        cfg.execution.depth_safety_multiplier,
         top_max_age_sec=cfg.execution.max_book_age_sec,
+        include_ask_safety=False,
     )
     clob_ws = stream.diagnostics(reset_counts=True) if hasattr(stream, "diagnostics") else {}
     snap = MarketSnapshot(
@@ -856,16 +854,12 @@ def _snapshot(
         down_ask_avg=down["ask_avg"],
         up_ask_limit=up["ask_limit"],
         down_ask_limit=down["ask_limit"],
-        up_ask_safety_limit=up["ask_safety_limit"],
-        down_ask_safety_limit=down["ask_safety_limit"],
         up_best_ask=up["ask"],
         down_best_ask=down["ask"],
         up_bid_avg=up["bid_avg"],
         down_bid_avg=down["bid_avg"],
         up_bid_limit=up["bid_limit"],
         down_bid_limit=down["bid_limit"],
-        up_ask_depth_ok=bool(up["ask_depth_ok"]),
-        down_ask_depth_ok=bool(down["ask_depth_ok"]),
         up_bid_depth_ok=bool(up["bid_depth_ok"]),
         down_bid_depth_ok=bool(down["bid_depth_ok"]),
         up_book_age_ms=up["book_age_ms"],

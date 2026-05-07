@@ -18,6 +18,15 @@ from new_poly.strategy.probability import MIN_SECONDS_LEFT_FOR_D2, binary_probab
 from new_poly.strategy.state import StrategyState
 
 
+def test_market_snapshot_omits_unused_buy_depth_safety_fields() -> None:
+    fields = MarketSnapshot.__dataclass_fields__
+
+    assert "up_ask_safety_limit" not in fields
+    assert "down_ask_safety_limit" not in fields
+    assert "up_ask_depth_ok" not in fields
+    assert "down_ask_depth_ok" not in fields
+
+
 def test_binary_probability_direction_and_expiry() -> None:
     at_strike = binary_probability(100.0, 100.0, 0.6, 300.0)
     above = binary_probability(101.0, 100.0, 0.6, 300.0)
@@ -91,8 +100,6 @@ def test_entry_rejects_warmup_and_existing_position() -> None:
         down_ask_avg=0.45,
         up_bid_avg=0.44,
         down_bid_avg=0.44,
-        up_ask_depth_ok=True,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -133,8 +140,6 @@ def test_entry_selects_largest_edge_when_both_sides_pass() -> None:
         down_best_ask=0.38,
         up_bid_avg=0.40,
         down_bid_avg=0.38,
-        up_ask_depth_ok=True,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -165,10 +170,8 @@ def test_entry_ignores_depth_limit_when_best_ask_is_inside_formula_cap() -> None
         up_ask_avg=0.40,
         up_ask_limit=0.47,
         up_best_ask=0.38,
-        up_ask_depth_ok=True,
         down_ask_avg=0.90,
         down_ask_limit=0.90,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -194,10 +197,8 @@ def test_entry_rejects_when_formula_cap_has_less_than_one_tick_margin() -> None:
         up_ask_avg=0.40,
         up_ask_limit=0.451,
         up_best_ask=0.44,
-        up_ask_depth_ok=True,
         down_ask_avg=0.90,
         down_ask_limit=0.90,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -224,8 +225,6 @@ def test_entry_uses_fresh_best_ask_without_depth_accumulation() -> None:
         down_ask_avg=None,
         up_ask_limit=None,
         down_ask_limit=None,
-        up_ask_depth_ok=False,
-        down_ask_depth_ok=False,
         up_book_age_ms=5000.0,
         down_book_age_ms=5000.0,
     )
@@ -251,12 +250,9 @@ def test_entry_ignores_safety_depth_when_best_ask_is_inside_formula_cap() -> Non
         sigma_eff=2.0,
         up_ask_avg=0.40,
         up_ask_limit=0.42,
-        up_ask_safety_limit=0.47,
         up_best_ask=0.40,
-        up_ask_depth_ok=True,
         down_ask_avg=0.90,
         down_ask_limit=0.90,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -282,10 +278,8 @@ def test_entry_rejects_low_model_probability_even_when_edge_is_large() -> None:
         up_ask_avg=0.05,
         up_ask_limit=0.05,
         up_best_ask=0.05,
-        up_ask_depth_ok=True,
         down_ask_avg=0.90,
         down_ask_limit=0.90,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -308,12 +302,9 @@ def test_low_price_entry_requires_extra_edge_when_configured() -> None:
         sigma_eff=0.55,
         up_ask_avg=0.90,
         up_ask_limit=0.90,
-        up_ask_depth_ok=True,
         down_ask_avg=0.20,
         down_ask_limit=0.20,
-        down_ask_safety_limit=0.20,
         down_best_ask=0.20,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -347,10 +338,8 @@ def test_logic_decay_exit_blocks_same_side_reentry_during_cooldown() -> None:
         up_ask_avg=0.40,
         up_ask_limit=0.40,
         up_best_ask=0.40,
-        up_ask_depth_ok=True,
         down_ask_avg=0.90,
         down_ask_limit=0.90,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -377,10 +366,8 @@ def test_risk_exit_blocks_same_side_reentry_during_cooldown() -> None:
         up_ask_avg=0.40,
         up_ask_limit=0.40,
         up_best_ask=0.40,
-        up_ask_depth_ok=True,
         down_ask_avg=0.90,
         down_ask_limit=0.90,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -407,10 +394,8 @@ def test_profit_exit_does_not_block_same_side_reentry() -> None:
         up_ask_avg=0.40,
         up_ask_limit=0.40,
         up_best_ask=0.40,
-        up_ask_depth_ok=True,
         down_ask_avg=0.90,
         down_ask_limit=0.90,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -436,11 +421,9 @@ def test_logic_decay_exit_cooldown_is_side_specific() -> None:
         sigma_eff=0.55,
         up_ask_avg=0.90,
         up_ask_limit=0.90,
-        up_ask_depth_ok=True,
         down_ask_avg=0.40,
         down_ask_limit=0.40,
         down_best_ask=0.40,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -465,10 +448,8 @@ def test_entry_rejects_cross_source_divergence() -> None:
         up_ask_avg=0.30,
         up_ask_limit=0.30,
         up_best_ask=0.30,
-        up_ask_depth_ok=True,
         down_ask_avg=0.90,
         down_ask_limit=0.90,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )
@@ -493,8 +474,6 @@ def test_entry_uses_phase_edges_and_disables_late() -> None:
         up_best_ask=0.43,
         down_ask_avg=0.9,
         down_ask_limit=0.9,
-        up_ask_depth_ok=True,
-        down_ask_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     )

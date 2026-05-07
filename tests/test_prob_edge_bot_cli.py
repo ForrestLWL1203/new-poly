@@ -148,7 +148,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     args = build_arg_parser().parse_args(["--config", "configs/prob_edge_aggressive.yaml", "--once"])
     opts = build_runtime_options(args)
 
-    assert opts.config.execution.depth_safety_multiplier == 1.5
+    assert not hasattr(opts.config.execution, "depth_safety_multiplier")
     assert opts.config.execution.buy_price_buffer_ticks == 2.0
     assert opts.config.execution.buy_retry_price_buffer_ticks == 4.0
     assert opts.config.execution.sell_price_buffer_ticks == 5.0
@@ -571,6 +571,8 @@ def test_binance_proxy_is_model_source_while_polymarket_is_reference() -> None:
     assert meta["price_source"] == "proxy_binance"
     assert meta["polymarket_price"] == 100_080.0
     assert meta["lead_binance_vs_polymarket_usd"] == 40.0
+    assert "ask_safety_limit" not in meta["up"]
+    assert "ask_depth_ok" not in meta["up"]
     assert math.isclose(snap.polymarket_divergence_bps or 0.0, meta["polymarket_divergence_bps"], abs_tol=0.001)
 
 
