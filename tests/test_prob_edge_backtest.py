@@ -217,7 +217,7 @@ def test_backtest_entry_edge_matches_strategy_edge_and_records_fill_edge() -> No
     result = run_backtest(rows, BacktestConfig(amount_usd=10.0))
 
     trade = result.trades[0]
-    assert trade["entry_edge"] == trade["entry_model_prob"] - 0.39
+    assert trade["entry_edge"] == trade["entry_model_prob"] - rows[0]["up"]["ask"]
     assert trade["entry_edge_at_fill"] == trade["entry_model_prob"] - trade["entry_price"]
 
 
@@ -369,7 +369,7 @@ def test_backtest_replays_polymarket_divergence_exit_from_lead_field() -> None:
     assert result.trades[0]["exit_reason"] == "polymarket_divergence_exit"
 
 
-def test_backtest_rejects_entry_when_safety_depth_exceeds_formula_cap() -> None:
+def test_backtest_ignores_entry_safety_depth_when_best_ask_is_inside_formula_cap() -> None:
     rows = [_row("m1", 120, 100.10)]
     rows[0]["up"]["ask_avg"] = 0.20
     rows[0]["up"]["ask_limit"] = 0.20
@@ -377,7 +377,7 @@ def test_backtest_rejects_entry_when_safety_depth_exceeds_formula_cap() -> None:
 
     result = run_backtest(rows, BacktestConfig(core_required_edge=0.05))
 
-    assert result.summary["entries"] == 0
+    assert result.summary["entries"] == 1
 
 
 def test_backtest_config_passes_fair_cap_margin_to_strategy() -> None:

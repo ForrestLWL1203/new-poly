@@ -653,12 +653,14 @@ def _polymarket_reference_recovered_row(
     }
 
 
-def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str, str]]) -> bool:
+def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str, str]], *, analysis_logs: bool = True) -> bool:
     decision = row.get("decision")
     if not isinstance(decision, dict):
         return True
     if row.get("event") != "tick":
         return True
+    if row.get("mode") == "live" and not analysis_logs:
+        return False
     reason = decision.get("reason")
     one_per_window_reasons = {"outside_entry_time", "max_entries", "final_no_entry"}
     one_per_window_phase_reasons = {"edge_too_small"}
@@ -828,8 +830,20 @@ def _snapshot(
     lead_coinbase_side = side_vs_k(raw_coinbase_price, prices.k_price)
     lead_proxy_side = side_vs_k(raw_proxy_price, prices.k_price)
     lead_polymarket_side = side_vs_k(price.polymarket, prices.k_price)
-    up = token_state(stream, window.up_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
-    down = token_state(stream, window.down_token, cfg.amount_usd, cfg.execution.depth_safety_multiplier)
+    up = token_state(
+        stream,
+        window.up_token,
+        cfg.amount_usd,
+        cfg.execution.depth_safety_multiplier,
+        top_max_age_sec=cfg.execution.max_book_age_sec,
+    )
+    down = token_state(
+        stream,
+        window.down_token,
+        cfg.amount_usd,
+        cfg.execution.depth_safety_multiplier,
+        top_max_age_sec=cfg.execution.max_book_age_sec,
+    )
     clob_ws = stream.diagnostics(reset_counts=True) if hasattr(stream, "diagnostics") else {}
     snap = MarketSnapshot(
         market_slug=window.slug,

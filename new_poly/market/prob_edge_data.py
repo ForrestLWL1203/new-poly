@@ -374,7 +374,28 @@ def avg_price_for_notional(levels: list[tuple[float, float]], target_notional: f
     return compact_float(avg), notional >= target_notional - 1e-9, notional, compact_float(limit_price)
 
 
-def token_state(stream: PriceStream, token_id: str, depth_notional: float, depth_safety_multiplier: float = 1.0) -> dict[str, Any]:
+def _latest_best_bid(stream: PriceStream, token_id: str, top_max_age_sec: float | None) -> float | None:
+    try:
+        return stream.get_latest_best_bid(token_id, max_age_sec=top_max_age_sec)
+    except TypeError:
+        return stream.get_latest_best_bid(token_id)
+
+
+def _latest_best_ask(stream: PriceStream, token_id: str, top_max_age_sec: float | None) -> float | None:
+    try:
+        return stream.get_latest_best_ask(token_id, max_age_sec=top_max_age_sec)
+    except TypeError:
+        return stream.get_latest_best_ask(token_id)
+
+
+def token_state(
+    stream: PriceStream,
+    token_id: str,
+    depth_notional: float,
+    depth_safety_multiplier: float = 1.0,
+    *,
+    top_max_age_sec: float | None = None,
+) -> dict[str, Any]:
     asks = stream.get_latest_ask_levels_with_size(token_id)
     bids = stream.get_latest_bid_levels_with_size(token_id)
     ask_avg, ask_ok, _, ask_limit = avg_price_for_notional(asks, depth_notional)
@@ -382,8 +403,8 @@ def token_state(stream: PriceStream, token_id: str, depth_notional: float, depth
     safety_notional = depth_notional * max(1.0, float(depth_safety_multiplier))
     _, ask_safety_ok, _, ask_safety_limit = avg_price_for_notional(asks, safety_notional)
     return {
-        "bid": compact_float(stream.get_latest_best_bid(token_id)),
-        "ask": compact_float(stream.get_latest_best_ask(token_id)),
+        "bid": compact_float(_latest_best_bid(stream, token_id, top_max_age_sec)),
+        "ask": compact_float(_latest_best_ask(stream, token_id, top_max_age_sec)),
         "book_age_ms": compact_float((stream.get_latest_best_ask_age(token_id) or 0) * 1000, 0) if asks or bids else None,
         "ask_avg": ask_avg,
         "bid_avg": bid_avg,

@@ -96,6 +96,38 @@ def test_token_state_uses_safety_multiplier_without_changing_trade_average() -> 
     assert state["ask_depth_ok"] is True
 
 
+def test_token_state_can_require_fresh_top_of_book_without_depth() -> None:
+    class FakeStream:
+        def __init__(self):
+            self.max_age_args = []
+
+        def get_latest_ask_levels_with_size(self, token_id):
+            return []
+
+        def get_latest_bid_levels_with_size(self, token_id):
+            return []
+
+        def get_latest_best_bid(self, token_id, max_age_sec=None):
+            self.max_age_args.append(("bid", max_age_sec))
+            return 0.19
+
+        def get_latest_best_ask(self, token_id, max_age_sec=None):
+            self.max_age_args.append(("ask", max_age_sec))
+            return 0.20
+
+        def get_latest_best_ask_age(self, token_id):
+            return None
+
+    stream = FakeStream()
+    state = data_helpers.token_state(stream, "up", depth_notional=1.0, top_max_age_sec=1.0)
+
+    assert state["ask"] == 0.20
+    assert state["bid"] == 0.19
+    assert state["ask_avg"] is None
+    assert state["ask_depth_ok"] is False
+    assert ("ask", 1.0) in stream.max_age_args
+
+
 def test_window_tracker_counts_only_valid_windows() -> None:
     tracker = collector.WindowLimitTracker(limit=2)
 

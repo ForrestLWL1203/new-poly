@@ -258,15 +258,10 @@ def _exit_fill_price(decision, cfg: BacktestConfig) -> float | None:
 
 
 def _entry_fill_price_from_snapshot(decision, snap: MarketSnapshot, cfg: BacktestConfig) -> float | None:
-    if decision.side == "up":
-        depth_limit = snap.up_ask_limit
-    elif decision.side == "down":
-        depth_limit = snap.down_ask_limit
-    else:
-        depth_limit = None
-    if depth_limit is None:
+    base = decision.depth_limit_price if decision.depth_limit_price is not None else decision.price
+    if base is None:
         return None
-    fill_price = round(depth_limit + cfg.buy_slippage_ticks * cfg.tick_size, 6)
+    fill_price = round(base + cfg.buy_slippage_ticks * cfg.tick_size, 6)
     if decision.limit_price is not None and fill_price > decision.limit_price + 1e-12:
         return None
     return fill_price

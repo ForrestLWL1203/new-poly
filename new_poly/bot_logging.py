@@ -89,5 +89,5 @@ def write_tick_row(
         decision=decision,
     ):
         row["reference"] = reference_meta
-    if _should_write_row(row, loop.seen_repetitive_skips):
+    if _should_write_row(row, loop.seen_repetitive_skips, analysis_logs=options.analysis_logs):
         logger.write(row)

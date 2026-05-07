@@ -149,7 +149,7 @@ The replay uses:
 
 - `s_price`, `k_price`, `remaining_sec`
 - `volatility.sigma` as `sigma_eff`
-- `up/down.ask_avg` and `up/down.ask_limit` for entry
+- `up/down.ask` for entry
 - `up/down.bid_avg` and `up/down.bid_limit` for exit
 - `volatility_stale=true` as missing sigma, matching live behavior
 - `source_spread_bps` when present, so `cross_source_max_bps` can reproduce the
@@ -158,9 +158,10 @@ The replay uses:
   `polymarket_divergence_exit_bps` can reproduce the live Polymarket-reference
   risk exit
 
-Entry decisions still use size-aware `ask_avg` for edge screening, but simulated
-fills use the worse executable depth limit. If slippage pushes BUY above the
-fair cap (`model_prob - required_edge`), the fill is skipped.
+Entry decisions use fresh `ask`/best ask for edge screening. Replay no longer
+requires `ask_avg`, `ask_limit`, or `ask_safety_limit` to pass a BUY entry. If
+simulated BUY slippage pushes the hinted price above the fair cap
+(`model_prob - required_edge`), the fill is skipped.
 
 The backtest CLI exposes the live risk gates:
 
@@ -192,25 +193,23 @@ the FAK floor base. PnL on identical historical data will generally be higher
 than older conservative runs, so re-run grid scans before relying on old
 parameter rankings.
 
-When collector rows include `ask_safety_limit`, replay also enforces the current
-depth safety check: the safety-depth limit must remain inside the same fair cap.
-Older collector files that lack `ask_safety_limit` cannot reconstruct the newer
-`depth_safety_multiplier` filter because they do not contain full order-book
-levels; those files can still test fair-cap margin and slippage, but not the
-extra safety-depth requirement.
+Collector rows may still include `ask_avg`, `ask_limit`, and
+`ask_safety_limit`, but these are diagnostics after the BBO-based entry change.
+They are useful for analyzing how often FAK no-fill might happen, not for
+screening entries in replay.
 
 Trade fields keep both edge definitions:
 
 - `entry_edge`: strategy edge at signal time, matching live logs
-  (`model_prob - ask_avg`).
+  (`model_prob - ask`).
 - `entry_edge_at_fill`: edge after simulated fill price and slippage.
 
 `--min-entry-model-prob` mirrors the live entry-quality gate. It rejects
-low-probability, lottery-style candidates even when their `model_prob - ask_avg`
+low-probability, lottery-style candidates even when their `model_prob - ask`
 discount is large.
 
 `--low-price-extra-edge-threshold` and `--low-price-extra-edge` test the softer
-low-price guard. When the candidate `ask_avg` is below the threshold, replay
+low-price guard. When the candidate best ask is below the threshold, replay
 adds the extra edge to the current phase edge and also tightens the BUY fair
 cap. The default values are `0`, which disables the guard.
 

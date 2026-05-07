@@ -244,11 +244,11 @@ needs larger-sample validation.
 
 The bot keeps two separate prices for each candidate:
 
-- `price`: size-aware average executable price. This is used for edge:
+- `price`: current fresh best ask for BUY candidates. This is used for edge:
   `edge = model_prob - price`.
-- `depth_limit_price`: worst book level needed to fill the target notional.
-  For BUY this is the deepest ask level required to fill `amount_usd`; for
-  SELL this is the deepest bid level required to sell the held shares.
+- `depth_limit_price`: for BUY this is intentionally the same as `best_ask`.
+  The bot no longer pre-accumulates ask depth before posting FAK. For SELL this
+  remains the deepest bid level required to sell the held shares.
 - `limit_price`: formula-derived hard cap/floor used by execution. For BUY,
   `limit_price = model_prob - required_edge`. For SELL, it remains the
   executable bid floor returned by the exit quote.
@@ -257,7 +257,7 @@ For BUY, the formula probability acts as a maximum acceptable token price:
 
 ```text
 fair_cap = model_prob - required_edge
-edge = model_prob - ask_avg
+edge = model_prob - best_ask
 ```
 
 An entry is valid only when both are true:
@@ -265,18 +265,19 @@ An entry is valid only when both are true:
 ```text
 model_prob >= min_entry_model_prob
 edge >= required_edge
-ask_limit <= fair_cap
+best_ask + min_fair_cap_margin_ticks * tick_size <= fair_cap
 ```
 
-This prevents an average-cheap book from passing when the deepest required ask
-level is already more expensive than the model allows.
+The FAK buffer itself is not part of the edge calculation. It is an execution
+hint capped by `fair_cap`; if the live book cannot fill at that capped hint, the
+order becomes `order_no_fill` instead of widening beyond the model price.
 `min_entry_model_prob` is a separate quality gate: it rejects low-probability
 lottery-style entries even when their price discount is large.
 
 Low-priced tokens can be guarded without banning them outright:
 
 ```text
-if ask_avg < low_price_extra_edge_threshold:
+if best_ask < low_price_extra_edge_threshold:
     effective_required_edge = phase_required_edge + low_price_extra_edge
 ```
 
@@ -287,24 +288,22 @@ minimum entry price: recent paper data showed low-priced tokens can contain both
 the largest losses and the largest winners, so the current preference is to
 require more edge rather than discard the whole bucket.
 
-Live-oriented configs add two extra FAK quality guards:
+Live-oriented configs add a one-tick fair-cap margin:
 
 ```text
-fair_cap - ask_limit >= min_fair_cap_margin_ticks * tick_size
-ask_safety_limit <= fair_cap
+fair_cap - best_ask >= min_fair_cap_margin_ticks * tick_size
 ```
 
-`ask_safety_limit` is computed from
-`amount_usd * depth_safety_multiplier`. The bot still calculates `ask_avg` and
-`ask_limit` from the actual order notional, so the safety buffer does not
-artificially worsen the edge. It only requires extra executable depth inside the
-formula cap. The default aggressive/live-smoke profile uses a `1.5x` depth
-safety multiplier and a one-tick fair-cap margin.
+`ask_avg`, `ask_limit`, and `ask_safety_limit` are still logged for analysis and
+collector/backtest diagnostics, but they no longer gate BUY entry. This is
+deliberate: CLOB sometimes refreshes BBO without fresh depth snapshots. The
+strategy now trusts fresh BBO plus model cap, then lets FAK/no-fill decide
+whether executable depth actually exists.
 
-Live FAK BUY price hinting then uses the depth limit, not the first ask:
+Live FAK BUY price hinting uses best ask as the buffer base:
 
 ```text
-price_hint = min(ask_limit + buffer_ticks * tick_size, fair_cap)
+price_hint = min(best_ask + buffer_ticks * tick_size, fair_cap)
 ```
 
 Example:
@@ -314,17 +313,15 @@ model_prob = 0.62
 required_edge = 0.06
 fair_cap = 0.56
 
-ask book for target notional:
-0.50 covers part of the order
-0.54 completes the target notional
-
-ask_limit = 0.54
+best_ask = 0.50
 tick_size = 0.01
-price_hint = min(0.54 + 0.01, 0.56) = 0.55
+buffer_ticks = 2
+price_hint = min(0.50 + 0.02, 0.56) = 0.52
 ```
 
-Using `best_ask + buffer` would fail to cross the `0.54` level in this case, so
-the live order uses `depth_limit_price` as the buffer base.
+If enough depth exists up to the capped hint, FAK fills. If not, the bot records
+`order_no_fill`; on retry it refreshes the full strategy snapshot and only
+reposts if the same side still passes the entry rules.
 
 For SELL, the bot uses `bid_limit`, the lowest bid level needed to sell the
 position size, rather than `bid_avg`.
@@ -345,8 +342,8 @@ the same side still passes `evaluate_entry`; otherwise it is skipped instead of
 chasing a stale signal. The default hint ladder is configurable:
 
 ```text
-attempt 1: min(ask_limit + 2 ticks, fair_cap)
-attempt 2: min(ask_limit + 5 ticks, fair_cap)
+attempt 1: min(best_ask + 2 ticks, fair_cap)
+attempt 2: min(best_ask + 5 ticks, fair_cap)
 ```
 
 If `buy_retry_price_buffer_ticks` is configured below
@@ -572,7 +569,7 @@ entry/exit side
 entry/exit model probability
 entry signal price
 entry fair cap
-entry depth limit price
+entry depth limit price (same as best ask for BUY)
 entry signal edge
 entry edge at fill
 exit min price

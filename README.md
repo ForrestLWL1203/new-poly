@@ -153,16 +153,16 @@ Current default strategy behavior:
   from `240s` onward. Optional dynamic early entry is available but disabled by
   default; use `--dynamic-entry` to test `60-70s` strong-move and `70-100s`
   fast-move entry gates.
-- FAK entry decisions use size-aware `ask_avg` for edge, require
-  `ask_limit <= model_prob - required_edge`, require the formula cap to leave
-  at least one tick of executable margin, and send BUY hints as
-  `min(ask_limit + configured_tick_buffer, model_prob - required_edge)`.
+- FAK entry decisions use fresh top-of-book `best_ask` for edge and require
+  the formula cap to leave at least one configured tick of margin:
+  `best_ask + margin <= model_prob - required_edge`. BUY hints are then sent as
+  `min(best_ask + configured_tick_buffer, model_prob - required_edge)`.
 - If Coinbase is enabled and both sources have live prices that disagree beyond
   `cross_source_max_bps`, the bot treats the proxy input as unreliable and skips
   new entries with `source_divergence`.
-- Entry depth uses a safety multiplier in live-oriented configs: the bot may
-  buy `amount_usd`, but requires enough ask depth for
-  `amount_usd * depth_safety_multiplier` inside the same formula cap.
+- Ask-depth summaries are still logged for analysis, but BUY entry no longer
+  pre-accumulates depth. If the visible depth moves or is insufficient, FAK
+  simply returns `order_no_fill` and the retry path revalidates the signal.
 - FAK BUY gets one capped retry. The default live BUY hint ladder is
   `+2 ticks` then `+4 ticks`, always capped by formula fair cap. FAK SELL also
   retries once, but the sell floor
@@ -264,9 +264,9 @@ python3 scripts/backtest_prob_edge.py \
   --jsonl data/prob-edge-collector-96-20260503T162542Z.kprice-ok.jsonl
 ```
 
-The backtest uses collector summary fields (`ask_avg`, `ask_limit`, `bid_avg`,
-`bid_limit`) rather than full order-book replay, so it is suitable for
-parameter screening and strategy-shape validation, not exact fill simulation.
+The backtest uses collector summary fields (`ask`, `bid_avg`, `bid_limit`) rather
+than full order-book replay, so it is suitable for parameter screening and
+strategy-shape validation, not exact fill simulation.
 Add `--slippage-ticks N` to simulate FAK fills moving by `N` price ticks
 (`0.01` per tick by default) against both BUY and SELL.
 For win-rate-first scans, use `--grid-sort-by win_rate --grid-min-entries N`;

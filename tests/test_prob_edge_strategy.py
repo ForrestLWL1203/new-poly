@@ -145,14 +145,14 @@ def test_entry_selects_largest_edge_when_both_sides_pass() -> None:
     assert decision.side == "down"
     assert decision.edge > 0.05
     assert decision.best_ask == 0.38
-    assert decision.depth_limit_price == 0.41
+    assert decision.depth_limit_price == 0.38
     assert decision.limit_price is not None
     assert math.isclose(decision.limit_price, (decision.model_prob or 0.0) - 0.05, abs_tol=1e-12)
     assert decision.phase == "core"
     assert decision.required_edge == 0.05
 
 
-def test_entry_rejects_depth_limit_above_formula_cap() -> None:
+def test_entry_ignores_depth_limit_when_best_ask_is_inside_formula_cap() -> None:
     cfg = EdgeConfig(core_required_edge=0.05)
     state = StrategyState(current_market_slug="m1")
     snap = MarketSnapshot(
@@ -175,8 +175,10 @@ def test_entry_rejects_depth_limit_above_formula_cap() -> None:
 
     decision = evaluate_entry(snap, state, cfg)
 
-    assert decision.action == "skip"
-    assert decision.reason == "edge_too_small"
+    assert decision.action == "enter"
+    assert decision.side == "up"
+    assert decision.price == 0.38
+    assert decision.depth_limit_price == 0.38
 
 
 def test_entry_rejects_when_formula_cap_has_less_than_one_tick_margin() -> None:
@@ -206,7 +208,38 @@ def test_entry_rejects_when_formula_cap_has_less_than_one_tick_margin() -> None:
     assert decision.reason == "edge_too_small"
 
 
-def test_entry_rejects_when_safety_depth_exceeds_formula_cap() -> None:
+def test_entry_uses_fresh_best_ask_without_depth_accumulation() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, min_fair_cap_margin_ticks=1.0, entry_tick_size=0.01)
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.1,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_best_ask=0.20,
+        down_best_ask=0.90,
+        up_ask_avg=None,
+        down_ask_avg=None,
+        up_ask_limit=None,
+        down_ask_limit=None,
+        up_ask_depth_ok=False,
+        down_ask_depth_ok=False,
+        up_book_age_ms=5000.0,
+        down_book_age_ms=5000.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "enter"
+    assert decision.side == "up"
+    assert decision.price == 0.20
+    assert decision.best_ask == 0.20
+    assert decision.depth_limit_price == 0.20
+
+
+def test_entry_ignores_safety_depth_when_best_ask_is_inside_formula_cap() -> None:
     cfg = EdgeConfig(core_required_edge=0.05)
     state = StrategyState(current_market_slug="m1")
     snap = MarketSnapshot(
@@ -230,8 +263,10 @@ def test_entry_rejects_when_safety_depth_exceeds_formula_cap() -> None:
 
     decision = evaluate_entry(snap, state, cfg)
 
-    assert decision.action == "skip"
-    assert decision.reason == "edge_too_small"
+    assert decision.action == "enter"
+    assert decision.side == "up"
+    assert decision.price == 0.40
+    assert decision.depth_limit_price == 0.40
 
 
 def test_entry_rejects_low_model_probability_even_when_edge_is_large() -> None:

@@ -825,3 +825,20 @@ def test_final_no_entry_skip_logs_once_per_window() -> None:
     assert _should_write_row(row, seen) is True
     assert _should_write_row(row, seen) is False
     assert _should_write_row({**row, "market_slug": "m2"}, seen) is True
+
+
+def test_live_non_analysis_skips_do_not_write_tick_noise() -> None:
+    seen: set[tuple[str, str]] = set()
+    row = {
+        "event": "tick",
+        "mode": "live",
+        "market_slug": "m1",
+        "decision": {"action": "skip", "reason": "model_prob_too_low"},
+    }
+
+    assert _should_write_row(row, seen, analysis_logs=False) is False
+    assert _should_write_row({**row, "event": "entry"}, seen, analysis_logs=False) is True
+    assert _should_write_row({**row, "event": "exit"}, seen, analysis_logs=False) is True
+    assert _should_write_row({**row, "event": "order_no_fill"}, seen, analysis_logs=False) is True
+    assert _should_write_row({**row, "mode": "paper"}, seen, analysis_logs=False) is True
+    assert _should_write_row(row, seen, analysis_logs=True) is True
