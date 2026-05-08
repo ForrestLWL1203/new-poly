@@ -69,7 +69,14 @@ execution:
   buy_dynamic_buffer_min_reserved_edge: 0.02
   buy_dynamic_buffer_reserved_room_frac: 0.25
   sell_price_buffer_ticks: 5
-  sell_retry_price_buffer_ticks: 6
+  sell_retry_price_buffer_ticks: 8
+  sell_dynamic_buffer_enabled: true
+  sell_profit_exit_buffer_ticks: 5
+  sell_profit_exit_retry_buffer_ticks: 8
+  sell_risk_exit_buffer_ticks: 8
+  sell_risk_exit_retry_buffer_ticks: 12
+  sell_force_exit_buffer_ticks: 10
+  sell_force_exit_retry_buffer_ticks: 15
   batch_exit_enabled: true
   batch_exit_min_shares: 20
   batch_exit_min_notional_usd: 5

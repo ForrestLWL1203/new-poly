@@ -159,7 +159,11 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.buy_dynamic_buffer_min_reserved_edge == 0.02
     assert opts.config.execution.buy_dynamic_buffer_reserved_room_frac == 0.25
     assert opts.config.execution.sell_price_buffer_ticks == 5.0
-    assert opts.config.execution.sell_retry_price_buffer_ticks == 6.0
+    assert opts.config.execution.sell_retry_price_buffer_ticks == 8.0
+    assert opts.config.execution.sell_risk_exit_buffer_ticks == 8.0
+    assert opts.config.execution.sell_risk_exit_retry_buffer_ticks == 12.0
+    assert opts.config.execution.sell_force_exit_buffer_ticks == 10.0
+    assert opts.config.execution.sell_force_exit_retry_buffer_ticks == 15.0
     assert opts.config.execution.batch_exit_enabled is True
     assert opts.config.execution.batch_exit_min_shares == 20.0
     assert opts.config.execution.batch_exit_min_notional_usd == 5.0

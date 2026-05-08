@@ -333,7 +333,7 @@ def test_live_sell_profit_exit_uses_configured_aggressive_retry(monkeypatch) -> 
 
     assert result.success is True
     assert gateway.calls[0][3] == 0.35
-    assert gateway.calls[1][3] == 0.34
+    assert gateway.calls[1][3] == 0.32
 
 
 def test_live_sell_logic_decay_starts_below_bid_limit(monkeypatch) -> None:
@@ -347,8 +347,8 @@ def test_live_sell_logic_decay_starts_below_bid_limit(monkeypatch) -> None:
     result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="logic_decay_exit"))
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.35
-    assert gateway.calls[1][3] == 0.34
+    assert gateway.calls[0][3] == 0.32
+    assert gateway.calls[1][3] == 0.28
 
 
 def test_live_sell_polymarket_divergence_uses_configured_aggressive_retry(monkeypatch) -> None:
@@ -362,8 +362,8 @@ def test_live_sell_polymarket_divergence_uses_configured_aggressive_retry(monkey
     result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="polymarket_divergence_exit"))
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.35
-    assert gateway.calls[1][3] == 0.34
+    assert gateway.calls[0][3] == 0.32
+    assert gateway.calls[1][3] == 0.28
 
 
 def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) -> None:
@@ -389,8 +389,8 @@ def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) ->
     )
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.35
-    assert gateway.calls[1][3] == 0.44
+    assert gateway.calls[0][3] == 0.32
+    assert gateway.calls[1][3] == 0.38
 
 
 def test_live_batch_sell_posts_multiple_fak_slices(monkeypatch) -> None:
@@ -411,10 +411,10 @@ def test_live_batch_sell_posts_multiple_fak_slices(monkeypatch) -> None:
 
     assert result.success is True
     assert result.filled_size == pytest.approx(100.0)
-    assert result.avg_price == pytest.approx((40 * 0.33 + 30 * 0.30 + 30 * 0.27) / 100)
+    assert result.avg_price == pytest.approx((40 * 0.30 + 30 * 0.27 + 30 * 0.24) / 100)
     assert len(client.posted_batches) == 1
     assert [order.amount for order in client.market_orders] == [40.0, 30.0, 30.0]
-    assert [order.price for order in client.market_orders] == [0.33, 0.30, 0.27]
+    assert [order.price for order in client.market_orders] == [0.30, 0.27, 0.24]
 
 
 def test_live_sell_final_force_uses_emergency_ladder(monkeypatch) -> None:
@@ -428,8 +428,8 @@ def test_live_sell_final_force_uses_emergency_ladder(monkeypatch) -> None:
     result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="final_force_exit"))
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.35
-    assert gateway.calls[1][3] == 0.30
+    assert gateway.calls[0][3] == 0.30
+    assert gateway.calls[1][3] == 0.25
 
 
 def test_live_sell_price_hint_never_goes_below_one_tick(monkeypatch) -> None:

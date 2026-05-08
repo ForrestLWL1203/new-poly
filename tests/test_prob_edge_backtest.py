@@ -201,7 +201,7 @@ def test_backtest_final_force_exit_uses_emergency_floor() -> None:
     result = run_backtest(rows, BacktestConfig(amount_usd=10.0, sell_slippage_ticks=10))
 
     assert result.trades[0]["exit_reason"] == "final_force_exit"
-    assert result.trades[0]["exit_price"] == 0.63
+    assert result.trades[0]["exit_price"] == 0.60
 
 
 def test_backtest_entry_edge_matches_strategy_edge_and_records_fill_edge() -> None:

@@ -34,7 +34,14 @@ class ExecutionConfig:
     buy_dynamic_buffer_min_reserved_edge: float = 0.02
     buy_dynamic_buffer_reserved_room_frac: float = 0.25
     sell_price_buffer_ticks: float = 5.0
-    sell_retry_price_buffer_ticks: float = 6.0
+    sell_retry_price_buffer_ticks: float = 8.0
+    sell_dynamic_buffer_enabled: bool = True
+    sell_profit_exit_buffer_ticks: float = 5.0
+    sell_profit_exit_retry_buffer_ticks: float = 8.0
+    sell_risk_exit_buffer_ticks: float = 8.0
+    sell_risk_exit_retry_buffer_ticks: float = 12.0
+    sell_force_exit_buffer_ticks: float = 10.0
+    sell_force_exit_retry_buffer_ticks: float = 15.0
     batch_exit_enabled: bool = False
     batch_exit_min_shares: float = 20.0
     batch_exit_min_notional_usd: float = 5.0
@@ -49,6 +56,12 @@ class ExecutionConfig:
             warnings.append("buy_retry_price_buffer_ticks_clamped_to_buy_price_buffer_ticks")
         if self.sell_retry_price_buffer_ticks < self.sell_price_buffer_ticks:
             warnings.append("sell_retry_price_buffer_ticks_clamped_to_sell_price_buffer_ticks")
+        if self.sell_profit_exit_retry_buffer_ticks < self.sell_profit_exit_buffer_ticks:
+            warnings.append("sell_profit_exit_retry_buffer_ticks_clamped_to_sell_profit_exit_buffer_ticks")
+        if self.sell_risk_exit_retry_buffer_ticks < self.sell_risk_exit_buffer_ticks:
+            warnings.append("sell_risk_exit_retry_buffer_ticks_clamped_to_sell_risk_exit_buffer_ticks")
+        if self.sell_force_exit_retry_buffer_ticks < self.sell_force_exit_buffer_ticks:
+            warnings.append("sell_force_exit_retry_buffer_ticks_clamped_to_sell_force_exit_buffer_ticks")
         return tuple(warnings)
 
     def normalized(self) -> "ExecutionConfig":
@@ -56,6 +69,9 @@ class ExecutionConfig:
             self,
             buy_retry_price_buffer_ticks=max(self.buy_price_buffer_ticks, self.buy_retry_price_buffer_ticks),
             sell_retry_price_buffer_ticks=max(self.sell_price_buffer_ticks, self.sell_retry_price_buffer_ticks),
+            sell_profit_exit_retry_buffer_ticks=max(self.sell_profit_exit_buffer_ticks, self.sell_profit_exit_retry_buffer_ticks),
+            sell_risk_exit_retry_buffer_ticks=max(self.sell_risk_exit_buffer_ticks, self.sell_risk_exit_retry_buffer_ticks),
+            sell_force_exit_retry_buffer_ticks=max(self.sell_force_exit_buffer_ticks, self.sell_force_exit_retry_buffer_ticks),
         )
 
 
@@ -197,28 +213,56 @@ def _avg_sell_fill_partial(levels: list[tuple[float, float]], shares: float, min
     return sold, received / sold, remaining_levels
 
 
-def _sell_aggression_ticks(
+PROFIT_SELL_EXIT_REASONS = frozenset({
+    "market_overprice_exit",
+    "defensive_take_profit",
+    "profit_protection_exit",
+})
+
+RISK_SELL_EXIT_REASONS = frozenset({
+    "logic_decay_exit",
+    "risk_exit",
+    "market_disagrees_exit",
+    "polymarket_divergence_exit",
+    "prob_drop_exit",
+})
+
+
+def sell_aggression_ticks(
     exit_reason: str | None,
     attempt: int,
     *,
+    sell_dynamic_buffer_enabled: bool = True,
     sell_price_buffer_ticks: float,
     sell_retry_price_buffer_ticks: float,
+    sell_profit_exit_buffer_ticks: float = 5.0,
+    sell_profit_exit_retry_buffer_ticks: float = 8.0,
+    sell_risk_exit_buffer_ticks: float = 8.0,
+    sell_risk_exit_retry_buffer_ticks: float = 12.0,
+    sell_force_exit_buffer_ticks: float = 10.0,
+    sell_force_exit_retry_buffer_ticks: float = 15.0,
 ) -> float:
+    if not sell_dynamic_buffer_enabled:
+        if exit_reason == "final_force_exit":
+            return 5.0 if attempt == 0 else 10.0
+        if exit_reason in PROFIT_SELL_EXIT_REASONS or exit_reason in RISK_SELL_EXIT_REASONS:
+            return sell_price_buffer_ticks if attempt == 0 else sell_retry_price_buffer_ticks
+        return 0.0
     if exit_reason == "final_force_exit":
-        # Keep this emergency ladder fixed: the final seconds prioritize
-        # reducing expiry exposure over profile-level price preservation.
-        return 5.0 if attempt == 0 else 10.0
-    if exit_reason in {
-        "logic_decay_exit",
-        "risk_exit",
-        "market_overprice_exit",
-        "market_disagrees_exit",
-        "polymarket_divergence_exit",
-        "defensive_take_profit",
-        "profit_protection_exit",
-    }:
-        return sell_price_buffer_ticks if attempt == 0 else sell_retry_price_buffer_ticks
+        return sell_force_exit_buffer_ticks if attempt == 0 else sell_force_exit_retry_buffer_ticks
+    if exit_reason in RISK_SELL_EXIT_REASONS:
+        return sell_risk_exit_buffer_ticks if attempt == 0 else sell_risk_exit_retry_buffer_ticks
+    if exit_reason in PROFIT_SELL_EXIT_REASONS:
+        return sell_profit_exit_buffer_ticks if attempt == 0 else sell_profit_exit_retry_buffer_ticks
     return 0.0
+
+
+def _sell_aggression_ticks(
+    exit_reason: str | None,
+    attempt: int,
+    **kwargs,
+) -> float:
+    return sell_aggression_ticks(exit_reason, attempt, **kwargs)
 
 
 def _sell_price_hint(
@@ -227,8 +271,15 @@ def _sell_price_hint(
     exit_reason: str | None,
     attempt: int,
     *,
+    sell_dynamic_buffer_enabled: bool = True,
     sell_price_buffer_ticks: float = 5.0,
-    sell_retry_price_buffer_ticks: float = 6.0,
+    sell_retry_price_buffer_ticks: float = 8.0,
+    sell_profit_exit_buffer_ticks: float = 5.0,
+    sell_profit_exit_retry_buffer_ticks: float = 8.0,
+    sell_risk_exit_buffer_ticks: float = 8.0,
+    sell_risk_exit_retry_buffer_ticks: float = 12.0,
+    sell_force_exit_buffer_ticks: float = 10.0,
+    sell_force_exit_retry_buffer_ticks: float = 15.0,
     tick_size: float | None = None,
 ) -> float | None:
     if min_price is None:
@@ -239,8 +290,15 @@ def _sell_price_hint(
     buffered = min_price - _sell_aggression_ticks(
         exit_reason,
         attempt,
+        sell_dynamic_buffer_enabled=sell_dynamic_buffer_enabled,
         sell_price_buffer_ticks=sell_price_buffer_ticks,
         sell_retry_price_buffer_ticks=sell_retry_price_buffer_ticks,
+        sell_profit_exit_buffer_ticks=sell_profit_exit_buffer_ticks,
+        sell_profit_exit_retry_buffer_ticks=sell_profit_exit_retry_buffer_ticks,
+        sell_risk_exit_buffer_ticks=sell_risk_exit_buffer_ticks,
+        sell_risk_exit_retry_buffer_ticks=sell_risk_exit_retry_buffer_ticks,
+        sell_force_exit_buffer_ticks=sell_force_exit_buffer_ticks,
+        sell_force_exit_retry_buffer_ticks=sell_force_exit_retry_buffer_ticks,
     ) * tick
     floor = tick
     rounded = round(max(floor, buffered), 6)
@@ -254,8 +312,15 @@ def _sell_price_hint_with_extra(
     attempt: int,
     *,
     extra_buffer_ticks: float,
+    sell_dynamic_buffer_enabled: bool = True,
     sell_price_buffer_ticks: float = 5.0,
-    sell_retry_price_buffer_ticks: float = 6.0,
+    sell_retry_price_buffer_ticks: float = 8.0,
+    sell_profit_exit_buffer_ticks: float = 5.0,
+    sell_profit_exit_retry_buffer_ticks: float = 8.0,
+    sell_risk_exit_buffer_ticks: float = 8.0,
+    sell_risk_exit_retry_buffer_ticks: float = 12.0,
+    sell_force_exit_buffer_ticks: float = 10.0,
+    sell_force_exit_retry_buffer_ticks: float = 15.0,
     tick_size: float | None = None,
 ) -> float | None:
     if min_price is None:
@@ -266,8 +331,15 @@ def _sell_price_hint_with_extra(
     base_ticks = _sell_aggression_ticks(
         exit_reason,
         attempt,
+        sell_dynamic_buffer_enabled=sell_dynamic_buffer_enabled,
         sell_price_buffer_ticks=sell_price_buffer_ticks,
         sell_retry_price_buffer_ticks=sell_retry_price_buffer_ticks,
+        sell_profit_exit_buffer_ticks=sell_profit_exit_buffer_ticks,
+        sell_profit_exit_retry_buffer_ticks=sell_profit_exit_retry_buffer_ticks,
+        sell_risk_exit_buffer_ticks=sell_risk_exit_buffer_ticks,
+        sell_risk_exit_retry_buffer_ticks=sell_risk_exit_retry_buffer_ticks,
+        sell_force_exit_buffer_ticks=sell_force_exit_buffer_ticks,
+        sell_force_exit_retry_buffer_ticks=sell_force_exit_retry_buffer_ticks,
     )
     buffered = min_price - (base_ticks + max(0.0, extra_buffer_ticks)) * tick
     return round(max(tick, min(1.0, buffered)), 6)
@@ -369,8 +441,15 @@ class PaperExecutionGateway:
                 exit_reason,
                 attempt,
                 extra_buffer_ticks=extra,
+                sell_dynamic_buffer_enabled=self.config.sell_dynamic_buffer_enabled,
                 sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
+                sell_profit_exit_buffer_ticks=self.config.sell_profit_exit_buffer_ticks,
+                sell_profit_exit_retry_buffer_ticks=self.config.sell_profit_exit_retry_buffer_ticks,
+                sell_risk_exit_buffer_ticks=self.config.sell_risk_exit_buffer_ticks,
+                sell_risk_exit_retry_buffer_ticks=self.config.sell_risk_exit_retry_buffer_ticks,
+                sell_force_exit_buffer_ticks=self.config.sell_force_exit_buffer_ticks,
+                sell_force_exit_retry_buffer_ticks=self.config.sell_force_exit_retry_buffer_ticks,
                 # Paper uses BTC 5m's observed 0.01 tick for deterministic
                 # replay; live mode still asks CLOB for the token tick size.
                 tick_size=0.01,
@@ -488,8 +567,15 @@ class PaperExecutionGateway:
                 min_price,
                 exit_reason,
                 attempt,
+                sell_dynamic_buffer_enabled=self.config.sell_dynamic_buffer_enabled,
                 sell_price_buffer_ticks=self.config.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.config.sell_retry_price_buffer_ticks,
+                sell_profit_exit_buffer_ticks=self.config.sell_profit_exit_buffer_ticks,
+                sell_profit_exit_retry_buffer_ticks=self.config.sell_profit_exit_retry_buffer_ticks,
+                sell_risk_exit_buffer_ticks=self.config.sell_risk_exit_buffer_ticks,
+                sell_risk_exit_retry_buffer_ticks=self.config.sell_risk_exit_retry_buffer_ticks,
+                sell_force_exit_buffer_ticks=self.config.sell_force_exit_buffer_ticks,
+                sell_force_exit_retry_buffer_ticks=self.config.sell_force_exit_retry_buffer_ticks,
                 # Paper uses BTC 5m's observed 0.01 tick for deterministic
                 # replay; live mode still asks CLOB for the token tick size.
                 tick_size=0.01,
@@ -612,7 +698,14 @@ class LiveFakExecutionGateway:
         buy_dynamic_buffer_min_reserved_edge: float = 0.02,
         buy_dynamic_buffer_reserved_room_frac: float = 0.25,
         sell_price_buffer_ticks: float = 5.0,
-        sell_retry_price_buffer_ticks: float = 6.0,
+        sell_retry_price_buffer_ticks: float = 8.0,
+        sell_dynamic_buffer_enabled: bool = True,
+        sell_profit_exit_buffer_ticks: float = 5.0,
+        sell_profit_exit_retry_buffer_ticks: float = 8.0,
+        sell_risk_exit_buffer_ticks: float = 8.0,
+        sell_risk_exit_retry_buffer_ticks: float = 12.0,
+        sell_force_exit_buffer_ticks: float = 10.0,
+        sell_force_exit_retry_buffer_ticks: float = 15.0,
         batch_exit_enabled: bool = False,
         batch_exit_min_shares: float = 20.0,
         batch_exit_min_notional_usd: float = 5.0,
@@ -636,6 +729,13 @@ class LiveFakExecutionGateway:
         self.buy_dynamic_buffer_reserved_room_frac = max(0.0, float(buy_dynamic_buffer_reserved_room_frac))
         self.sell_price_buffer_ticks = max(0.0, float(sell_price_buffer_ticks))
         self.sell_retry_price_buffer_ticks = max(self.sell_price_buffer_ticks, float(sell_retry_price_buffer_ticks))
+        self.sell_dynamic_buffer_enabled = bool(sell_dynamic_buffer_enabled)
+        self.sell_profit_exit_buffer_ticks = max(0.0, float(sell_profit_exit_buffer_ticks))
+        self.sell_profit_exit_retry_buffer_ticks = max(self.sell_profit_exit_buffer_ticks, float(sell_profit_exit_retry_buffer_ticks))
+        self.sell_risk_exit_buffer_ticks = max(0.0, float(sell_risk_exit_buffer_ticks))
+        self.sell_risk_exit_retry_buffer_ticks = max(self.sell_risk_exit_buffer_ticks, float(sell_risk_exit_retry_buffer_ticks))
+        self.sell_force_exit_buffer_ticks = max(0.0, float(sell_force_exit_buffer_ticks))
+        self.sell_force_exit_retry_buffer_ticks = max(self.sell_force_exit_buffer_ticks, float(sell_force_exit_retry_buffer_ticks))
         self.live_min_sell_shares = max(0.0, float(live_min_sell_shares))
         self.live_min_sell_notional_usd = max(0.0, float(live_min_sell_notional_usd))
         self.batch_config = ExecutionConfig(
@@ -653,6 +753,13 @@ class LiveFakExecutionGateway:
             batch_exit_extra_buffer_ticks=tuple(float(value) for value in batch_exit_extra_buffer_ticks),
             sell_price_buffer_ticks=self.sell_price_buffer_ticks,
             sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+            sell_dynamic_buffer_enabled=self.sell_dynamic_buffer_enabled,
+            sell_profit_exit_buffer_ticks=self.sell_profit_exit_buffer_ticks,
+            sell_profit_exit_retry_buffer_ticks=self.sell_profit_exit_retry_buffer_ticks,
+            sell_risk_exit_buffer_ticks=self.sell_risk_exit_buffer_ticks,
+            sell_risk_exit_retry_buffer_ticks=self.sell_risk_exit_retry_buffer_ticks,
+            sell_force_exit_buffer_ticks=self.sell_force_exit_buffer_ticks,
+            sell_force_exit_retry_buffer_ticks=self.sell_force_exit_retry_buffer_ticks,
             live_min_sell_shares=self.live_min_sell_shares,
             live_min_sell_notional_usd=self.live_min_sell_notional_usd,
         )
@@ -738,8 +845,15 @@ class LiveFakExecutionGateway:
                 min_price,
                 exit_reason,
                 attempt,
+                sell_dynamic_buffer_enabled=self.sell_dynamic_buffer_enabled,
                 sell_price_buffer_ticks=self.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+                sell_profit_exit_buffer_ticks=self.sell_profit_exit_buffer_ticks,
+                sell_profit_exit_retry_buffer_ticks=self.sell_profit_exit_retry_buffer_ticks,
+                sell_risk_exit_buffer_ticks=self.sell_risk_exit_buffer_ticks,
+                sell_risk_exit_retry_buffer_ticks=self.sell_risk_exit_retry_buffer_ticks,
+                sell_force_exit_buffer_ticks=self.sell_force_exit_buffer_ticks,
+                sell_force_exit_retry_buffer_ticks=self.sell_force_exit_retry_buffer_ticks,
             )
             if _should_batch_exit(amount, min_price, self.batch_config):
                 last = await asyncio.to_thread(self._post_batch_sell, token_id, amount, min_price, exit_reason, attempt)
@@ -786,8 +900,15 @@ class LiveFakExecutionGateway:
                 min_price,
                 exit_reason,
                 attempt,
+                sell_dynamic_buffer_enabled=self.sell_dynamic_buffer_enabled,
                 sell_price_buffer_ticks=self.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+                sell_profit_exit_buffer_ticks=self.sell_profit_exit_buffer_ticks,
+                sell_profit_exit_retry_buffer_ticks=self.sell_profit_exit_retry_buffer_ticks,
+                sell_risk_exit_buffer_ticks=self.sell_risk_exit_buffer_ticks,
+                sell_risk_exit_retry_buffer_ticks=self.sell_risk_exit_retry_buffer_ticks,
+                sell_force_exit_buffer_ticks=self.sell_force_exit_buffer_ticks,
+                sell_force_exit_retry_buffer_ticks=self.sell_force_exit_retry_buffer_ticks,
             ) or min_price)
         parts = _batch_exit_parts(shares, self.batch_config.batch_exit_slices)
         extra_ticks = self.batch_config.batch_exit_extra_buffer_ticks
@@ -800,8 +921,15 @@ class LiveFakExecutionGateway:
                 exit_reason,
                 attempt,
                 extra_buffer_ticks=extra,
+                sell_dynamic_buffer_enabled=self.sell_dynamic_buffer_enabled,
                 sell_price_buffer_ticks=self.sell_price_buffer_ticks,
                 sell_retry_price_buffer_ticks=self.sell_retry_price_buffer_ticks,
+                sell_profit_exit_buffer_ticks=self.sell_profit_exit_buffer_ticks,
+                sell_profit_exit_retry_buffer_ticks=self.sell_profit_exit_retry_buffer_ticks,
+                sell_risk_exit_buffer_ticks=self.sell_risk_exit_buffer_ticks,
+                sell_risk_exit_retry_buffer_ticks=self.sell_risk_exit_retry_buffer_ticks,
+                sell_force_exit_buffer_ticks=self.sell_force_exit_buffer_ticks,
+                sell_force_exit_retry_buffer_ticks=self.sell_force_exit_retry_buffer_ticks,
             )
             args = MarketOrderArgs(token_id=token_id, amount=part, side=SDK_SELL, order_type=OrderType.FAK, price=price_hint or min_price or 0)
             signed = client.create_market_order(args, options=get_order_options(token_id))

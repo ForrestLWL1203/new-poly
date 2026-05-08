@@ -62,7 +62,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--buy-slippage-ticks", type=float)
     parser.add_argument("--sell-slippage-ticks", type=float)
     parser.add_argument("--sell-price-buffer-ticks", type=float, default=5.0)
-    parser.add_argument("--sell-retry-price-buffer-ticks", type=float, default=6.0)
+    parser.add_argument("--sell-retry-price-buffer-ticks", type=float, default=8.0)
+    parser.add_argument("--no-sell-dynamic-buffer", dest="sell_dynamic_buffer_enabled", action="store_false", default=True)
+    parser.add_argument("--sell-profit-exit-buffer-ticks", type=float, default=5.0)
+    parser.add_argument("--sell-profit-exit-retry-buffer-ticks", type=float, default=8.0)
+    parser.add_argument("--sell-risk-exit-buffer-ticks", type=float, default=8.0)
+    parser.add_argument("--sell-risk-exit-retry-buffer-ticks", type=float, default=12.0)
+    parser.add_argument("--sell-force-exit-buffer-ticks", type=float, default=10.0)
+    parser.add_argument("--sell-force-exit-retry-buffer-ticks", type=float, default=15.0)
     parser.add_argument("--prob-drop-exit-window-sec", type=float, default=0.0)
     parser.add_argument("--prob-drop-exit-threshold", type=float, default=0.0)
     parser.add_argument("--final-force-exit-remaining-sec", type=float, default=30.0)
@@ -112,6 +119,13 @@ def main() -> int:
         sell_slippage_ticks=sell_slippage_ticks,
         sell_price_buffer_ticks=args.sell_price_buffer_ticks,
         sell_retry_price_buffer_ticks=args.sell_retry_price_buffer_ticks,
+        sell_dynamic_buffer_enabled=args.sell_dynamic_buffer_enabled,
+        sell_profit_exit_buffer_ticks=args.sell_profit_exit_buffer_ticks,
+        sell_profit_exit_retry_buffer_ticks=args.sell_profit_exit_retry_buffer_ticks,
+        sell_risk_exit_buffer_ticks=args.sell_risk_exit_buffer_ticks,
+        sell_risk_exit_retry_buffer_ticks=args.sell_risk_exit_retry_buffer_ticks,
+        sell_force_exit_buffer_ticks=args.sell_force_exit_buffer_ticks,
+        sell_force_exit_retry_buffer_ticks=args.sell_force_exit_retry_buffer_ticks,
         prob_drop_exit_window_sec=args.prob_drop_exit_window_sec,
         prob_drop_exit_threshold=args.prob_drop_exit_threshold,
         final_force_exit_remaining_sec=args.final_force_exit_remaining_sec,

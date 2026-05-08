@@ -10,18 +10,7 @@ from typing import Any, Iterable
 
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, evaluate_entry, evaluate_exit, required_edge_for_entry
 from new_poly.strategy.state import PositionSnapshot, StrategyState
-
-
-NORMAL_SELL_EXIT_REASONS = {
-    "logic_decay_exit",
-    "risk_exit",
-    "market_overprice_exit",
-    "market_disagrees_exit",
-    "polymarket_divergence_exit",
-    "defensive_take_profit",
-    "profit_protection_exit",
-}
-FINAL_FORCE_SELL_BUFFER_TICKS = 5.0
+from new_poly.trading.execution import sell_aggression_ticks
 
 
 @dataclass(frozen=True)
@@ -48,7 +37,14 @@ class BacktestConfig:
     buy_slippage_ticks: float = 0.0
     sell_slippage_ticks: float = 0.0
     sell_price_buffer_ticks: float = 5.0
-    sell_retry_price_buffer_ticks: float = 6.0
+    sell_retry_price_buffer_ticks: float = 8.0
+    sell_dynamic_buffer_enabled: bool = True
+    sell_profit_exit_buffer_ticks: float = 5.0
+    sell_profit_exit_retry_buffer_ticks: float = 8.0
+    sell_risk_exit_buffer_ticks: float = 8.0
+    sell_risk_exit_retry_buffer_ticks: float = 12.0
+    sell_force_exit_buffer_ticks: float = 10.0
+    sell_force_exit_retry_buffer_ticks: float = 15.0
     prob_drop_exit_window_sec: float = 0.0
     prob_drop_exit_threshold: float = 0.0
     final_force_exit_remaining_sec: float = 30.0
@@ -240,14 +236,20 @@ def _exit_fill_price(decision, cfg: BacktestConfig) -> float | None:
     floor_base = decision.limit_price if decision.limit_price is not None else decision.price
     if executable is None or floor_base is None:
         return None
-    if decision.reason == "final_force_exit":
-        # Mirror the first live emergency floor. Replay does not simulate the
-        # retry ladder, so it uses attempt 1 for deterministic comparison.
-        strategy_floor_ticks = FINAL_FORCE_SELL_BUFFER_TICKS
-    elif decision.reason in NORMAL_SELL_EXIT_REASONS:
-        strategy_floor_ticks = cfg.sell_price_buffer_ticks
-    else:
-        strategy_floor_ticks = 0.0
+    # Replay does not simulate the retry ladder, so it mirrors attempt 1.
+    strategy_floor_ticks = sell_aggression_ticks(
+        decision.reason,
+        0,
+        sell_dynamic_buffer_enabled=cfg.sell_dynamic_buffer_enabled,
+        sell_price_buffer_ticks=cfg.sell_price_buffer_ticks,
+        sell_retry_price_buffer_ticks=cfg.sell_retry_price_buffer_ticks,
+        sell_profit_exit_buffer_ticks=cfg.sell_profit_exit_buffer_ticks,
+        sell_profit_exit_retry_buffer_ticks=cfg.sell_profit_exit_retry_buffer_ticks,
+        sell_risk_exit_buffer_ticks=cfg.sell_risk_exit_buffer_ticks,
+        sell_risk_exit_retry_buffer_ticks=cfg.sell_risk_exit_retry_buffer_ticks,
+        sell_force_exit_buffer_ticks=cfg.sell_force_exit_buffer_ticks,
+        sell_force_exit_retry_buffer_ticks=cfg.sell_force_exit_retry_buffer_ticks,
+    )
     fak_floor = floor_base - strategy_floor_ticks * cfg.tick_size
     slipped = executable - cfg.sell_slippage_ticks * cfg.tick_size
     return round(min(1.0, max(cfg.tick_size, fak_floor, slipped)), 6)
@@ -276,12 +278,19 @@ def _exit_fill_price_from_snapshot(decision, snap: MarketSnapshot, cfg: Backtest
         return None
     if not depth_ok or bid_avg is None or bid_limit is None:
         return None
-    if decision.reason == "final_force_exit":
-        strategy_floor_ticks = FINAL_FORCE_SELL_BUFFER_TICKS
-    elif decision.reason in NORMAL_SELL_EXIT_REASONS:
-        strategy_floor_ticks = cfg.sell_price_buffer_ticks
-    else:
-        strategy_floor_ticks = 0.0
+    strategy_floor_ticks = sell_aggression_ticks(
+        decision.reason,
+        0,
+        sell_dynamic_buffer_enabled=cfg.sell_dynamic_buffer_enabled,
+        sell_price_buffer_ticks=cfg.sell_price_buffer_ticks,
+        sell_retry_price_buffer_ticks=cfg.sell_retry_price_buffer_ticks,
+        sell_profit_exit_buffer_ticks=cfg.sell_profit_exit_buffer_ticks,
+        sell_profit_exit_retry_buffer_ticks=cfg.sell_profit_exit_retry_buffer_ticks,
+        sell_risk_exit_buffer_ticks=cfg.sell_risk_exit_buffer_ticks,
+        sell_risk_exit_retry_buffer_ticks=cfg.sell_risk_exit_retry_buffer_ticks,
+        sell_force_exit_buffer_ticks=cfg.sell_force_exit_buffer_ticks,
+        sell_force_exit_retry_buffer_ticks=cfg.sell_force_exit_retry_buffer_ticks,
+    )
     fak_floor = bid_limit - strategy_floor_ticks * cfg.tick_size
     slipped = bid_avg - cfg.sell_slippage_ticks * cfg.tick_size
     return round(min(1.0, max(cfg.tick_size, fak_floor, slipped)), 6)
