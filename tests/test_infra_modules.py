@@ -283,6 +283,9 @@ def test_dvol_snapshot_serializes_sigma_and_age() -> None:
 
 def test_clob_http_client_kwargs_enable_keepalive_pool(monkeypatch) -> None:
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.local:8080")
+    monkeypatch.setattr(clob_client_module.config, "CLOB_HTTP_TIMEOUT_SEC", 2.5)
+    monkeypatch.setattr(clob_client_module.config, "CLOB_HTTP_CONNECT_TIMEOUT_SEC", 0.8)
+    monkeypatch.setattr(clob_client_module.config, "CLOB_HTTP_POOL_TIMEOUT_SEC", 0.4)
 
     kwargs = _build_http_client_kwargs()
 
@@ -290,10 +293,10 @@ def test_clob_http_client_kwargs_enable_keepalive_pool(monkeypatch) -> None:
     assert kwargs["proxy"] == "http://proxy.local:8080"
     assert kwargs["limits"].max_connections == 100
     assert kwargs["limits"].max_keepalive_connections == 20
-    assert kwargs["timeout"].connect == 0.5
-    assert kwargs["timeout"].read == 1.0
-    assert kwargs["timeout"].write == 1.0
-    assert kwargs["timeout"].pool == 0.2
+    assert kwargs["timeout"].connect == 0.8
+    assert kwargs["timeout"].read == 2.5
+    assert kwargs["timeout"].write == 2.5
+    assert kwargs["timeout"].pool == 0.4
 
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
     monkeypatch.delenv("https_proxy", raising=False)

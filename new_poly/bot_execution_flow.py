@@ -10,7 +10,6 @@ from new_poly.bot_runtime import (
     BotConfig,
     RuntimeOptions,
     WindowPrices,
-    _refresh_entry_retry_params,
     _refresh_exit_retry_params,
 )
 from new_poly.strategy.prob_edge import evaluate_entry, evaluate_exit
@@ -156,15 +155,6 @@ async def handle_open_position_tick(
         if options.analysis_logs:
             row["position_before_exit"] = _position_log(exiting_position, compact=False)
             row["position_after_exit"] = _position_log(state.open_position, compact=False)
-    elif (
-        options.mode == "live"
-        and cfg.risk.stop_on_live_no_sellable_balance
-        and result.fatal_stop_reason is not None
-    ):
-        state.fatal_stop_reason = result.fatal_stop_reason
-        row["event"] = "fatal_stop"
-        row["fatal_stop_reason"] = result.fatal_stop_reason
-        row["order_intent"] = "exit"
     else:
         row["event"] = "order_no_fill"
         row["order_intent"] = "exit"
@@ -210,18 +200,6 @@ async def handle_flat_tick(
         max_price=decision.limit_price,
         best_ask=decision.best_ask,
         price_hint_base=decision.depth_limit_price,
-        retry_refresh=lambda attempt, side=decision.side: _refresh_entry_retry_params(
-            window=window,
-            prices=prices,
-            feed=feeds.binance,
-            coinbase_feed=feeds.coinbase,
-            polymarket_feed=feeds.polymarket,
-            stream=feeds.stream,
-            cfg=cfg,
-            sigma_eff=sigma_eff,
-            state=state,
-            original_side=side,
-        ),
     )
     row["order"] = result.__dict__
     if options.analysis_logs:
@@ -245,7 +223,7 @@ async def handle_flat_tick(
             row["position_after_entry"] = _position_log(state.open_position, compact=False)
     elif (
         options.mode == "live"
-        and cfg.risk.stop_on_live_no_sellable_balance
+        and cfg.risk.stop_on_live_insufficient_cash_balance
         and result.fatal_stop_reason is not None
     ):
         state.fatal_stop_reason = result.fatal_stop_reason

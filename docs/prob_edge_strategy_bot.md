@@ -95,10 +95,12 @@ python3 scripts/run_prob_edge_bot.py \
   use `risk.consecutive_loss_limit=5` and `risk.loss_pause_windows=3`: after 5
   consecutive losing closed trades, the bot skips all new entries for the next
   3 completed windows. Open positions still follow normal exit logic.
-- Live mode treats "no sellable balance" on an exit as a hard accounting
-  failure when `risk.stop_on_live_no_sellable_balance=true`. The bot writes a
-  `fatal_stop` row and exits instead of continuing after the position balance
-  has become unrecoverable.
+- Live mode treats insufficient cash balance on BUY as a hard accounting
+  failure when `risk.stop_on_live_insufficient_cash_balance=true`. The bot
+  writes a `fatal_stop` row and exits instead of continuing after the trading
+  balance is exhausted. SELL-side missing token balance is handled as a soft
+  reconciliation/no-fill path because it can happen after the position was
+  already reduced externally or by a previous uncertain POST.
 - Default notional is `$5` in the MVP profile. The aggressive/live-smoke
   profile uses `$1`.
 - Default max successful entries per market is `2`.
@@ -200,12 +202,8 @@ polymarket_divergence_exit_min_age_sec
 retry_count
 retry_interval_sec
 buy_dynamic_buffer_enabled
-buy_dynamic_buffer_attempt1_room_frac
-buy_dynamic_buffer_attempt2_room_frac
 buy_dynamic_buffer_attempt1_max_ticks
 buy_dynamic_buffer_attempt2_max_ticks
-buy_dynamic_buffer_min_reserved_edge
-buy_dynamic_buffer_reserved_room_frac
 batch_exit_enabled
 batch_exit_min_shares
 batch_exit_min_notional_usd
@@ -559,14 +557,12 @@ reductions.
 
 BUY FAK hints use a dynamic fair-room buffer when
 `buy_dynamic_buffer_enabled=true`. Instead of always posting `best_ask + N`
-ticks, the bot computes `fair_room = fair_cap - best_ask`, reserves
-`max(buy_dynamic_buffer_min_reserved_edge, fair_room *
-buy_dynamic_buffer_reserved_room_frac)`, and posts:
+ticks, the bot clamps the attempt-specific max tick buffer to the current
+`fair_cap`:
 
 ```text
-attempt 1 room = min(5 ticks, fair_room * 0.45)
-attempt 2 room = min(8 ticks, fair_room * 0.65)
-hint <= fair_cap - reserved_edge
+attempt 1 hint = min(fair_cap, best_ask + 5 ticks)
+attempt 2 hint = min(fair_cap, best_ask + 8 ticks)
 ```
 
 This lets thick-edge entries compete more aggressively while keeping a reserved

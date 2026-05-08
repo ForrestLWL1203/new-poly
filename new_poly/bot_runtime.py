@@ -49,7 +49,6 @@ from new_poly.strategy.dynamic_params import (
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import (
-    BuyRetryParams,
     ExecutionConfig,
     ExecutionResult,
     SellRetryParams,
@@ -64,7 +63,7 @@ DEFAULT_DYNAMIC_STATE = REPO_ROOT / "data" / "prob-edge-dynamic-state.json"
 class RiskConfig:
     consecutive_loss_limit: int = 5
     loss_pause_windows: int = 3
-    stop_on_live_no_sellable_balance: bool = True
+    stop_on_live_insufficient_cash_balance: bool = True
 
 
 @dataclass(frozen=True)
@@ -326,12 +325,8 @@ def load_bot_config(path: Path) -> BotConfig:
         buy_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_price_buffer_ticks"), 2.0)),
         buy_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "buy_retry_price_buffer_ticks"), 4.0)),
         buy_dynamic_buffer_enabled=bool(_deep_get(raw, ("execution", "buy_dynamic_buffer_enabled"), True)),
-        buy_dynamic_buffer_attempt1_room_frac=float(_deep_get(raw, ("execution", "buy_dynamic_buffer_attempt1_room_frac"), 0.45)),
-        buy_dynamic_buffer_attempt2_room_frac=float(_deep_get(raw, ("execution", "buy_dynamic_buffer_attempt2_room_frac"), 0.65)),
         buy_dynamic_buffer_attempt1_max_ticks=float(_deep_get(raw, ("execution", "buy_dynamic_buffer_attempt1_max_ticks"), 5.0)),
         buy_dynamic_buffer_attempt2_max_ticks=float(_deep_get(raw, ("execution", "buy_dynamic_buffer_attempt2_max_ticks"), 8.0)),
-        buy_dynamic_buffer_min_reserved_edge=float(_deep_get(raw, ("execution", "buy_dynamic_buffer_min_reserved_edge"), 0.02)),
-        buy_dynamic_buffer_reserved_room_frac=float(_deep_get(raw, ("execution", "buy_dynamic_buffer_reserved_room_frac"), 0.25)),
         sell_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_price_buffer_ticks"), 5.0)),
         sell_retry_price_buffer_ticks=float(_deep_get(raw, ("execution", "sell_retry_price_buffer_ticks"), 8.0)),
         sell_dynamic_buffer_enabled=bool(_deep_get(raw, ("execution", "sell_dynamic_buffer_enabled"), True)),
@@ -358,7 +353,11 @@ def load_bot_config(path: Path) -> BotConfig:
         risk=RiskConfig(
             consecutive_loss_limit=max(0, int(_deep_get(raw, ("risk", "consecutive_loss_limit"), 5))),
             loss_pause_windows=max(0, int(_deep_get(raw, ("risk", "loss_pause_windows"), 3))),
-            stop_on_live_no_sellable_balance=bool(_deep_get(raw, ("risk", "stop_on_live_no_sellable_balance"), True)),
+            stop_on_live_insufficient_cash_balance=bool(_deep_get(
+                raw,
+                ("risk", "stop_on_live_insufficient_cash_balance"),
+                _deep_get(raw, ("risk", "stop_on_live_no_sellable_balance"), True),
+            )),
         ),
         amount_usd=amount_usd,
         interval_sec=float(_deep_get(raw, ("runtime", "interval_sec"), 0.5)),
@@ -409,47 +408,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-dynamic-entry", dest="dynamic_entry_enabled", action="store_false")
     parser.add_argument("--consecutive-loss-limit", type=int)
     parser.add_argument("--loss-pause-windows", type=int)
-    parser.add_argument("--stop-on-live-no-sellable-balance", dest="stop_on_live_no_sellable_balance", action="store_true", default=None)
-    parser.add_argument("--no-stop-on-live-no-sellable-balance", dest="stop_on_live_no_sellable_balance", action="store_false")
+    parser.add_argument("--stop-on-live-insufficient-cash-balance", dest="stop_on_live_insufficient_cash_balance", action="store_true", default=None)
+    parser.add_argument("--no-stop-on-live-insufficient-cash-balance", dest="stop_on_live_insufficient_cash_balance", action="store_false")
+    parser.add_argument("--stop-on-live-no-sellable-balance", dest="stop_on_live_insufficient_cash_balance", action="store_true")
+    parser.add_argument("--no-stop-on-live-no-sellable-balance", dest="stop_on_live_insufficient_cash_balance", action="store_false")
     return parser
 
 
 def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
     cfg = load_bot_config(args.config)
     if args.amount_usd is not None:
-        execution = ExecutionConfig(
-            paper_latency_sec=cfg.execution.paper_latency_sec,
-            depth_notional=float(args.amount_usd),
-            max_book_age_sec=cfg.execution.max_book_age_sec,
-            retry_count=cfg.execution.retry_count,
-            retry_interval_sec=cfg.execution.retry_interval_sec,
-            buy_price_buffer_ticks=cfg.execution.buy_price_buffer_ticks,
-            buy_retry_price_buffer_ticks=cfg.execution.buy_retry_price_buffer_ticks,
-            buy_dynamic_buffer_enabled=cfg.execution.buy_dynamic_buffer_enabled,
-            buy_dynamic_buffer_attempt1_room_frac=cfg.execution.buy_dynamic_buffer_attempt1_room_frac,
-            buy_dynamic_buffer_attempt2_room_frac=cfg.execution.buy_dynamic_buffer_attempt2_room_frac,
-            buy_dynamic_buffer_attempt1_max_ticks=cfg.execution.buy_dynamic_buffer_attempt1_max_ticks,
-            buy_dynamic_buffer_attempt2_max_ticks=cfg.execution.buy_dynamic_buffer_attempt2_max_ticks,
-            buy_dynamic_buffer_min_reserved_edge=cfg.execution.buy_dynamic_buffer_min_reserved_edge,
-            buy_dynamic_buffer_reserved_room_frac=cfg.execution.buy_dynamic_buffer_reserved_room_frac,
-            sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
-            sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
-            sell_dynamic_buffer_enabled=cfg.execution.sell_dynamic_buffer_enabled,
-            sell_profit_exit_buffer_ticks=cfg.execution.sell_profit_exit_buffer_ticks,
-            sell_profit_exit_retry_buffer_ticks=cfg.execution.sell_profit_exit_retry_buffer_ticks,
-            sell_risk_exit_buffer_ticks=cfg.execution.sell_risk_exit_buffer_ticks,
-            sell_risk_exit_retry_buffer_ticks=cfg.execution.sell_risk_exit_retry_buffer_ticks,
-            sell_force_exit_buffer_ticks=cfg.execution.sell_force_exit_buffer_ticks,
-            sell_force_exit_retry_buffer_ticks=cfg.execution.sell_force_exit_retry_buffer_ticks,
-            batch_exit_enabled=cfg.execution.batch_exit_enabled,
-            batch_exit_min_shares=cfg.execution.batch_exit_min_shares,
-            batch_exit_min_notional_usd=cfg.execution.batch_exit_min_notional_usd,
-            batch_exit_slices=cfg.execution.batch_exit_slices,
-            batch_exit_extra_buffer_ticks=cfg.execution.batch_exit_extra_buffer_ticks,
-            live_min_sell_shares=cfg.execution.live_min_sell_shares,
-            live_min_sell_notional_usd=cfg.execution.live_min_sell_notional_usd,
-        )
-        cfg = replace(cfg, execution=execution, amount_usd=float(args.amount_usd))
+        amount_usd = float(args.amount_usd)
+        cfg = replace(cfg, execution=replace(cfg.execution, depth_notional=amount_usd), amount_usd=amount_usd)
     if args.interval_sec is not None:
         cfg = replace(cfg, interval_sec=float(args.interval_sec))
     if args.coinbase_enabled is not None:
@@ -468,10 +438,10 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         cfg = replace(cfg, risk=replace(cfg.risk, consecutive_loss_limit=max(0, int(args.consecutive_loss_limit))))
     if args.loss_pause_windows is not None:
         cfg = replace(cfg, risk=replace(cfg.risk, loss_pause_windows=max(0, int(args.loss_pause_windows))))
-    if args.stop_on_live_no_sellable_balance is not None:
+    if args.stop_on_live_insufficient_cash_balance is not None:
         cfg = replace(cfg, risk=replace(
             cfg.risk,
-            stop_on_live_no_sellable_balance=bool(args.stop_on_live_no_sellable_balance),
+            stop_on_live_insufficient_cash_balance=bool(args.stop_on_live_insufficient_cash_balance),
         ))
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
@@ -995,30 +965,6 @@ def _snapshot(
         "down": down,
     }
     return snap, meta
-
-
-async def _refresh_entry_retry_params(
-    *,
-    window,
-    prices: WindowPrices,
-    feed: BinancePriceFeed | None,
-    coinbase_feed: CoinbaseBtcPriceFeed | None,
-    polymarket_feed: PolymarketChainlinkBtcPriceFeed | None,
-    stream: PriceStream,
-    cfg: BotConfig,
-    sigma_eff: float | None,
-    state: StrategyState,
-    original_side: str | None,
-) -> BuyRetryParams | None:
-    snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
-    decision = evaluate_entry(snap, state, cfg.edge)
-    if decision.action != "enter" or decision.side != original_side:
-        return None
-    return BuyRetryParams(
-        max_price=decision.limit_price,
-        best_ask=decision.best_ask,
-        price_hint_base=decision.depth_limit_price,
-    )
 
 
 async def _refresh_exit_retry_params(

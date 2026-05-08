@@ -152,12 +152,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.buy_price_buffer_ticks == 2.0
     assert opts.config.execution.buy_retry_price_buffer_ticks == 4.0
     assert opts.config.execution.buy_dynamic_buffer_enabled is True
-    assert opts.config.execution.buy_dynamic_buffer_attempt1_room_frac == 0.45
-    assert opts.config.execution.buy_dynamic_buffer_attempt2_room_frac == 0.65
     assert opts.config.execution.buy_dynamic_buffer_attempt1_max_ticks == 5.0
     assert opts.config.execution.buy_dynamic_buffer_attempt2_max_ticks == 8.0
-    assert opts.config.execution.buy_dynamic_buffer_min_reserved_edge == 0.02
-    assert opts.config.execution.buy_dynamic_buffer_reserved_room_frac == 0.25
     assert opts.config.execution.sell_price_buffer_ticks == 5.0
     assert opts.config.execution.sell_retry_price_buffer_ticks == 8.0
     assert opts.config.execution.sell_risk_exit_buffer_ticks == 8.0
@@ -750,15 +746,22 @@ def test_global_risk_config_defaults_and_cli_overrides() -> None:
         "7",
         "--loss-pause-windows",
         "4",
-        "--no-stop-on-live-no-sellable-balance",
+        "--no-stop-on-live-insufficient-cash-balance",
     ]))
 
     assert default.config.risk.consecutive_loss_limit == 5
     assert default.config.risk.loss_pause_windows == 3
-    assert default.config.risk.stop_on_live_no_sellable_balance is True
+    assert default.config.risk.stop_on_live_insufficient_cash_balance is True
     assert overridden.config.risk.consecutive_loss_limit == 7
     assert overridden.config.risk.loss_pause_windows == 4
-    assert overridden.config.risk.stop_on_live_no_sellable_balance is False
+    assert overridden.config.risk.stop_on_live_insufficient_cash_balance is False
+
+
+def test_legacy_no_sellable_balance_cli_alias_still_maps_to_cash_stop() -> None:
+    parser = build_arg_parser()
+    opts = build_runtime_options(parser.parse_args(["--once", "--no-stop-on-live-no-sellable-balance"]))
+
+    assert opts.config.risk.stop_on_live_insufficient_cash_balance is False
 
 
 def test_entry_analysis_records_signal_and_fill_edges() -> None:

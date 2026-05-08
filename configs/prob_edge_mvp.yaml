@@ -56,12 +56,8 @@ execution:
   buy_price_buffer_ticks: 2
   buy_retry_price_buffer_ticks: 4
   buy_dynamic_buffer_enabled: true
-  buy_dynamic_buffer_attempt1_room_frac: 0.45
-  buy_dynamic_buffer_attempt2_room_frac: 0.65
   buy_dynamic_buffer_attempt1_max_ticks: 5
   buy_dynamic_buffer_attempt2_max_ticks: 8
-  buy_dynamic_buffer_min_reserved_edge: 0.02
-  buy_dynamic_buffer_reserved_room_frac: 0.25
   sell_price_buffer_ticks: 5
   sell_retry_price_buffer_ticks: 8
   sell_dynamic_buffer_enabled: true
@@ -82,7 +78,7 @@ execution:
 risk:
   consecutive_loss_limit: 5
   loss_pause_windows: 3
-  stop_on_live_no_sellable_balance: true
+  stop_on_live_insufficient_cash_balance: true
 
 runtime:
   interval_sec: 0.5

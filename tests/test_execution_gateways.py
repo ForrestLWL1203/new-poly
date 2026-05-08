@@ -81,6 +81,16 @@ class BatchClient:
         ]
 
 
+class BatchErrorClient(BatchClient):
+    def __init__(self, message: str):
+        super().__init__()
+        self.message = message
+
+    def post_orders(self, batch):
+        self.posted_batches.append(batch)
+        raise Exception(self.message)
+
+
 class BalanceErrorClient:
     def create_market_order(self, args, options=None):
         return {"amount": args.amount, "price": args.price}
@@ -263,9 +273,6 @@ def test_live_buy_retry_reuses_same_signal_without_refresh(monkeypatch) -> None:
         ExecutionResult(True, filled_size=10.0, avg_price=0.55, message="MATCHED", mode="live"),
     ], buy_dynamic_buffer_enabled=False)
 
-    async def refresh_retry(attempt):
-        raise AssertionError("BUY retry should reuse the same signal without refresh")
-
     result = asyncio.run(
         gateway.buy(
             "up",
@@ -273,7 +280,6 @@ def test_live_buy_retry_reuses_same_signal_without_refresh(monkeypatch) -> None:
             max_price=0.60,
             best_ask=0.50,
             price_hint_base=0.50,
-            retry_refresh=refresh_retry,
         )
     )
 
@@ -292,9 +298,6 @@ def test_live_buy_retry_ignores_signal_refresh_failure(monkeypatch) -> None:
         ExecutionResult(True, filled_size=10.0, avg_price=0.54, message="MATCHED", mode="live"),
     ])
 
-    async def refresh_retry(attempt):
-        raise AssertionError("BUY retry should not refresh signal")
-
     result = asyncio.run(
         gateway.buy(
             "up",
@@ -302,7 +305,6 @@ def test_live_buy_retry_ignores_signal_refresh_failure(monkeypatch) -> None:
             max_price=0.60,
             best_ask=0.50,
             price_hint_base=0.50,
-            retry_refresh=refresh_retry,
         )
     )
 
@@ -441,6 +443,35 @@ def test_live_batch_sell_posts_multiple_fak_slices(monkeypatch) -> None:
     assert len(client.posted_batches) == 1
     assert [order.amount for order in client.market_orders] == [40.0, 30.0, 30.0]
     assert [order.price for order in client.market_orders] == [0.30, 0.27, 0.24]
+
+
+def test_live_batch_sell_invalid_amount_is_soft_failure(monkeypatch) -> None:
+    client = BatchErrorClient("invalid amounts, maker and taker amount must be higher than 0")
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: client)
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 100.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True, batch_exit_enabled=True, batch_exit_min_shares=20.0)
+
+    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="logic_decay_exit"))
+
+    assert result.success is False
+    assert result.message == "live invalid amount"
+
+
+def test_live_batch_sell_balance_error_is_soft_failure(monkeypatch) -> None:
+    client = BatchErrorClient("not enough balance / allowance: the balance is not enough")
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: client)
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 100.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True, batch_exit_enabled=True, batch_exit_min_shares=20.0)
+
+    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="logic_decay_exit"))
+
+    assert result.success is False
+    assert result.message.startswith("live sell balance unavailable")
+    assert result.fatal_stop_reason is None
 
 
 def test_live_sell_final_force_uses_emergency_ladder(monkeypatch) -> None:
@@ -828,10 +859,7 @@ def test_paper_buy_retry_reuses_same_signal_params() -> None:
             before_fill=mutate_between_attempts,
         )
 
-        async def refresh_retry(attempt):
-            raise AssertionError("paper BUY retry should not refresh signal")
-
-        result = await gateway.buy("up", amount_usd=5.0, max_price=0.60, best_ask=0.50, retry_refresh=refresh_retry)
+        result = await gateway.buy("up", amount_usd=5.0, max_price=0.60, best_ask=0.50)
 
         assert result.success is True
         assert result.attempt == 2
@@ -858,10 +886,7 @@ def test_paper_buy_retry_ignores_signal_refresh_failure() -> None:
             before_fill=mutate_between_attempts,
         )
 
-        async def refresh_retry(attempt):
-            raise AssertionError("paper BUY retry should not refresh signal")
-
-        result = await gateway.buy("up", amount_usd=5.0, max_price=0.60, best_ask=0.50, retry_refresh=refresh_retry)
+        result = await gateway.buy("up", amount_usd=5.0, max_price=0.60, best_ask=0.50)
 
         assert result.success is True
         assert result.attempt == 2

@@ -27,12 +27,8 @@ class ExecutionConfig:
     buy_price_buffer_ticks: float = 2.0
     buy_retry_price_buffer_ticks: float = 4.0
     buy_dynamic_buffer_enabled: bool = True
-    buy_dynamic_buffer_attempt1_room_frac: float = 0.45
-    buy_dynamic_buffer_attempt2_room_frac: float = 0.65
     buy_dynamic_buffer_attempt1_max_ticks: float = 5.0
     buy_dynamic_buffer_attempt2_max_ticks: float = 8.0
-    buy_dynamic_buffer_min_reserved_edge: float = 0.02
-    buy_dynamic_buffer_reserved_room_frac: float = 0.25
     sell_price_buffer_ticks: float = 5.0
     sell_retry_price_buffer_ticks: float = 8.0
     sell_dynamic_buffer_enabled: bool = True
@@ -91,19 +87,11 @@ class ExecutionResult:
 
 
 @dataclass(frozen=True)
-class BuyRetryParams:
-    max_price: float | None
-    best_ask: float | None
-    price_hint_base: float | None
-
-
-@dataclass(frozen=True)
 class SellRetryParams:
     min_price: float | None
     exit_reason: str | None
 
 
-BuyRetryRefresh = Callable[[int], Awaitable[Optional[BuyRetryParams]]]
 SellRetryRefresh = Callable[[int], Awaitable[Optional[SellRetryParams]]]
 
 
@@ -134,12 +122,8 @@ def _dynamic_buy_price_hint(
     attempt: int,
     enabled: bool,
     fallback_buffer_ticks: float,
-    attempt1_room_frac: float,
-    attempt2_room_frac: float,
     attempt1_max_ticks: float,
     attempt2_max_ticks: float,
-    min_reserved_edge: float,
-    reserved_room_frac: float,
 ) -> float | None:
     if best_ask is None:
         return None
@@ -466,7 +450,6 @@ class PaperExecutionGateway:
         max_price: float | None = None,
         best_ask: float | None = None,
         price_hint_base: float | None = None,
-        retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         start = time.monotonic()
         sleep_ms = await self._delay()
@@ -755,12 +738,8 @@ class LiveFakExecutionGateway:
         buy_price_buffer_ticks: float = 2.0,
         buy_retry_price_buffer_ticks: float = 4.0,
         buy_dynamic_buffer_enabled: bool = True,
-        buy_dynamic_buffer_attempt1_room_frac: float = 0.45,
-        buy_dynamic_buffer_attempt2_room_frac: float = 0.65,
         buy_dynamic_buffer_attempt1_max_ticks: float = 5.0,
         buy_dynamic_buffer_attempt2_max_ticks: float = 8.0,
-        buy_dynamic_buffer_min_reserved_edge: float = 0.02,
-        buy_dynamic_buffer_reserved_room_frac: float = 0.25,
         sell_price_buffer_ticks: float = 5.0,
         sell_retry_price_buffer_ticks: float = 8.0,
         sell_dynamic_buffer_enabled: bool = True,
@@ -785,12 +764,8 @@ class LiveFakExecutionGateway:
         self.buy_price_buffer_ticks = max(0.0, float(buy_price_buffer_ticks))
         self.buy_retry_price_buffer_ticks = max(self.buy_price_buffer_ticks, float(buy_retry_price_buffer_ticks))
         self.buy_dynamic_buffer_enabled = bool(buy_dynamic_buffer_enabled)
-        self.buy_dynamic_buffer_attempt1_room_frac = max(0.0, float(buy_dynamic_buffer_attempt1_room_frac))
-        self.buy_dynamic_buffer_attempt2_room_frac = max(0.0, float(buy_dynamic_buffer_attempt2_room_frac))
         self.buy_dynamic_buffer_attempt1_max_ticks = max(0.0, float(buy_dynamic_buffer_attempt1_max_ticks))
         self.buy_dynamic_buffer_attempt2_max_ticks = max(0.0, float(buy_dynamic_buffer_attempt2_max_ticks))
-        self.buy_dynamic_buffer_min_reserved_edge = max(0.0, float(buy_dynamic_buffer_min_reserved_edge))
-        self.buy_dynamic_buffer_reserved_room_frac = max(0.0, float(buy_dynamic_buffer_reserved_room_frac))
         self.sell_price_buffer_ticks = max(0.0, float(sell_price_buffer_ticks))
         self.sell_retry_price_buffer_ticks = max(self.sell_price_buffer_ticks, float(sell_retry_price_buffer_ticks))
         self.sell_dynamic_buffer_enabled = bool(sell_dynamic_buffer_enabled)
@@ -804,12 +779,8 @@ class LiveFakExecutionGateway:
         self.live_min_sell_notional_usd = max(0.0, float(live_min_sell_notional_usd))
         self.batch_config = ExecutionConfig(
             buy_dynamic_buffer_enabled=self.buy_dynamic_buffer_enabled,
-            buy_dynamic_buffer_attempt1_room_frac=self.buy_dynamic_buffer_attempt1_room_frac,
-            buy_dynamic_buffer_attempt2_room_frac=self.buy_dynamic_buffer_attempt2_room_frac,
             buy_dynamic_buffer_attempt1_max_ticks=self.buy_dynamic_buffer_attempt1_max_ticks,
             buy_dynamic_buffer_attempt2_max_ticks=self.buy_dynamic_buffer_attempt2_max_ticks,
-            buy_dynamic_buffer_min_reserved_edge=self.buy_dynamic_buffer_min_reserved_edge,
-            buy_dynamic_buffer_reserved_room_frac=self.buy_dynamic_buffer_reserved_room_frac,
             batch_exit_enabled=bool(batch_exit_enabled),
             batch_exit_min_shares=max(0.0, float(batch_exit_min_shares)),
             batch_exit_min_notional_usd=max(0.0, float(batch_exit_min_notional_usd)),
@@ -835,7 +806,6 @@ class LiveFakExecutionGateway:
         max_price: float | None = None,
         best_ask: float | None = None,
         price_hint_base: float | None = None,
-        retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         base_price = price_hint_base if price_hint_base is not None else best_ask
         starting_balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
@@ -851,12 +821,8 @@ class LiveFakExecutionGateway:
                 attempt=attempt,
                 enabled=self.buy_dynamic_buffer_enabled,
                 fallback_buffer_ticks=buffer_ticks,
-                attempt1_room_frac=self.buy_dynamic_buffer_attempt1_room_frac,
-                attempt2_room_frac=self.buy_dynamic_buffer_attempt2_room_frac,
                 attempt1_max_ticks=self.buy_dynamic_buffer_attempt1_max_ticks,
                 attempt2_max_ticks=self.buy_dynamic_buffer_attempt2_max_ticks,
-                min_reserved_edge=self.buy_dynamic_buffer_min_reserved_edge,
-                reserved_room_frac=self.buy_dynamic_buffer_reserved_room_frac,
             )
             last = await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)
             if not last.success and _is_buy_execution_unknown(last):
@@ -1133,6 +1099,10 @@ class LiveFakExecutionGateway:
             latency_ms = round((time.monotonic() - start) * 1000)
             if _is_fak_no_match_error(exc):
                 return ExecutionResult(False, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+            if _is_invalid_amount_error(exc):
+                return ExecutionResult(False, message="live invalid amount", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+            if _is_insufficient_balance_error(exc):
+                return ExecutionResult(False, message="live sell balance unavailable", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
             if _is_live_request_exception(exc):
                 reset_clob_http_client()
                 return ExecutionResult(False, message="live order request exception", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)

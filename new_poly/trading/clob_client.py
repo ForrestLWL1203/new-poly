@@ -25,7 +25,11 @@ def _build_http_client_kwargs() -> dict[str, Any]:
         # Trading decisions expire quickly in 5m markets. Keep POST waits short
         # so an unhealthy CLOB HTTP stream reaches reconciliation/retry while
         # the entry signal can still matter.
-        "timeout": httpx.Timeout(1.0, connect=0.5, pool=0.2),
+        "timeout": httpx.Timeout(
+            config.CLOB_HTTP_TIMEOUT_SEC,
+            connect=config.CLOB_HTTP_CONNECT_TIMEOUT_SEC,
+            pool=config.CLOB_HTTP_POOL_TIMEOUT_SEC,
+        ),
     }
     if proxy:
         kwargs["proxy"] = proxy
