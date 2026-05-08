@@ -49,6 +49,7 @@ from new_poly.strategy.dynamic_params import (
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import (
+    BuyRetryParams,
     ExecutionConfig,
     ExecutionResult,
     SellRetryParams,
@@ -1018,3 +1019,18 @@ async def _refresh_exit_retry_params(
     if min_price is None:
         return None
     return SellRetryParams(min_price=min_price, exit_reason=exit_reason or decision.reason)
+
+
+async def _refresh_entry_retry_params(
+    *,
+    stream: PriceStream,
+    token_id: str,
+    max_price: float | None,
+    cfg: BotConfig,
+) -> BuyRetryParams | None:
+    best_ask = stream.get_latest_best_ask(token_id, max_age_sec=cfg.execution.max_book_age_sec)
+    if best_ask is None:
+        return None
+    if max_price is not None and best_ask > max_price:
+        return None
+    return BuyRetryParams(best_ask=best_ask, price_hint_base=best_ask, max_price=max_price)

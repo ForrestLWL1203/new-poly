@@ -130,6 +130,26 @@ def test_backtest_applies_buy_slippage_and_uses_executable_bid_for_sell() -> Non
     assert result.trades[0]["exit_price"] == 0.69
 
 
+def test_backtest_entry_retry_uses_next_book_with_original_cap() -> None:
+    rows = [
+        _row("m1", 120, 100.03),
+        _row("m1", 121, 100.03),
+        _row("m1", 299, 101.00),
+    ]
+    rows[0]["up"]["ask"] = 0.40
+    rows[0]["up"]["ask_avg"] = 0.40
+    rows[0]["up"]["ask_limit"] = 0.40
+    rows[1]["up"]["ask"] = 0.39
+    rows[1]["up"]["ask_avg"] = 0.39
+    rows[1]["up"]["ask_limit"] = 0.39
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=10.0, buy_slippage_ticks=5))
+
+    assert result.summary["entries"] == 1
+    assert result.trades[0]["entry_age_sec"] == 121.0
+    assert result.trades[0]["entry_price"] == 0.44
+
+
 def test_backtest_can_honor_paper_entry_no_fill_event() -> None:
     rows = [
         _row("m1", 90, 100.10),
@@ -386,3 +406,19 @@ def test_backtest_config_passes_fair_cap_margin_to_strategy() -> None:
 
     assert edge_cfg.min_fair_cap_margin_ticks == 1.0
     assert edge_cfg.entry_tick_size == 0.01
+
+
+def test_backtest_config_passes_buy_cap_relaxation_to_strategy() -> None:
+    cfg = BacktestConfig(
+        buy_cap_relax_enabled=True,
+        buy_low_price_relax_retained_edge=0.07,
+        buy_mid_strong_relax_max_extra_ticks=11.0,
+        buy_high_price_relax_min_prob=0.96,
+    )
+
+    edge_cfg = cfg.edge_config()
+
+    assert edge_cfg.buy_cap_relax_enabled is True
+    assert edge_cfg.buy_low_price_relax_retained_edge == 0.07
+    assert edge_cfg.buy_mid_strong_relax_max_extra_ticks == 11.0
+    assert edge_cfg.buy_high_price_relax_min_prob == 0.96

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from new_poly.trading import fak_quotes
 from new_poly.trading.execution import (
     BUY,
+    BuyRetryParams,
     ExecutionConfig,
     ExecutionResult,
     LiveFakExecutionGateway,
@@ -99,12 +100,12 @@ class BalanceErrorClient:
         raise Exception("PolyApiException[status_code=400, error_message={'error': 'not enough balance / allowance: the balance is not enough'}]")
 
 
-def test_clob_http_timeout_allows_slow_fak_response() -> None:
+def test_clob_http_timeout_is_short_enough_for_stale_buy_retry() -> None:
     timeout = _build_http_client_kwargs()["timeout"]
 
     assert timeout.connect == 0.5
-    assert timeout.read == 5.0
-    assert timeout.write == 5.0
+    assert timeout.read == 3.0
+    assert timeout.write == 3.0
     assert timeout.pool == 0.2
 
 
@@ -154,6 +155,28 @@ def test_paper_depth_shortfall_no_fill() -> None:
         result = await gateway.buy("up", amount_usd=5.0, max_price=0.60)
         assert result.success is False
         assert result.filled_size == 0.0
+
+    asyncio.run(scenario())
+
+
+def test_paper_buy_retry_refresh_can_keep_original_cap() -> None:
+    async def scenario() -> None:
+        stream = FakeStream()
+        stream.asks["up"] = [(0.63, 10.0)]
+        gateway = PaperExecutionGateway(
+            stream=stream,
+            config=ExecutionConfig(paper_latency_sec=0.0, retry_count=1),
+        )
+
+        async def refresh(_attempt):
+            stream.asks["up"] = [(0.56, 10.0)]
+            return BuyRetryParams(best_ask=0.56, price_hint_base=0.56, max_price=0.58)
+
+        result = await gateway.buy("up", amount_usd=5.0, max_price=0.58, retry_refresh=refresh)
+
+        assert result.success is True
+        assert result.attempt == 2
+        assert result.avg_price == 0.56
 
     asyncio.run(scenario())
 
@@ -329,6 +352,57 @@ def test_live_buy_retry_can_use_configured_four_tick_buffer(monkeypatch) -> None
     assert result.success is True
     assert gateway.calls[0][3] == 0.56
     assert gateway.calls[1][3] == 0.58
+
+
+def test_live_buy_retry_refreshes_book_but_keeps_original_fair_cap(monkeypatch) -> None:
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.58, message="MATCHED", mode="live"),
+    ], buy_dynamic_buffer_enabled=False)
+
+    async def refresh(_attempt):
+        return BuyRetryParams(best_ask=0.56, price_hint_base=0.56, max_price=0.58)
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=5.0,
+            max_price=0.58,
+            best_ask=0.50,
+            price_hint_base=0.50,
+            retry_refresh=refresh,
+        )
+    )
+
+    assert result.success is True
+    assert gateway.calls[0][3] == pytest.approx(0.52)
+    assert gateway.calls[1][3] == pytest.approx(0.58)
+
+
+def test_live_buy_retry_skips_when_refreshed_ask_exceeds_original_cap(monkeypatch) -> None:
+    monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+    ], buy_dynamic_buffer_enabled=False)
+
+    async def refresh(_attempt):
+        return None
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=5.0,
+            max_price=0.58,
+            best_ask=0.50,
+            price_hint_base=0.50,
+            retry_refresh=refresh,
+        )
+    )
+
+    assert result.success is False
+    assert "retry skipped" in result.message
+    assert len(gateway.calls) == 1
 
 
 def test_live_sell_retry_reposts_same_floor_price(monkeypatch) -> None:
@@ -589,6 +663,60 @@ def test_live_buy_request_exception_reconciles_from_balance_and_trades(monkeypat
     assert result.avg_price == pytest.approx(0.20)
     assert result.timing["reconciliation"] == "balance_increase"
     assert result.timing["trade_count"] == 1
+    assert len(gateway.calls) == 1
+
+
+def test_live_buy_adopts_existing_balance_before_reposting(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 1.6566)
+    gateway = SequencedLiveGateway([])
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.65,
+            best_ask=0.57,
+            price_hint_base=0.57,
+        )
+    )
+
+    assert result.success is True
+    assert result.message == "live buy adopted existing token balance"
+    assert result.filled_size == pytest.approx(1.6566)
+    assert result.avg_price == pytest.approx(1.0 / 1.6566)
+    assert result.attempt == 0
+    assert result.timing["reconciliation"] == "existing_balance_before_post"
+    assert gateway.calls == []
+
+
+def test_live_buy_unknown_result_adopts_existing_balance_without_increase(monkeypatch) -> None:
+    balances = iter([None, 1.6566, 1.6566])
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            False,
+            message="live order request exception",
+            mode="live",
+            timing={"sent_at_epoch_ms": 1778213315537},
+        ),
+    ])
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.65,
+            best_ask=0.57,
+            price_hint_base=0.57,
+        )
+    )
+
+    assert result.success is True
+    assert result.message == "live buy reconciled after unknown POST result"
+    assert result.filled_size == pytest.approx(1.6566)
+    assert result.avg_price == pytest.approx(1.0 / 1.6566)
+    assert result.timing["reconciliation"] == "existing_balance"
+    assert result.timing["min_adopt_buy_shares"] == pytest.approx(0.9)
     assert len(gateway.calls) == 1
 
 

@@ -63,6 +63,22 @@ class BacktestConfig:
     min_entry_model_prob: float = 0.0
     low_price_extra_edge_threshold: float = 0.0
     low_price_extra_edge: float = 0.0
+    buy_cap_relax_enabled: bool = False
+    buy_low_price_relax_max_ask: float = 0.25
+    buy_low_price_relax_min_prob: float = 0.40
+    buy_low_price_relax_retained_edge: float = 0.08
+    buy_low_price_relax_max_extra_ticks: float = 8.0
+    buy_mid_price_relax_max_ask: float = 0.65
+    buy_mid_price_relax_min_prob: float = 0.60
+    buy_mid_price_relax_retained_edge: float = 0.06
+    buy_mid_price_relax_max_extra_ticks: float = 8.0
+    buy_mid_strong_relax_min_prob: float = 0.75
+    buy_mid_strong_relax_retained_edge: float = 0.05
+    buy_mid_strong_relax_max_extra_ticks: float = 10.0
+    buy_high_price_relax_min_ask: float = 0.65
+    buy_high_price_relax_min_prob: float = 0.95
+    buy_high_price_relax_retained_edge: float = 0.08
+    buy_high_price_relax_max_extra_ticks: float = 4.0
     cross_source_max_bps: float = 0.0
     market_disagrees_exit_threshold: float = 0.0
     low_price_market_disagrees_entry_threshold: float = 0.0
@@ -112,6 +128,22 @@ class BacktestConfig:
             min_entry_model_prob=self.min_entry_model_prob,
             low_price_extra_edge_threshold=self.low_price_extra_edge_threshold,
             low_price_extra_edge=self.low_price_extra_edge,
+            buy_cap_relax_enabled=self.buy_cap_relax_enabled,
+            buy_low_price_relax_max_ask=self.buy_low_price_relax_max_ask,
+            buy_low_price_relax_min_prob=self.buy_low_price_relax_min_prob,
+            buy_low_price_relax_retained_edge=self.buy_low_price_relax_retained_edge,
+            buy_low_price_relax_max_extra_ticks=self.buy_low_price_relax_max_extra_ticks,
+            buy_mid_price_relax_max_ask=self.buy_mid_price_relax_max_ask,
+            buy_mid_price_relax_min_prob=self.buy_mid_price_relax_min_prob,
+            buy_mid_price_relax_retained_edge=self.buy_mid_price_relax_retained_edge,
+            buy_mid_price_relax_max_extra_ticks=self.buy_mid_price_relax_max_extra_ticks,
+            buy_mid_strong_relax_min_prob=self.buy_mid_strong_relax_min_prob,
+            buy_mid_strong_relax_retained_edge=self.buy_mid_strong_relax_retained_edge,
+            buy_mid_strong_relax_max_extra_ticks=self.buy_mid_strong_relax_max_extra_ticks,
+            buy_high_price_relax_min_ask=self.buy_high_price_relax_min_ask,
+            buy_high_price_relax_min_prob=self.buy_high_price_relax_min_prob,
+            buy_high_price_relax_retained_edge=self.buy_high_price_relax_retained_edge,
+            buy_high_price_relax_max_extra_ticks=self.buy_high_price_relax_max_extra_ticks,
             cross_source_max_bps=self.cross_source_max_bps,
             market_disagrees_exit_threshold=self.market_disagrees_exit_threshold,
             low_price_market_disagrees_entry_threshold=self.low_price_market_disagrees_entry_threshold,
@@ -270,7 +302,12 @@ def _exit_fill_price(decision, cfg: BacktestConfig) -> float | None:
 
 
 def _entry_fill_price_from_snapshot(decision, snap: MarketSnapshot, cfg: BacktestConfig) -> float | None:
-    base = decision.depth_limit_price if decision.depth_limit_price is not None else decision.price
+    if decision.side == "up":
+        base = snap.up_best_ask
+    elif decision.side == "down":
+        base = snap.down_best_ask
+    else:
+        return None
     if base is None:
         return None
     fill_price = round(base + cfg.buy_slippage_ticks * cfg.tick_size, 6)
@@ -482,20 +519,11 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     if fill_price is None:
                         if index + 1 < len(group):
                             retry_snap = snapshot_from_row(group[index + 1])
-                            retry_decision = evaluate_entry(retry_snap, state, edge_cfg)
-                            if (
-                                retry_decision.action == "enter"
-                                and retry_decision.side == decision.side
-                                and retry_decision.price is not None
-                                and retry_decision.model_prob is not None
-                                and retry_decision.edge is not None
-                            ):
-                                retry_fill = _entry_fill_price_from_snapshot(retry_decision, retry_snap, cfg)
-                                if retry_fill is not None:
-                                    decision = retry_decision
-                                    fill_price = retry_fill
-                                    fill_snap = retry_snap
-                                    skip_next_row = True
+                            retry_fill = _entry_fill_price_from_snapshot(decision, retry_snap, cfg)
+                            if retry_fill is not None:
+                                fill_price = retry_fill
+                                fill_snap = retry_snap
+                                skip_next_row = True
                         if fill_price is None:
                             skip_reasons["entry_no_fill"] += 1
                             continue

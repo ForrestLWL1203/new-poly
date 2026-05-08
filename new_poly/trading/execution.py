@@ -92,7 +92,15 @@ class SellRetryParams:
     exit_reason: str | None
 
 
+@dataclass(frozen=True)
+class BuyRetryParams:
+    best_ask: float | None
+    price_hint_base: float | None
+    max_price: float | None
+
+
 SellRetryRefresh = Callable[[int], Awaitable[Optional[SellRetryParams]]]
+BuyRetryRefresh = Callable[[int], Awaitable[Optional[BuyRetryParams]]]
 
 
 def _with_attempt(result: ExecutionResult, *, attempt: int, total_latency_ms: int) -> ExecutionResult:
@@ -450,6 +458,7 @@ class PaperExecutionGateway:
         max_price: float | None = None,
         best_ask: float | None = None,
         price_hint_base: float | None = None,
+        retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         start = time.monotonic()
         sleep_ms = await self._delay()
@@ -459,6 +468,18 @@ class PaperExecutionGateway:
         for attempt in range(self.config.retry_count + 1):
             if attempt > 0:
                 retry_wait_ms += await self._retry_wait()
+                if retry_refresh is not None:
+                    refresh_start = time.monotonic()
+                    refreshed = await retry_refresh(attempt)
+                    retry_refresh_ms += _ms_since(refresh_start)
+                    if refreshed is None:
+                        total_latency_ms = _ms_since(start)
+                        return _retry_skipped(
+                            ExecutionResult(False, message="paper no fill: retry refresh unavailable", mode="paper"),
+                            attempt=attempt,
+                            total_latency_ms=total_latency_ms,
+                        )
+                    max_price = refreshed.max_price
             book_start = time.monotonic()
             levels = self.stream.get_latest_ask_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
             book_read_ms += _ms_since(book_start)
@@ -628,6 +649,19 @@ def _recent_trade_fill(token_id: str, *, side: str, sent_at_epoch_ms: int | None
         proceeds += take * price
         count += 1
     return filled, proceeds / filled if filled > 0 else 0.0, count
+
+
+def _min_adopt_buy_shares(amount_usd: float) -> float:
+    # Binary tokens are priced below 1 USDC, so a real BUY of N USDC should
+    # produce more than N shares. Use a small cushion so rounding/dust does not
+    # block adopting a confirmed-but-late balance after an unknown POST result.
+    return max(1e-6, float(amount_usd) * 0.9)
+
+
+def _buy_balance_price(amount_usd: float, shares: float, fallback_price: float | None) -> float:
+    if shares > 0 and amount_usd > 0:
+        return max(0.0, min(1.0, amount_usd / shares))
+    return max(0.0, min(1.0, fallback_price or 0.0))
 
 
 def _derive_fill(side: str, amount: float, taking: float, making: float, fallback_price: float) -> tuple[float, float]:
@@ -806,12 +840,42 @@ class LiveFakExecutionGateway:
         max_price: float | None = None,
         best_ask: float | None = None,
         price_hint_base: float | None = None,
+        retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         base_price = price_hint_base if price_hint_base is not None else best_ask
         starting_balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
+        if starting_balance is not None and starting_balance >= _min_adopt_buy_shares(amount_usd):
+            fallback_price = max_price or base_price
+            return ExecutionResult(
+                True,
+                filled_size=starting_balance,
+                avg_price=_buy_balance_price(amount_usd, starting_balance, fallback_price),
+                message="live buy adopted existing token balance",
+                mode="live",
+                attempt=0,
+                total_latency_ms=0,
+                timing={
+                    "reconciliation": "existing_balance_before_post",
+                    "balance": round(starting_balance, 6),
+                    "min_adopt_buy_shares": round(_min_adopt_buy_shares(amount_usd), 6),
+                    "fallback_price": round(_buy_balance_price(amount_usd, starting_balance, fallback_price), 6),
+                },
+            )
         last = ExecutionResult(False, message="live buy not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
+            if attempt > 0 and retry_refresh is not None:
+                refreshed = await retry_refresh(attempt)
+                if refreshed is None:
+                    return _retry_skipped(
+                        last,
+                        attempt=attempt,
+                        total_latency_ms=round((time.monotonic() - start) * 1000),
+                    )
+                best_ask = refreshed.best_ask
+                price_hint_base = refreshed.price_hint_base
+                max_price = refreshed.max_price
+                base_price = price_hint_base if price_hint_base is not None else best_ask
             before_balance = starting_balance if starting_balance is not None else await asyncio.to_thread(get_token_balance, token_id, safe=True)
             buffer_ticks = self.buy_price_buffer_ticks if attempt == 0 else self.buy_retry_price_buffer_ticks
             price_hint = _dynamic_buy_price_hint(
@@ -866,8 +930,8 @@ class LiveFakExecutionGateway:
                 timing={**last.timing, "reconciliation": "balance_unavailable"},
             )
         bought_by_balance = max(0.0, after_balance - before_balance)
-        min_size = amount_usd / max(max_price or price_hint or 1.0, 1e-9) * 0.05
-        if bought_by_balance < max(1e-9, min_size):
+        min_size = _min_adopt_buy_shares(amount_usd)
+        if bought_by_balance < max(1e-9, min_size) and after_balance < min_size:
             return replace(
                 last,
                 message=f"{last.message}; reconciliation no balance increase",
@@ -876,12 +940,15 @@ class LiveFakExecutionGateway:
                     "reconciliation": "no_balance_increase",
                     "balance_before": round(before_balance, 6),
                     "balance_after": round(after_balance, 6),
+                    "min_adopt_buy_shares": round(min_size, 6),
                 },
             )
         sent_at = last.timing.get("sent_at_epoch_ms") if isinstance(last.timing, dict) else None
-        trade_size, trade_price, trade_count = _recent_trade_fill(token_id, side=BUY, sent_at_epoch_ms=int(sent_at) if sent_at else None, max_size=bought_by_balance)
-        bought = trade_size if trade_size > 0 else bought_by_balance
-        price = trade_price if trade_price > 0 else max(0.0, min(price_hint or max_price or 0.0, max_price or price_hint or 1.0))
+        reconciled_by = "balance_increase" if bought_by_balance >= min_size else "existing_balance"
+        size_from_balance = bought_by_balance if bought_by_balance >= min_size else after_balance
+        trade_size, trade_price, trade_count = _recent_trade_fill(token_id, side=BUY, sent_at_epoch_ms=int(sent_at) if sent_at else None, max_size=size_from_balance)
+        bought = trade_size if trade_size > 0 else size_from_balance
+        price = trade_price if trade_price > 0 else _buy_balance_price(amount_usd, bought, max_price or price_hint)
         return replace(
             last,
             success=True,
@@ -890,10 +957,12 @@ class LiveFakExecutionGateway:
             message="live buy reconciled after unknown POST result",
             timing={
                 **last.timing,
-                "reconciliation": "balance_increase",
+                "reconciliation": reconciled_by,
                 "balance_before": round(before_balance, 6),
                 "balance_after": round(after_balance, 6),
                 "bought_by_balance": round(bought_by_balance, 6),
+                "adopted_balance": round(size_from_balance, 6),
+                "min_adopt_buy_shares": round(min_size, 6),
                 "trade_fill_size": round(trade_size, 6),
                 "trade_fill_price": round(trade_price, 6),
                 "trade_count": trade_count,

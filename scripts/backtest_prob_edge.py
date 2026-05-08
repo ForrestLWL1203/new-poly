@@ -58,6 +58,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-entry-model-prob", type=float, default=0.0)
     parser.add_argument("--low-price-extra-edge-threshold", type=float, default=0.0)
     parser.add_argument("--low-price-extra-edge", type=float, default=0.0)
+    parser.add_argument("--buy-cap-relax", dest="buy_cap_relax_enabled", action="store_true", default=False)
+    parser.add_argument("--buy-low-price-relax-max-ask", type=float, default=0.25)
+    parser.add_argument("--buy-low-price-relax-min-prob", type=float, default=0.40)
+    parser.add_argument("--buy-low-price-relax-retained-edge", type=float, default=0.08)
+    parser.add_argument("--buy-low-price-relax-max-extra-ticks", type=float, default=8.0)
+    parser.add_argument("--buy-mid-price-relax-max-ask", type=float, default=0.65)
+    parser.add_argument("--buy-mid-price-relax-min-prob", type=float, default=0.60)
+    parser.add_argument("--buy-mid-price-relax-retained-edge", type=float, default=0.06)
+    parser.add_argument("--buy-mid-price-relax-max-extra-ticks", type=float, default=8.0)
+    parser.add_argument("--buy-mid-strong-relax-min-prob", type=float, default=0.75)
+    parser.add_argument("--buy-mid-strong-relax-retained-edge", type=float, default=0.05)
+    parser.add_argument("--buy-mid-strong-relax-max-extra-ticks", type=float, default=10.0)
+    parser.add_argument("--buy-high-price-relax-min-ask", type=float, default=0.65)
+    parser.add_argument("--buy-high-price-relax-min-prob", type=float, default=0.95)
+    parser.add_argument("--buy-high-price-relax-retained-edge", type=float, default=0.08)
+    parser.add_argument("--buy-high-price-relax-max-extra-ticks", type=float, default=4.0)
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
     parser.add_argument("--buy-slippage-ticks", type=float)
     parser.add_argument("--sell-slippage-ticks", type=float)
@@ -148,6 +164,22 @@ def main() -> int:
         min_entry_model_prob=args.min_entry_model_prob,
         low_price_extra_edge_threshold=args.low_price_extra_edge_threshold,
         low_price_extra_edge=args.low_price_extra_edge,
+        buy_cap_relax_enabled=args.buy_cap_relax_enabled,
+        buy_low_price_relax_max_ask=args.buy_low_price_relax_max_ask,
+        buy_low_price_relax_min_prob=args.buy_low_price_relax_min_prob,
+        buy_low_price_relax_retained_edge=args.buy_low_price_relax_retained_edge,
+        buy_low_price_relax_max_extra_ticks=args.buy_low_price_relax_max_extra_ticks,
+        buy_mid_price_relax_max_ask=args.buy_mid_price_relax_max_ask,
+        buy_mid_price_relax_min_prob=args.buy_mid_price_relax_min_prob,
+        buy_mid_price_relax_retained_edge=args.buy_mid_price_relax_retained_edge,
+        buy_mid_price_relax_max_extra_ticks=args.buy_mid_price_relax_max_extra_ticks,
+        buy_mid_strong_relax_min_prob=args.buy_mid_strong_relax_min_prob,
+        buy_mid_strong_relax_retained_edge=args.buy_mid_strong_relax_retained_edge,
+        buy_mid_strong_relax_max_extra_ticks=args.buy_mid_strong_relax_max_extra_ticks,
+        buy_high_price_relax_min_ask=args.buy_high_price_relax_min_ask,
+        buy_high_price_relax_min_prob=args.buy_high_price_relax_min_prob,
+        buy_high_price_relax_retained_edge=args.buy_high_price_relax_retained_edge,
+        buy_high_price_relax_max_extra_ticks=args.buy_high_price_relax_max_extra_ticks,
     )
     result = run_backtest(rows, cfg)
     payload: dict[str, Any] = {

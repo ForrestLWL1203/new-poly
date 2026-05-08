@@ -10,6 +10,7 @@ from new_poly.bot_runtime import (
     BotConfig,
     RuntimeOptions,
     WindowPrices,
+    _refresh_entry_retry_params,
     _refresh_exit_retry_params,
 )
 from new_poly.strategy.prob_edge import evaluate_entry, evaluate_exit
@@ -200,6 +201,12 @@ async def handle_flat_tick(
         max_price=decision.limit_price,
         best_ask=decision.best_ask,
         price_hint_base=decision.depth_limit_price,
+        retry_refresh=lambda attempt, token_id=token_id, max_price=decision.limit_price: _refresh_entry_retry_params(
+            stream=feeds.stream,
+            token_id=token_id,
+            max_price=max_price,
+            cfg=cfg,
+        ),
     )
     row["order"] = result.__dict__
     if options.analysis_logs:
