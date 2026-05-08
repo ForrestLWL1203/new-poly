@@ -366,9 +366,9 @@ Execution behavior:
 - Safe balance reductions with a residual position are logged as
   `position_reduce`; tiny residuals below live minimum sell size can finish via
   `dust_position`.
-- Current CLOB HTTP helper timeout is intentionally short:
-  total `1.0s`, connect `0.5s`, pool `0.2s`. This lets the bot reach
-  reconciliation/retry while a 5-minute signal can still matter.
+- Current CLOB HTTP helper timeout is short but allows slow FAK responses:
+  total/read/write `5.0s`, connect `0.5s`, pool `0.2s`. A timeout still does
+  not prove the order failed; reconcile by balance/trades before deciding.
 - Live no-sellable-balance for a token position should not stop the whole bot;
   account-level insufficient USDC/funds can stop the bot.
 
@@ -381,6 +381,25 @@ Logging:
   fatal/error event.
 - Do not log signed orders, private keys, API credentials, full account config,
   or full order books.
+
+Run log naming:
+
+- Use a single filename shape for saved live/paper/dry-run/collector logs:
+  `<mode>-<region>-<windows>w-<YYYYMMDDTHHMMSSZ>.<ext>`.
+- `mode` should be `live`, `paper`, `collector`, or `probe`; use `paper` for
+  strategy dry-runs that do not POST real orders.
+- `region` should be `sweden`, `ireland`, `local`, or another explicit runtime
+  location.
+- The timestamp is UTC run start time. If an old run only has minute precision,
+  normalize seconds to `00`.
+- Keep companion files on the same stem, e.g. `.jsonl`, `.out`, `.yaml`, `.tgz`.
+- Do not add ad-hoc labels such as `dynamic-sell`, `reconcile`, `posreduce`, or
+  `analysis` to filenames. Put that context in a report, note, or the log
+  contents instead.
+- Preferred local locations:
+  `data/live_runs/live-<region>-<windows>w-<timestamp>.jsonl` for real live
+  runs, and `data/live_runs/paper-<region>-<windows>w-<timestamp>.jsonl` for
+  paper strategy runs unless a task explicitly asks for another directory.
 
 ### Reusable Infrastructure Modules
 
@@ -497,7 +516,7 @@ pytest-asyncio>=0.23
 - The current project caches a single `ClobClient` process-wide and configures
   the SDK HTTP helper client with `http2`, `max_connections=100`,
   `max_keepalive_connections=20`, `keepalive_expiry=30s`, and short trading
-  timeouts (`total=1s`, `connect=0.5s`, `pool=0.2s`).
+  timeouts (`total=5s`, `connect=0.5s`, `pool=0.2s`).
 - The SDK HTTP helper mutation is process-global. This project currently
   assumes one bot/account per process; future multi-strategy same-process
   runners need a client-factory refactor.
