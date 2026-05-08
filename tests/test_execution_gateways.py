@@ -10,11 +10,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.trading import fak_quotes
 from new_poly.trading.execution import (
+    BUY,
     BuyRetryParams,
     ExecutionConfig,
     ExecutionResult,
     LiveFakExecutionGateway,
     PaperExecutionGateway,
+    SELL,
     SellRetryParams,
 )
 
@@ -77,6 +79,14 @@ class BatchClient:
             }
             for index, order in enumerate(batch)
         ]
+
+
+class BalanceErrorClient:
+    def create_market_order(self, args, options=None):
+        return {"amount": args.amount, "price": args.price}
+
+    def post_order(self, signed, order_type):
+        raise Exception("PolyApiException[status_code=400, error_message={'error': 'not enough balance / allowance: the balance is not enough'}]")
 
 
 def test_paper_buy_and_sell_use_depth_after_delay() -> None:
@@ -447,7 +457,7 @@ def test_live_sell_price_hint_never_goes_below_one_tick(monkeypatch) -> None:
     assert gateway.calls[1][3] == 0.01
 
 
-def test_live_sell_no_balance_is_not_an_order_attempt(monkeypatch) -> None:
+def test_live_sell_no_balance_is_not_fatal_and_is_not_an_order_attempt(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
     gateway = SequencedLiveGateway([])
 
@@ -456,8 +466,39 @@ def test_live_sell_no_balance_is_not_an_order_attempt(monkeypatch) -> None:
     assert result.success is False
     assert result.attempt == 0
     assert result.total_latency_ms == 0
-    assert result.fatal_stop_reason == "live_no_sellable_balance"
+    assert result.fatal_stop_reason is None
     assert gateway.calls == []
+
+
+def test_live_sell_balance_error_is_not_fatal(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 4.0)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="live sell balance unavailable", mode="live"),
+        ExecutionResult(False, message="live sell balance unavailable", mode="live"),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.10, exit_reason="market_disagrees_exit"))
+
+    assert result.success is False
+    assert result.fatal_stop_reason is None
+    assert "balance" in result.message
+    assert len(gateway.calls) == 2
+
+
+def test_live_post_balance_error_is_only_fatal_for_buy(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: BalanceErrorClient())
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True)
+
+    sell = gateway._post("up", 4.0, SELL, 0.10)
+    buy = gateway._post("up", 1.0, BUY, 0.10)
+
+    assert sell.success is False
+    assert sell.message == "live sell balance unavailable"
+    assert sell.fatal_stop_reason is None
+    assert buy.success is False
+    assert buy.message == "live insufficient cash balance"
+    assert buy.fatal_stop_reason == "live_insufficient_cash_balance"
 
 
 def test_live_sell_dust_shares_are_not_posted(monkeypatch) -> None:

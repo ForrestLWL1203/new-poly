@@ -36,6 +36,8 @@ strategy:
   low_price_extra_edge: 0.0
   cross_source_max_bps: 5.0
   market_disagrees_exit_threshold: 0.25
+  low_price_market_disagrees_entry_threshold: 0.20
+  low_price_market_disagrees_exit_threshold: 0.10
   market_disagrees_exit_max_remaining_sec: 90.0
   market_disagrees_exit_min_loss: 0.03
   market_disagrees_exit_min_age_sec: 3.0

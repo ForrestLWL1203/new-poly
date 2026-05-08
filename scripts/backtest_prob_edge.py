@@ -75,6 +75,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--final-force-exit-remaining-sec", type=float, default=30.0)
     parser.add_argument("--cross-source-max-bps", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-threshold", type=float, default=0.0)
+    parser.add_argument("--low-price-market-disagrees-entry-threshold", type=float, default=0.0)
+    parser.add_argument("--low-price-market-disagrees-exit-threshold", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-max-remaining-sec", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-min-loss", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-min-age-sec", type=float, default=0.0)
@@ -131,6 +133,8 @@ def main() -> int:
         final_force_exit_remaining_sec=args.final_force_exit_remaining_sec,
         cross_source_max_bps=args.cross_source_max_bps,
         market_disagrees_exit_threshold=args.market_disagrees_exit_threshold,
+        low_price_market_disagrees_entry_threshold=args.low_price_market_disagrees_entry_threshold,
+        low_price_market_disagrees_exit_threshold=args.low_price_market_disagrees_exit_threshold,
         market_disagrees_exit_max_remaining_sec=args.market_disagrees_exit_max_remaining_sec,
         market_disagrees_exit_min_loss=args.market_disagrees_exit_min_loss,
         market_disagrees_exit_min_age_sec=args.market_disagrees_exit_min_age_sec,

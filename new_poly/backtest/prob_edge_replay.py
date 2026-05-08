@@ -60,6 +60,8 @@ class BacktestConfig:
     low_price_extra_edge: float = 0.0
     cross_source_max_bps: float = 0.0
     market_disagrees_exit_threshold: float = 0.0
+    low_price_market_disagrees_entry_threshold: float = 0.0
+    low_price_market_disagrees_exit_threshold: float = 0.0
     market_disagrees_exit_max_remaining_sec: float = 0.0
     market_disagrees_exit_min_loss: float = 0.0
     market_disagrees_exit_min_age_sec: float = 0.0
@@ -102,6 +104,8 @@ class BacktestConfig:
             low_price_extra_edge=self.low_price_extra_edge,
             cross_source_max_bps=self.cross_source_max_bps,
             market_disagrees_exit_threshold=self.market_disagrees_exit_threshold,
+            low_price_market_disagrees_entry_threshold=self.low_price_market_disagrees_entry_threshold,
+            low_price_market_disagrees_exit_threshold=self.low_price_market_disagrees_exit_threshold,
             market_disagrees_exit_max_remaining_sec=self.market_disagrees_exit_max_remaining_sec,
             market_disagrees_exit_min_loss=self.market_disagrees_exit_min_loss,
             market_disagrees_exit_min_age_sec=self.market_disagrees_exit_min_age_sec,

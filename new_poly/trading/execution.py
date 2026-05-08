@@ -625,6 +625,11 @@ def _is_invalid_amount_error(exc: Exception) -> bool:
     return "invalid amounts" in text and "maker and taker amount" in text
 
 
+def _is_insufficient_balance_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "not enough balance" in text or "not enough balance / allowance" in text
+
+
 def _is_live_request_exception(exc: Exception) -> bool:
     text = str(exc).lower()
     if "request exception" in text:
@@ -827,7 +832,6 @@ class LiveFakExecutionGateway:
                 mode="live",
                 attempt=0,
                 total_latency_ms=0,
-                fatal_stop_reason="live_no_sellable_balance",
             )
         dust = _live_dust_sell_result(
             shares=amount,
@@ -1016,6 +1020,19 @@ class LiveFakExecutionGateway:
                     latency_ms=latency_ms,
                     total_latency_ms=latency_ms,
                     timing=timing,
+                )
+            if _is_insufficient_balance_error(exc):
+                fatal_stop_reason = "live_insufficient_cash_balance" if side == BUY else None
+                message = "live insufficient cash balance" if side == BUY else "live sell balance unavailable"
+                return ExecutionResult(
+                    success=False,
+                    order_id=_order_id_from_error(exc),
+                    message=message,
+                    mode="live",
+                    latency_ms=latency_ms,
+                    total_latency_ms=latency_ms,
+                    timing=timing,
+                    fatal_stop_reason=fatal_stop_reason,
                 )
             if _is_live_request_exception(exc):
                 reset_clob_http_client()

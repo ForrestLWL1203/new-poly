@@ -490,6 +490,8 @@ def candidate_results_from_rows(rows: Iterable[dict[str, Any]], cfg: DynamicConf
                 low_price_extra_edge=base.low_price_extra_edge,
                 cross_source_max_bps=base.cross_source_max_bps,
                 market_disagrees_exit_threshold=base.market_disagrees_exit_threshold,
+                low_price_market_disagrees_entry_threshold=base.low_price_market_disagrees_entry_threshold,
+                low_price_market_disagrees_exit_threshold=base.low_price_market_disagrees_exit_threshold,
                 market_disagrees_exit_max_remaining_sec=base.market_disagrees_exit_max_remaining_sec,
                 market_disagrees_exit_min_loss=base.market_disagrees_exit_min_loss,
                 market_disagrees_exit_min_age_sec=base.market_disagrees_exit_min_age_sec,

@@ -62,6 +62,8 @@ class EdgeConfig:
     low_price_extra_edge: float = 0.0
     cross_source_max_bps: float = 0.0
     market_disagrees_exit_threshold: float = 0.0
+    low_price_market_disagrees_entry_threshold: float = 0.0
+    low_price_market_disagrees_exit_threshold: float = 0.0
     market_disagrees_exit_max_remaining_sec: float = 0.0
     market_disagrees_exit_min_loss: float = 0.0
     market_disagrees_exit_min_age_sec: float = 0.0
@@ -210,7 +212,14 @@ def _risk_exit_cooldown_reason(snapshot: MarketSnapshot, state: StrategyState, s
 
 
 def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, model_prob: float, bid: float, profit_now: float, cfg: EdgeConfig) -> float | None:
-    if cfg.market_disagrees_exit_threshold <= 0.0:
+    threshold = cfg.market_disagrees_exit_threshold
+    if (
+        cfg.low_price_market_disagrees_entry_threshold > 0.0
+        and cfg.low_price_market_disagrees_exit_threshold > 0.0
+        and position.entry_avg_price <= cfg.low_price_market_disagrees_entry_threshold
+    ):
+        threshold = cfg.low_price_market_disagrees_exit_threshold
+    if threshold <= 0.0:
         return None
     if cfg.market_disagrees_exit_max_remaining_sec > 0.0 and snapshot.remaining_sec > cfg.market_disagrees_exit_max_remaining_sec:
         return None
@@ -227,7 +236,7 @@ def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, m
     entry_ratio = position.entry_avg_price / position.entry_model_prob
     current_ratio = bid / model_prob
     disagreement = entry_ratio - current_ratio
-    return disagreement if disagreement >= cfg.market_disagrees_exit_threshold else None
+    return disagreement if disagreement >= threshold else None
 
 
 def _adverse_polymarket_divergence(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: EdgeConfig) -> float | None:

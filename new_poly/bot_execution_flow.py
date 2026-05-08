@@ -238,6 +238,15 @@ async def handle_flat_tick(
         row["entry_shares"] = _compact(result.filled_size)
         if options.analysis_logs and state.open_position is not None:
             row["position_after_entry"] = _position_log(state.open_position, compact=False)
+    elif (
+        options.mode == "live"
+        and cfg.risk.stop_on_live_no_sellable_balance
+        and result.fatal_stop_reason is not None
+    ):
+        state.fatal_stop_reason = result.fatal_stop_reason
+        row["event"] = "fatal_stop"
+        row["fatal_stop_reason"] = result.fatal_stop_reason
+        row["order_intent"] = "entry"
     else:
         row["event"] = "order_no_fill"
         row["order_intent"] = "entry"
