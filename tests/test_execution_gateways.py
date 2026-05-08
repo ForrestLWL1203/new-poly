@@ -89,6 +89,14 @@ class BalanceErrorClient:
         raise Exception("PolyApiException[status_code=400, error_message={'error': 'not enough balance / allowance: the balance is not enough'}]")
 
 
+class TradeLookupClient:
+    def __init__(self, trades):
+        self.trades = trades
+
+    def get_trades(self, params=None, only_first_page=False, next_cursor=None):
+        return self.trades
+
+
 def test_paper_buy_and_sell_use_depth_after_delay() -> None:
     async def scenario() -> None:
         stream = FakeStream()
@@ -483,6 +491,66 @@ def test_live_sell_balance_error_is_not_fatal(monkeypatch) -> None:
     assert result.fatal_stop_reason is None
     assert "balance" in result.message
     assert len(gateway.calls) == 2
+
+
+def test_live_sell_request_exception_reconciles_from_balance_and_trades(monkeypatch) -> None:
+    balances = iter([4.0, 0.0])
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([
+        {"asset_id": "up", "side": "SELL", "size": "4.0", "price": "0.085", "timestamp": "1778213316"},
+    ]))
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            False,
+            message="live order request exception",
+            mode="live",
+            timing={"sent_at_epoch_ms": 1778213315537},
+        ),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.12, exit_reason="market_disagrees_exit"))
+
+    assert result.success is True
+    assert result.message == "live sell reconciled after unknown POST result"
+    assert result.filled_size == pytest.approx(4.0)
+    assert result.avg_price == pytest.approx(0.085)
+    assert result.timing["reconciliation"] == "balance_decrease"
+    assert result.timing["trade_count"] == 1
+    assert len(gateway.calls) == 1
+
+
+def test_live_buy_request_exception_reconciles_from_balance_and_trades(monkeypatch) -> None:
+    balances = iter([0.0, 5.0])
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([
+        {"asset_id": "up", "side": "BUY", "size": "5.0", "price": "0.20", "timestamp": "1778213316"},
+    ]))
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            False,
+            message="live order request exception",
+            mode="live",
+            timing={"sent_at_epoch_ms": 1778213315537},
+        ),
+    ])
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.24,
+            best_ask=0.20,
+            price_hint_base=0.20,
+        )
+    )
+
+    assert result.success is True
+    assert result.message == "live buy reconciled after unknown POST result"
+    assert result.filled_size == pytest.approx(5.0)
+    assert result.avg_price == pytest.approx(0.20)
+    assert result.timing["reconciliation"] == "balance_increase"
+    assert result.timing["trade_count"] == 1
+    assert len(gateway.calls) == 1
 
 
 def test_live_post_balance_error_is_only_fatal_for_buy(monkeypatch) -> None:

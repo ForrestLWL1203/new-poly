@@ -598,6 +598,86 @@ def _safe_float(value) -> float:
         return 0.0
 
 
+def _trade_timestamp_ms(trade: dict[str, Any]) -> int | None:
+    for key in ("timestamp", "match_time", "matchTime", "created_at", "createdAt", "last_update", "lastUpdate"):
+        raw = trade.get(key)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        return int(value if value > 10_000_000_000 else value * 1000)
+    return None
+
+
+def _trade_asset_id(trade: dict[str, Any]) -> str:
+    for key in ("asset_id", "assetId", "token_id", "tokenId", "asset"):
+        value = trade.get(key)
+        if value is not None:
+            return str(value)
+    return ""
+
+
+def _trade_side(trade: dict[str, Any]) -> str:
+    for key in ("side", "taker_side", "takerSide"):
+        value = trade.get(key)
+        if value is not None:
+            return str(value).upper()
+    return ""
+
+
+def _trade_size(trade: dict[str, Any]) -> float:
+    return _safe_float(trade.get("size", trade.get("amount", trade.get("filledSize", trade.get("filled_size", 0)))))
+
+
+def _trade_price(trade: dict[str, Any]) -> float:
+    return _safe_float(trade.get("price", trade.get("avgPrice", trade.get("avg_price", 0))))
+
+
+def _recent_trade_fill(token_id: str, *, side: str, sent_at_epoch_ms: int | None, max_size: float) -> tuple[float, float, int]:
+    if sent_at_epoch_ms is None or max_size <= 0:
+        return 0.0, 0.0, 0
+    try:
+        from py_clob_client_v2 import TradeParams
+
+        trades = get_client().get_trades(
+            TradeParams(asset_id=token_id, after=max(0, int(sent_at_epoch_ms / 1000) - 10)),
+            only_first_page=True,
+        )
+    except Exception:
+        return 0.0, 0.0, 0
+    if not isinstance(trades, list):
+        return 0.0, 0.0, 0
+    start_ms = sent_at_epoch_ms - 10_000
+    filled = 0.0
+    proceeds = 0.0
+    count = 0
+    for trade in trades:
+        if not isinstance(trade, dict):
+            continue
+        asset_id = _trade_asset_id(trade)
+        if asset_id and asset_id != token_id:
+            continue
+        trade_side = _trade_side(trade)
+        if trade_side and trade_side != side:
+            continue
+        ts_ms = _trade_timestamp_ms(trade)
+        if ts_ms is not None and ts_ms < start_ms:
+            continue
+        size = _trade_size(trade)
+        price = _trade_price(trade)
+        if size <= 0 or price <= 0:
+            continue
+        take = min(size, max(0.0, max_size - filled))
+        if take <= 0:
+            break
+        filled += take
+        proceeds += take * price
+        count += 1
+    return filled, proceeds / filled if filled > 0 else 0.0, count
+
+
 def _derive_fill(side: str, amount: float, taking: float, making: float, fallback_price: float) -> tuple[float, float]:
     if side == BUY:
         filled = taking
@@ -640,6 +720,16 @@ def _is_live_request_exception(exc: Exception) -> bool:
     if context is not None and context is not exc:
         return _is_live_request_exception(context)
     return False
+
+
+def _is_sell_execution_unknown(result: ExecutionResult) -> bool:
+    text = (result.message or "").lower()
+    return "request exception" in text or "sell balance unavailable" in text
+
+
+def _is_buy_execution_unknown(result: ExecutionResult) -> bool:
+    text = (result.message or "").lower()
+    return "request exception" in text
 
 
 def _order_id_from_error(exc: Exception) -> str | None:
@@ -779,9 +869,11 @@ class LiveFakExecutionGateway:
         retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         base_price = price_hint_base if price_hint_base is not None else best_ask
+        starting_balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
         last = ExecutionResult(False, message="live buy not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
+            before_balance = starting_balance if starting_balance is not None else await asyncio.to_thread(get_token_balance, token_id, safe=True)
             buffer_ticks = self.buy_price_buffer_ticks if attempt == 0 else self.buy_retry_price_buffer_ticks
             price_hint = _dynamic_buy_price_hint(
                 token_id,
@@ -798,6 +890,24 @@ class LiveFakExecutionGateway:
                 reserved_room_frac=self.buy_dynamic_buffer_reserved_room_frac,
             )
             last = await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)
+            if not last.success and _is_buy_execution_unknown(last):
+                reconciled = await asyncio.to_thread(
+                    self._reconcile_unknown_buy,
+                    token_id,
+                    before_balance,
+                    amount_usd,
+                    max_price,
+                    price_hint,
+                    last,
+                )
+                if reconciled.success:
+                    return _with_attempt(
+                        reconciled,
+                        attempt=attempt + 1,
+                        total_latency_ms=round((time.monotonic() - start) * 1000),
+                    )
+                last = reconciled
+                starting_balance = before_balance
             if last.success or attempt >= self.retry_count:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
             if self.retry_interval_sec > 0:
@@ -814,6 +924,58 @@ class LiveFakExecutionGateway:
                 best_ask = refreshed.best_ask
                 base_price = refreshed.price_hint_base if refreshed.price_hint_base is not None else refreshed.best_ask
         return last
+
+    def _reconcile_unknown_buy(
+        self,
+        token_id: str,
+        before_balance: float | None,
+        amount_usd: float,
+        max_price: float | None,
+        price_hint: float | None,
+        last: ExecutionResult,
+    ) -> ExecutionResult:
+        after_balance = get_token_balance(token_id, safe=True)
+        if before_balance is None or after_balance is None:
+            return replace(
+                last,
+                message=f"{last.message}; reconciliation balance unavailable",
+                timing={**last.timing, "reconciliation": "balance_unavailable"},
+            )
+        bought_by_balance = max(0.0, after_balance - before_balance)
+        min_size = amount_usd / max(max_price or price_hint or 1.0, 1e-9) * 0.05
+        if bought_by_balance < max(1e-9, min_size):
+            return replace(
+                last,
+                message=f"{last.message}; reconciliation no balance increase",
+                timing={
+                    **last.timing,
+                    "reconciliation": "no_balance_increase",
+                    "balance_before": round(before_balance, 6),
+                    "balance_after": round(after_balance, 6),
+                },
+            )
+        sent_at = last.timing.get("sent_at_epoch_ms") if isinstance(last.timing, dict) else None
+        trade_size, trade_price, trade_count = _recent_trade_fill(token_id, side=BUY, sent_at_epoch_ms=int(sent_at) if sent_at else None, max_size=bought_by_balance)
+        bought = trade_size if trade_size > 0 else bought_by_balance
+        price = trade_price if trade_price > 0 else max(0.0, min(price_hint or max_price or 0.0, max_price or price_hint or 1.0))
+        return replace(
+            last,
+            success=True,
+            filled_size=bought,
+            avg_price=price,
+            message="live buy reconciled after unknown POST result",
+            timing={
+                **last.timing,
+                "reconciliation": "balance_increase",
+                "balance_before": round(before_balance, 6),
+                "balance_after": round(after_balance, 6),
+                "bought_by_balance": round(bought_by_balance, 6),
+                "trade_fill_size": round(trade_size, 6),
+                "trade_fill_price": round(trade_price, 6),
+                "trade_count": trade_count,
+                "fallback_price": round(price, 6),
+            },
+        )
 
     async def sell(
         self,
@@ -844,6 +1006,7 @@ class LiveFakExecutionGateway:
         last = ExecutionResult(False, message="live sell not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
+            before_balance = amount
             price_hint = _sell_price_hint(
                 token_id,
                 min_price,
@@ -863,6 +1026,23 @@ class LiveFakExecutionGateway:
                 last = await asyncio.to_thread(self._post_batch_sell, token_id, amount, min_price, exit_reason, attempt)
             else:
                 last = await asyncio.to_thread(self._post, token_id, amount, SELL, price_hint or min_price)
+            if not last.success and _is_sell_execution_unknown(last):
+                reconciled = await asyncio.to_thread(
+                    self._reconcile_unknown_sell,
+                    token_id,
+                    before_balance,
+                    amount,
+                    min_price,
+                    price_hint,
+                    last,
+                )
+                if reconciled.success:
+                    return _with_attempt(
+                        reconciled,
+                        attempt=attempt + 1,
+                        total_latency_ms=round((time.monotonic() - start) * 1000),
+                    )
+                last = reconciled
             if last.success or attempt >= self.retry_count:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
             if self.retry_interval_sec > 0:
@@ -890,6 +1070,57 @@ class LiveFakExecutionGateway:
             if dust is not None:
                 return _with_attempt(dust, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
         return last
+
+    def _reconcile_unknown_sell(
+        self,
+        token_id: str,
+        before_balance: float,
+        attempted_amount: float,
+        min_price: float | None,
+        price_hint: float | None,
+        last: ExecutionResult,
+    ) -> ExecutionResult:
+        after_balance = get_token_balance(token_id, safe=True)
+        if after_balance is None:
+            return replace(
+                last,
+                message=f"{last.message}; reconciliation balance unavailable",
+                timing={**last.timing, "reconciliation": "balance_unavailable"},
+            )
+        sold_by_balance = max(0.0, before_balance - after_balance)
+        if sold_by_balance < max(1e-9, min(self.live_min_sell_shares, attempted_amount) if self.live_min_sell_shares > 0 else 1e-9):
+            return replace(
+                last,
+                message=f"{last.message}; reconciliation no balance decrease",
+                timing={
+                    **last.timing,
+                    "reconciliation": "no_balance_decrease",
+                    "balance_before": round(before_balance, 6),
+                    "balance_after": round(after_balance, 6),
+                },
+            )
+        sent_at = last.timing.get("sent_at_epoch_ms") if isinstance(last.timing, dict) else None
+        trade_size, trade_price, trade_count = _recent_trade_fill(token_id, side=SELL, sent_at_epoch_ms=int(sent_at) if sent_at else None, max_size=sold_by_balance)
+        sold = trade_size if trade_size > 0 else sold_by_balance
+        price = trade_price if trade_price > 0 else max(0.0, price_hint or min_price or 0.0)
+        return replace(
+            last,
+            success=True,
+            filled_size=sold,
+            avg_price=price,
+            message="live sell reconciled after unknown POST result",
+            timing={
+                **last.timing,
+                "reconciliation": "balance_decrease",
+                "balance_before": round(before_balance, 6),
+                "balance_after": round(after_balance, 6),
+                "sold_by_balance": round(sold_by_balance, 6),
+                "trade_fill_size": round(trade_size, 6),
+                "trade_fill_price": round(trade_price, 6),
+                "trade_count": trade_count,
+                "fallback_price": round(max(0.0, price_hint or min_price or 0.0), 6),
+            },
+        )
 
     def _post_batch_sell(self, token_id: str, shares: float, min_price: float | None, exit_reason: str | None, attempt: int) -> ExecutionResult:
         from py_clob_client_v2 import MarketOrderArgs, OrderType
