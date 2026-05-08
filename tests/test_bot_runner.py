@@ -280,6 +280,73 @@ def test_dust_sell_result_closes_residual_without_crashing(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_intentional_safe_sell_residual_logs_position_reduce(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_open_position_tick
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper", "--analysis-logs"]))
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=150.0,
+            remaining_sec=150.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.record_entry(PositionSnapshot(
+            market_slug="m1",
+            token_side="down",
+            token_id=window.down_token,
+            entry_time=130.0,
+            entry_avg_price=0.37,
+            filled_shares=2.0,
+            entry_model_prob=0.70,
+            entry_edge=0.33,
+        ))
+        decision = StrategyDecision(
+            action="exit",
+            reason="logic_decay_exit",
+            side="down",
+            model_prob=0.30,
+            price=0.31,
+            limit_price=0.26,
+            profit_now=-0.06,
+        )
+
+        class ResidualGateway:
+            async def sell(self, *args, **kwargs):
+                return ExecutionResult(True, filled_size=1.99, avg_price=0.30, message="matched")
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_exit", lambda *_args, **_kwargs: decision)
+
+        await handle_open_position_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=ResidualGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=DummyLogger(),
+        )
+
+        assert row["event"] == "position_reduce"
+        assert row["exit_status"] == "residual_open"
+        assert row["remaining_shares"] == 0.01
+        assert state.open_position is not None
+        assert abs(state.open_position.filled_shares - 0.01) < 1e-9
+
+    asyncio.run(scenario())
+
+
 def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
     async def scenario() -> None:
         options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))

@@ -538,9 +538,12 @@ bot continues without treating it as a strategy failure.
 Before every entry or exit FAK call, the bot writes an `order_intent` row. This
 row is emitted before awaiting the CLOB response and includes the token id,
 side, signal price, fair cap or exit floor, and intended amount/shares. The
-subsequent `entry`, `exit`, `partial_exit`, or `order_no_fill` row records the
-response. If `POST /order` times out after Polymarket has already matched the
-order, the intent row still proves which order the bot attempted.
+subsequent `entry`, `exit`, `position_reduce`, `dust_position`, or
+`order_no_fill` row records the response. `position_reduce` means the bot
+intentionally sold a safe balance below the full position and left a tiny
+residual for a follow-up/dust path; it is not treated as an exceptional partial
+fill. If `POST /order` times out after Polymarket has already matched the order,
+the intent row still proves which order the bot attempted.
 
 Live FAK responses include timing telemetry under `order.timing` when available:
 `create_order_ms`, `post_order_ms`, `sent_at_epoch_ms`, `response_at_epoch_ms`,
@@ -552,7 +555,8 @@ shares are below `live_min_sell_shares` (default `0.01`) or below an optional
 `live_min_sell_notional_usd` threshold, the bot does not call `POST /order`.
 It emits `dust_position`, writes off the tiny residual at zero value, and keeps
 the process alive. This avoids CLOB `invalid amounts, maker and taker amount
-must be higher than 0` errors on sub-cent residual shares after partial exits.
+must be higher than 0` errors on sub-cent residual shares after safe balance
+reductions.
 
 BUY FAK hints use a dynamic fair-room buffer when
 `buy_dynamic_buffer_enabled=true`. Instead of always posting `best_ask + N`

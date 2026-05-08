@@ -130,11 +130,16 @@ async def handle_open_position_tick(
         row["analysis"] = {"price_sources": price_analysis, **_exit_analysis(decision, result)}
     if result.success:
         pnl, closed = state.record_partial_exit(result.avg_price, result.filled_size, decision.reason, snap.age_sec)
-        row["event"] = "exit" if closed else "partial_exit"
+        row["event"] = "exit" if closed else "position_reduce"
         row["exit_reason"] = decision.reason
         row["exit_price"] = _compact(result.avg_price)
         row["exit_shares"] = _compact(result.filled_size)
         row["exit_pnl"] = _compact(pnl, 4)
+        if not closed:
+            row["exit_status"] = "residual_open"
+            row["remaining_shares"] = _compact(
+                state.open_position.filled_shares if state.open_position is not None else 0.0
+            )
         if closed:
             _apply_closed_trade_risk(row, state=state, cfg=cfg, pnl=pnl)
         if options.analysis_logs:

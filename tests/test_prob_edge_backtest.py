@@ -67,7 +67,8 @@ def test_backtest_enters_and_settles_open_position() -> None:
     assert result.trades[0]["entry_side"] == "up"
 
 
-def test_backtest_honor_order_events_keeps_partial_exit_open_until_final_exit() -> None:
+@pytest.mark.parametrize("reduce_event", ["position_reduce", "partial_exit"])
+def test_backtest_honor_order_events_keeps_reduce_event_open_until_final_exit(reduce_event: str) -> None:
     entry = _row("m1", 100, 101.0)
     entry.update({
         "event": "entry",
@@ -76,7 +77,7 @@ def test_backtest_honor_order_events_keeps_partial_exit_open_until_final_exit() 
     })
     partial = _row("m1", 120, 101.0)
     partial.update({
-        "event": "partial_exit",
+        "event": reduce_event,
         "exit_reason": "logic_decay_exit",
         "analysis": {"exit_price": 0.30},
         "order": {"success": True, "filled_size": 40.0, "avg_price": 0.30},

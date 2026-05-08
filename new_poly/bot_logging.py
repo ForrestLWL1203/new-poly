@@ -52,7 +52,7 @@ def _clob_diag_should_attach(
     if not options.analysis_logs:
         return False
     event = str(row.get("event") or "tick")
-    if event in {"order_no_fill", "exit", "partial_exit"}:
+    if event in {"order_no_fill", "exit", "position_reduce"}:
         return True
     if decision is not None and decision.reason in {"stale_book", "stale_book_wait", "risk_exit"}:
         return True

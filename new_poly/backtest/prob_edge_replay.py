@@ -395,12 +395,12 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         state.record_entry(position)
                         entries += 1
                         continue
-                elif row.get("event") in {"exit", "partial_exit"} and _order_success(row) and active_trade is not None:
+                elif row.get("event") in {"exit", "partial_exit", "position_reduce"} and _order_success(row) and active_trade is not None:
                     exit_price = _event_exit_price(row)
                     if exit_price is not None:
                         reason = str(row.get("exit_reason") or _analysis(row).get("exit_reason") or (row.get("decision") or {}).get("reason") or "event_exit")
                         filled = _float(_order(row).get("filled_size"))
-                        if row.get("event") == "partial_exit" and filled is not None:
+                        if row.get("event") in {"partial_exit", "position_reduce"} and filled is not None:
                             pnl, closed = state.record_partial_exit(exit_price, filled, reason, float(row.get("age_sec") or 0.0))
                             active_trade["partial_pnl"] = round(float(active_trade.get("partial_pnl") or 0.0) + pnl, 6)
                             active_trade.setdefault("partial_exits", []).append({
