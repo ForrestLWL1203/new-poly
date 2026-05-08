@@ -18,7 +18,7 @@ strategy:
   strong_move_min_abs_sk_usd: 120
   strong_move_required_edge: 0.24
   final_no_entry_remaining_sec: 30
-  max_entries_per_market: 4
+  max_entries_per_market: 2
   max_book_age_ms: 1000
   late_entry_enabled: false
   late_required_edge: 0.10
@@ -39,13 +39,13 @@ strategy:
   prob_drop_exit_threshold: 0.0
   min_fair_cap_margin_ticks: 1.0
   entry_tick_size: 0.01
-  min_entry_model_prob: 0.35
+  min_entry_model_prob: 0.40
   low_price_extra_edge_threshold: 0.30
   low_price_extra_edge: 0.04
   cross_source_max_bps: 5.0
-  market_disagrees_exit_threshold: 0.25
-  low_price_market_disagrees_entry_threshold: 0.20
-  low_price_market_disagrees_exit_threshold: 0.10
+  market_disagrees_exit_threshold: 0.20
+  low_price_market_disagrees_entry_threshold: 0.30
+  low_price_market_disagrees_exit_threshold: 0.06
   market_disagrees_exit_max_remaining_sec: 90.0
   market_disagrees_exit_min_loss: 0.03
   market_disagrees_exit_min_age_sec: 3.0

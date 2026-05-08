@@ -150,7 +150,7 @@ Config files:
 - `configs/prob_edge_aggressive.yaml`: current optimized aggressive paper
   candidate. It is aggressive by entry count but stricter by entry quality:
   `100-240s` entry timing, `0.16/0.14` early/core edge thresholds,
-  `min_entry_model_prob=0.35`, `max_entries_per_market=4`, and `$1`
+  `min_entry_model_prob=0.40`, `max_entries_per_market=2`, and `$1`
   notional/depth. Dynamic early entry remains available as an explicit
   experiment via `--dynamic-entry`.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
@@ -224,11 +224,10 @@ dvol_retry_attempts
 coinbase_enabled
 ```
 
-The current `0.16/0.14` edge thresholds and `0.35` model-probability floor came
-from replaying the 120-window collector and dry-run datasets captured on
-2026-05-04. They replace the earlier `0.12/0.08` defaults because those looser
-thresholds admitted too many low-probability lottery-style entries and larger
-`logic_decay_exit` losses.
+The current `0.16/0.14` edge thresholds and `0.40` model-probability floor are
+the committed live-oriented defaults. They replace earlier looser settings
+because replay and live smoke tests showed those admitted too many
+low-probability lottery-style entries and larger `logic_decay_exit` losses.
 
 Binance is now the normal strategy baseline. Coinbase is disabled by default
 and only participates when explicitly enabled. When both Binance/Coinbase live

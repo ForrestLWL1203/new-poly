@@ -222,8 +222,9 @@ Current parameter files:
 - `configs/prob_edge_mvp.yaml`: conservative baseline/default config.
 - `configs/prob_edge_aggressive.yaml`: current live-oriented aggressive paper
   candidate. It uses `100-240s` entry timing, `0.16/0.14` early/core edge
-  thresholds, `max_entries_per_market=4`, `$1` paper notional/depth, Binance as
-  the model source, and Polymarket live-data as a reference risk guard.
+  thresholds, `min_entry_model_prob=0.40`, `max_entries_per_market=2`, `$1`
+  paper notional/depth, Binance as the model source, and Polymarket live-data
+  as a reference risk guard.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
   profiles and health thresholds. It only changes entry timing/edge/max-entry
   settings, and only at window boundaries.

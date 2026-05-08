@@ -307,11 +307,12 @@ Current tuned strategy shape:
   `entry_end_age_sec=240`, `early_required_edge=0.16`,
   `core_required_edge=0.14`.
 - The aggressive config is aggressive by entry count but stricter by entry
-  quality. It currently uses `min_entry_model_prob=0.35`,
-  `low_price_extra_edge_threshold=0.30`, and `low_price_extra_edge=0.04`.
-- Recent live smoke tests often override `min_entry_model_prob=0.40` and
-  `max_entries_per_market=2` via a temporary YAML. Check the actual run config
-  in `/opt/new-poly/logs/<run-id>.yaml` before comparing logs.
+  quality. It currently uses `min_entry_model_prob=0.40`,
+  `max_entries_per_market=2`, `low_price_extra_edge_threshold=0.30`, and
+  `low_price_extra_edge=0.04`.
+- Run directly from the committed config unless the user explicitly asks for a
+  temporary YAML override. Check the actual run config in
+  `/opt/new-poly/logs/<run-id>.yaml` before comparing logs.
 - `prob_drop_exit` is disabled by default because `market_disagrees_exit` and
   Polymarket divergence exits now cover the main observed failure mode.
 

@@ -64,8 +64,9 @@ fast_move_min_abs_sk_usd = 80
 fast_move_required_edge = 0.22
 early_required_edge = 0.16
 core_required_edge = 0.14
-max_entries_per_market = 4
+max_entries_per_market = 2
 amount_usd = 1
+min_entry_model_prob = 0.40
 low_price_extra_edge_threshold = 0.30
 low_price_extra_edge = 0.04
 model_decay_buffer = 0.03
@@ -118,10 +119,10 @@ python3 scripts/backtest_prob_edge.py \
   --early-required-edge 0.16 \
   --core-required-edge 0.14 \
   --model-decay-buffer 0.03 \
-  --max-entries-per-market 4 \
+  --max-entries-per-market 2 \
   --min-fair-cap-margin-ticks 1 \
   --entry-tick-size 0.01 \
-  --min-entry-model-prob 0.35 \
+  --min-entry-model-prob 0.40 \
   --low-price-extra-edge-threshold 0.30 \
   --low-price-extra-edge 0.04 \
   --slippage-ticks 3
