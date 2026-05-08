@@ -185,6 +185,11 @@ async def test_price_stream_ping_failure_closes_ws_for_reconnect(monkeypatch) ->
     assert stream._ws is None
 
 
+def test_clob_ws_idle_reconnect_defaults_are_message_only() -> None:
+    assert stream_module.config.CLOB_WS_IDLE_RECONNECT_SEC == 20.0
+    assert stream_module.config.CLOB_DEPTH_IDLE_RECONNECT_SEC == 0.0
+
+
 @pytest.mark.asyncio
 async def test_price_stream_idle_watchdog_closes_silent_ws(monkeypatch) -> None:
     async def on_price(_update):
@@ -221,7 +226,7 @@ async def test_price_stream_idle_watchdog_closes_silent_ws(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_price_stream_depth_watchdog_closes_bbo_only_ws(monkeypatch) -> None:
+async def test_price_stream_idle_watchdog_ignores_depth_idle_when_disabled(monkeypatch) -> None:
     async def on_price(_update):
         return None
 
@@ -235,7 +240,7 @@ async def test_price_stream_depth_watchdog_closes_bbo_only_ws(monkeypatch) -> No
 
     monkeypatch.setattr(stream_module, "IDLE_CHECK_INTERVAL", 0.001)
     monkeypatch.setattr(stream_module.config, "CLOB_WS_IDLE_RECONNECT_SEC", 100.0)
-    monkeypatch.setattr(stream_module.config, "CLOB_DEPTH_IDLE_RECONNECT_SEC", 0.001)
+    monkeypatch.setattr(stream_module.config, "CLOB_DEPTH_IDLE_RECONNECT_SEC", 0.0)
     stream = PriceStream(on_price=on_price)
     ws = BboOnlyWs()
     stream._ws = ws
@@ -246,16 +251,14 @@ async def test_price_stream_depth_watchdog_closes_bbo_only_ws(monkeypatch) -> No
     task = asyncio.create_task(stream._idle_watchdog_loop())
 
     try:
-        async with asyncio.timeout(1.0):
-            while stream._ws is not None:
-                await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
     finally:
         stream._running = False
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
-    assert ws.closed is True
-    assert stream._ws is None
+    assert ws.closed is False
+    assert stream._ws is ws
 
 
 def test_dvol_snapshot_serializes_sigma_and_age() -> None:

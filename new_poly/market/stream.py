@@ -455,7 +455,7 @@ class PriceStream:
                     continue
 
     async def _idle_watchdog_loop(self) -> None:
-        """Reconnect if the CLOB market stream silently stops sending data or depth."""
+        """Reconnect if the CLOB market stream silently stops sending messages."""
         while self._running:
             await asyncio.sleep(IDLE_CHECK_INTERVAL)
             ws = self._ws
@@ -468,7 +468,8 @@ class PriceStream:
                 idle_kind = "message"
                 idle_sec = now - self._last_message_at
             elif (
-                self._connected_tokens
+                config.CLOB_DEPTH_IDLE_RECONNECT_SEC > 0
+                and self._connected_tokens
                 and self._last_depth_update_at > 0
                 and now - self._last_depth_update_at > config.CLOB_DEPTH_IDLE_RECONNECT_SEC
             ):
@@ -496,7 +497,11 @@ class PriceStream:
                 now = time.monotonic()
                 if idle_kind == "message" and now - self._last_message_at <= config.CLOB_WS_IDLE_RECONNECT_SEC:
                     continue
-                if idle_kind == "depth" and now - self._last_depth_update_at <= config.CLOB_DEPTH_IDLE_RECONNECT_SEC:
+                if (
+                    idle_kind == "depth"
+                    and config.CLOB_DEPTH_IDLE_RECONNECT_SEC > 0
+                    and now - self._last_depth_update_at <= config.CLOB_DEPTH_IDLE_RECONNECT_SEC
+                ):
                     continue
                 try:
                     transport = getattr(ws, "transport", None)

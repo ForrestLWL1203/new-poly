@@ -25,8 +25,9 @@ Current finding:
 
 - A 45-second live probe on 2026-05-07 saw normal CLOB market WS activity with hundreds of `book` / `best_bid_ask` events and thousands of `price_change` events; max inbound message gap was under 1 second.
 - The 96-window dry-run had several windows where book age climbed for 100-270 seconds with frozen 0.50/0.51 style book values.
-- Root cause is likely a silent CLOB WS / subscription stall: the socket stays open, so ping does not fail, but no inbound market events arrive.
-- Implemented mitigation: a CLOB inbound idle watchdog forces reconnect/resubscribe after 5 seconds without market WS messages.
+- Root cause can be either a true silent CLOB WS / subscription stall or a normal period where no depth-changing events arrive.
+- Current mitigation: the CLOB inbound idle watchdog reconnects/resubscribes after 20 seconds without any market WS messages.
+- Depth-idle alone no longer forces reconnect by default. A market can legitimately send no depth changes for a few seconds; strategy-level stale-book gates still protect entry/exit decisions.
 
 Questions to answer:
 
