@@ -103,6 +103,33 @@ pytest
 pytest-asyncio
 ```
 
+### Sweden VPS Access
+
+Current Sweden VPS:
+
+- Public IP: `70.34.207.45`
+- SSH user: `root`
+- Authentication is password-based. Do not print the password in logs or docs;
+  use `SSHPASS` or an interactive prompt when automation is required.
+
+Runtime layout:
+
+- Project repo: `/opt/new-poly/repo`
+- Virtualenv: `/opt/new-poly/venv`
+- Shared secrets/config: `/opt/new-poly/shared/polymarket_config.json`
+- Logs: `/opt/new-poly/logs`
+
+Use the venv explicitly:
+
+```bash
+/opt/new-poly/venv/bin/python
+/opt/new-poly/venv/bin/pip
+```
+
+Sweden has been used for recent live/paper runs because its CLOB order-post
+latency has been comparable to Ireland and sometimes easier to access. Keep the
+same secret-handling rules: never print `/opt/new-poly/shared/polymarket_config.json`.
+
 ### Polymarket Account Config
 
 Sensitive account config is present on the VPS at:
@@ -247,6 +274,91 @@ Current status:
 - Coinbase is disabled by default in current configs. Do not enable it unless a
   run explicitly needs multi-source diagnostics.
 
+### Probability Edge Strategy Bot
+
+Main entrypoint:
+
+```text
+scripts/run_prob_edge_bot.py
+```
+
+Current architecture:
+
+- `new_poly/bot_loop.py` owns the higher-level bot loop.
+- `new_poly/bot_runtime.py` owns config loading, logging helpers, snapshots,
+  settlement helpers, and DVOL retry helpers.
+- `new_poly/strategy/prob_edge.py` is IO-free strategy logic.
+- `new_poly/trading/execution.py` contains paper/live execution gateways.
+
+Default live-oriented profile:
+
+```text
+configs/prob_edge_aggressive.yaml
+```
+
+Current tuned strategy shape:
+
+- Binance BTC/USDT WebSocket is the primary model `S`.
+- Polymarket crypto price API `openPrice` is `K`.
+- Polymarket live-data Chainlink stream is a reference/risk source, not the
+  normal model `S`.
+- Coinbase is disabled by default.
+- New entries normally use `entry_start_age_sec=100`,
+  `entry_end_age_sec=240`, `early_required_edge=0.16`,
+  `core_required_edge=0.14`.
+- The aggressive config is aggressive by entry count but stricter by entry
+  quality. It currently uses `min_entry_model_prob=0.35`,
+  `low_price_extra_edge_threshold=0.30`, and `low_price_extra_edge=0.04`.
+- Recent live smoke tests often override `min_entry_model_prob=0.40` and
+  `max_entries_per_market=2` via a temporary YAML. Check the actual run config
+  in `/opt/new-poly/logs/<run-id>.yaml` before comparing logs.
+- `prob_drop_exit` is disabled by default because `market_disagrees_exit` and
+  Polymarket divergence exits now cover the main observed failure mode.
+
+Risk exits:
+
+- `logic_decay_exit`: model probability falls below entry price minus
+  `model_decay_buffer`.
+- `market_disagrees_exit`: CLOB bid/model ratio deteriorates versus entry. Low
+  priced entries can use a tighter threshold.
+- `polymarket_divergence_exit`: Binance-vs-Polymarket reference divergence is
+  adverse for the held side.
+- `final_force_exit`: last-stage risk reduction before settlement.
+- `risk_exit`: missing/stale model or book inputs.
+
+Execution behavior:
+
+- Live mode requires both `--mode live` and `--i-understand-live-risk`.
+- BUY amount is USDC notional; SELL amount is shares.
+- One position per market is allowed. If a SELL fails and a position remains
+  open, new entries are blocked until the position is closed or settled.
+- BUY FAK uses the current best ask plus a configured tick ladder, capped by
+  `fair_cap`; it no longer reserves extra fair-room beyond the cap.
+- BUY retry is a second attempt for the same signal. It does not re-run the
+  full strategy signal refresh between attempts.
+- SELL still refreshes sell parameters and uses more aggressive buffers for
+  risk/force exits.
+- Unknown or timed-out FAK responses must be reconciled by balance before
+  retrying or declaring failure. A timeout does not prove the order failed.
+- Safe balance reductions with a residual position are logged as
+  `position_reduce`; tiny residuals below live minimum sell size can finish via
+  `dust_position`.
+- Current CLOB HTTP helper timeout is intentionally short:
+  total `1.0s`, connect `0.5s`, pool `0.2s`. This lets the bot reach
+  reconciliation/retry while a 5-minute signal can still matter.
+- Live no-sellable-balance for a token position should not stop the whole bot;
+  account-level insufficient USDC/funds can stop the bot.
+
+Logging:
+
+- Analysis-heavy fields should be emitted for paper/dry-run and short live
+  diagnostics, not as permanent noisy live logs.
+- Log order lifecycle as `order_intent` before POST and then the resulting
+  `entry`, `position_reduce`, `exit`, `order_no_fill`, `dust_position`, or
+  fatal/error event.
+- Do not log signed orders, private keys, API credentials, full account config,
+  or full order books.
+
 ### Reusable Infrastructure Modules
 
 Strategy-neutral modules migrated from the old project live under:
@@ -361,8 +473,11 @@ pytest-asyncio>=0.23
   then called `client.set_api_creds(creds)`.
 - The current project caches a single `ClobClient` process-wide and configures
   the SDK HTTP helper client with `http2`, `max_connections=100`,
-  `max_keepalive_connections=20`, `keepalive_expiry=30s`, and a short
-  `connect=2s` timeout.
+  `max_keepalive_connections=20`, `keepalive_expiry=30s`, and short trading
+  timeouts (`total=1s`, `connect=0.5s`, `pool=0.2s`).
+- The SDK HTTP helper mutation is process-global. This project currently
+  assumes one bot/account per process; future multi-strategy same-process
+  runners need a client-factory refactor.
 - Existing CLI config may live at `~/.config/polymarket/config.json`.
 
 ### Environment Variables
@@ -500,6 +615,10 @@ Book parsing notes:
 - `POST /order` may return only status/order identifiers and may omit fill
   details. When fill details are missing, use follow-up order/trade/balance
   queries for accounting.
+- `POST /order` may time out even when the order later matches. Reconcile by
+  token/USDC balance before retrying or recording no-fill.
+- FAK no-match / no orders found should be treated as `order_no_fill`, not as a
+  fatal bot error.
 - Useful CLOB methods/endpoints:
   - `get_midpoint(token_id)`
   - `get_tick_size(token_id)`
@@ -511,6 +630,8 @@ Book parsing notes:
   `float(balance) / 1_000_000`.
 - There is no generic "sell all" order. Query actual token balance, then sell a
   concrete share amount.
+- Very small residual token balances can be below practical sell size; do not
+  repeatedly submit dust SELL orders.
 - Tick size can vary. Fetch `get_tick_size(token_id)` and round/clamp prices to
   valid ticks in `[0, 1]`.
 
