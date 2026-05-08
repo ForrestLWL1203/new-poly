@@ -4,8 +4,11 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import new_poly.strategy.prob_edge as prob_edge_module
 from new_poly.strategy.prob_edge import (
     EdgeConfig,
     MarketSnapshot,
@@ -14,7 +17,7 @@ from new_poly.strategy.prob_edge import (
     evaluate_entry,
     evaluate_exit,
 )
-from new_poly.strategy.probability import MIN_SECONDS_LEFT_FOR_D2, binary_probabilities, binary_probability
+from new_poly.strategy.probability import BinaryProbabilities, MIN_SECONDS_LEFT_FOR_D2, binary_probabilities, binary_probability
 from new_poly.strategy.state import StrategyState
 
 
@@ -318,6 +321,98 @@ def test_entry_ignores_safety_depth_when_best_ask_is_inside_formula_cap() -> Non
     assert decision.side == "up"
     assert decision.price == 0.40
     assert decision.depth_limit_price == 0.40
+
+
+def test_entry_relaxes_fair_cap_for_low_price_probability_edge(monkeypatch) -> None:
+    monkeypatch.setattr(prob_edge_module, "_probs", lambda snapshot: BinaryProbabilities(up=0.409046, down=0.590954, d2=None))
+    cfg = EdgeConfig(
+        core_required_edge=0.18,
+        buy_cap_relax_enabled=True,
+        buy_low_price_relax_max_ask=0.25,
+        buy_low_price_relax_min_prob=0.40,
+        buy_low_price_relax_retained_edge=0.08,
+        buy_low_price_relax_max_extra_ticks=8.0,
+    )
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.0,
+        k_price=100.0,
+        sigma_eff=1.0,
+        up_best_ask=0.17,
+        down_best_ask=0.90,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "enter"
+    assert decision.side == "up"
+    assert decision.required_edge == 0.18
+    assert decision.limit_price == pytest.approx(0.25)
+
+
+def test_entry_relaxes_mid_price_cap_but_limits_high_price_chase(monkeypatch) -> None:
+    cfg = EdgeConfig(
+        core_required_edge=0.14,
+        buy_cap_relax_enabled=True,
+        buy_mid_price_relax_max_ask=0.65,
+        buy_mid_price_relax_min_prob=0.60,
+        buy_mid_price_relax_retained_edge=0.06,
+        buy_mid_price_relax_max_extra_ticks=8.0,
+        buy_mid_strong_relax_min_prob=0.75,
+        buy_mid_strong_relax_retained_edge=0.05,
+        buy_mid_strong_relax_max_extra_ticks=10.0,
+        buy_high_price_relax_min_ask=0.65,
+        buy_high_price_relax_min_prob=0.95,
+        buy_high_price_relax_retained_edge=0.08,
+        buy_high_price_relax_max_extra_ticks=4.0,
+    )
+    state = StrategyState(current_market_slug="m1")
+
+    monkeypatch.setattr(prob_edge_module, "_probs", lambda snapshot: BinaryProbabilities(up=0.714163, down=0.285837, d2=None))
+    mid = evaluate_entry(
+        MarketSnapshot(
+            market_slug="m1",
+            age_sec=180.0,
+            remaining_sec=120.0,
+            s_price=100.0,
+            k_price=100.0,
+            sigma_eff=1.0,
+            up_best_ask=0.55,
+            down_best_ask=0.90,
+            up_book_age_ms=20.0,
+            down_book_age_ms=20.0,
+        ),
+        state,
+        cfg,
+    )
+
+    monkeypatch.setattr(prob_edge_module, "_probs", lambda snapshot: BinaryProbabilities(up=0.964402, down=0.035598, d2=None))
+    high = evaluate_entry(
+        MarketSnapshot(
+            market_slug="m1",
+            age_sec=180.0,
+            remaining_sec=120.0,
+            s_price=100.0,
+            k_price=100.0,
+            sigma_eff=1.0,
+            up_best_ask=0.80,
+            down_best_ask=0.90,
+            up_book_age_ms=20.0,
+            down_book_age_ms=20.0,
+        ),
+        state,
+        cfg,
+    )
+
+    assert mid.action == "enter"
+    assert mid.limit_price == pytest.approx(0.63)
+    assert high.action == "enter"
+    assert high.limit_price == pytest.approx(0.84)
 
 
 def test_entry_rejects_low_model_probability_even_when_edge_is_large() -> None:

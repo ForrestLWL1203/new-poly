@@ -332,6 +332,12 @@ Current tuned strategy shape:
   quality. It currently uses `min_entry_model_prob=0.40`,
   `max_entries_per_market=2`, `low_price_extra_edge_threshold=0.30`, and
   `low_price_extra_edge=0.04`.
+- The aggressive config also enables price/probability BUY cap relaxation after
+  a normal edge signal passes: low-priced tickets (`ask<=0.25`, `prob>=0.40`)
+  can use up to `+8` ticks, mid-priced tickets (`ask<=0.65`, `prob>=0.60/0.75`)
+  can use up to `+8/+10` ticks, and high-priced tickets only relax when
+  `prob>=0.95`, capped at `+4` ticks. This improves FAK fill rate without
+  broadly relaxing low-quality entries.
 - Run directly from the committed config unless the user explicitly asks for a
   temporary YAML override. Check the actual run config in
   `/opt/new-poly/logs/<run-id>.yaml` before comparing logs.
@@ -356,7 +362,9 @@ Execution behavior:
 - One position per market is allowed. If a SELL fails and a position remains
   open, new entries are blocked until the position is closed or settled.
 - BUY FAK uses the current best ask plus a configured tick ladder, capped by
-  `fair_cap`; it no longer reserves extra fair-room beyond the cap.
+  `fair_cap`; in aggressive config that cap may be relaxed by the
+  price/probability buckets above. It no longer reserves extra fair-room beyond
+  the cap.
 - BUY retry is a second attempt for the same signal. It does not re-run the
   full strategy signal refresh between attempts.
 - SELL still refreshes sell parameters and uses more aggressive buffers for

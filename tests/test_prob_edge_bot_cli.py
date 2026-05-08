@@ -186,6 +186,22 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.min_entry_model_prob == 0.40
     assert opts.config.edge.low_price_extra_edge_threshold == 0.30
     assert opts.config.edge.low_price_extra_edge == 0.04
+    assert opts.config.edge.buy_cap_relax_enabled is True
+    assert opts.config.edge.buy_low_price_relax_max_ask == 0.25
+    assert opts.config.edge.buy_low_price_relax_min_prob == 0.40
+    assert opts.config.edge.buy_low_price_relax_retained_edge == 0.08
+    assert opts.config.edge.buy_low_price_relax_max_extra_ticks == 8.0
+    assert opts.config.edge.buy_mid_price_relax_max_ask == 0.65
+    assert opts.config.edge.buy_mid_price_relax_min_prob == 0.60
+    assert opts.config.edge.buy_mid_price_relax_retained_edge == 0.06
+    assert opts.config.edge.buy_mid_price_relax_max_extra_ticks == 8.0
+    assert opts.config.edge.buy_mid_strong_relax_min_prob == 0.75
+    assert opts.config.edge.buy_mid_strong_relax_retained_edge == 0.05
+    assert opts.config.edge.buy_mid_strong_relax_max_extra_ticks == 10.0
+    assert opts.config.edge.buy_high_price_relax_min_ask == 0.65
+    assert opts.config.edge.buy_high_price_relax_min_prob == 0.95
+    assert opts.config.edge.buy_high_price_relax_retained_edge == 0.08
+    assert opts.config.edge.buy_high_price_relax_max_extra_ticks == 4.0
     assert opts.config.edge.cross_source_max_bps == 5.0
     assert opts.config.edge.market_disagrees_exit_threshold == 0.20
     assert opts.config.edge.low_price_market_disagrees_entry_threshold == 0.30

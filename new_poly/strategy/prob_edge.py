@@ -65,6 +65,22 @@ class EdgeConfig:
     min_entry_model_prob: float = 0.0
     low_price_extra_edge_threshold: float = 0.0
     low_price_extra_edge: float = 0.0
+    buy_cap_relax_enabled: bool = False
+    buy_low_price_relax_max_ask: float = 0.25
+    buy_low_price_relax_min_prob: float = 0.40
+    buy_low_price_relax_retained_edge: float = 0.08
+    buy_low_price_relax_max_extra_ticks: float = 8.0
+    buy_mid_price_relax_max_ask: float = 0.65
+    buy_mid_price_relax_min_prob: float = 0.60
+    buy_mid_price_relax_retained_edge: float = 0.06
+    buy_mid_price_relax_max_extra_ticks: float = 8.0
+    buy_mid_strong_relax_min_prob: float = 0.75
+    buy_mid_strong_relax_retained_edge: float = 0.05
+    buy_mid_strong_relax_max_extra_ticks: float = 10.0
+    buy_high_price_relax_min_ask: float = 0.65
+    buy_high_price_relax_min_prob: float = 0.95
+    buy_high_price_relax_retained_edge: float = 0.08
+    buy_high_price_relax_max_extra_ticks: float = 4.0
     cross_source_max_bps: float = 0.0
     market_disagrees_exit_threshold: float = 0.0
     low_price_market_disagrees_entry_threshold: float = 0.0
@@ -196,6 +212,33 @@ def _entry_required_edge(base_edge: float, ask_avg: float, cfg: EdgeConfig) -> f
     return base_edge
 
 
+def _relaxed_entry_fair_cap(model_prob: float, best_ask: float, required_edge: float, cfg: EdgeConfig) -> float:
+    base_cap = model_prob - required_edge
+    if not cfg.buy_cap_relax_enabled:
+        return base_cap
+
+    retained_edge: float | None = None
+    max_extra_ticks: float | None = None
+    if best_ask <= cfg.buy_low_price_relax_max_ask and model_prob >= cfg.buy_low_price_relax_min_prob:
+        retained_edge = cfg.buy_low_price_relax_retained_edge
+        max_extra_ticks = cfg.buy_low_price_relax_max_extra_ticks
+    elif best_ask <= cfg.buy_mid_price_relax_max_ask and model_prob >= cfg.buy_mid_strong_relax_min_prob:
+        retained_edge = cfg.buy_mid_strong_relax_retained_edge
+        max_extra_ticks = cfg.buy_mid_strong_relax_max_extra_ticks
+    elif best_ask <= cfg.buy_mid_price_relax_max_ask and model_prob >= cfg.buy_mid_price_relax_min_prob:
+        retained_edge = cfg.buy_mid_price_relax_retained_edge
+        max_extra_ticks = cfg.buy_mid_price_relax_max_extra_ticks
+    elif best_ask > cfg.buy_high_price_relax_min_ask and model_prob >= cfg.buy_high_price_relax_min_prob:
+        retained_edge = cfg.buy_high_price_relax_retained_edge
+        max_extra_ticks = cfg.buy_high_price_relax_max_extra_ticks
+
+    if retained_edge is None or max_extra_ticks is None:
+        return base_cap
+    tick = cfg.entry_tick_size if cfg.entry_tick_size > 0 else 0.01
+    relaxed_cap = min(model_prob - retained_edge, best_ask + max(0.0, max_extra_ticks) * tick)
+    return max(base_cap, relaxed_cap)
+
+
 def _source_divergent(snapshot: MarketSnapshot, cfg: EdgeConfig) -> bool:
     return (
         cfg.cross_source_max_bps > 0.0
@@ -307,7 +350,7 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
         up_edge = probs.up - snapshot.up_best_ask
         up_required_edge = _entry_required_edge(phase.required_edge, snapshot.up_best_ask, cfg)
         attempted_required_edges.append(up_required_edge)
-        up_fair_cap = probs.up - up_required_edge
+        up_fair_cap = _relaxed_entry_fair_cap(probs.up, snapshot.up_best_ask, up_required_edge, cfg)
         if up_edge >= up_required_edge:
             cooldown_reason = _risk_exit_cooldown_reason(snapshot, state, "up", cfg)
             if cooldown_reason is not None:
@@ -320,7 +363,7 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
         down_edge = probs.down - snapshot.down_best_ask
         down_required_edge = _entry_required_edge(phase.required_edge, snapshot.down_best_ask, cfg)
         attempted_required_edges.append(down_required_edge)
-        down_fair_cap = probs.down - down_required_edge
+        down_fair_cap = _relaxed_entry_fair_cap(probs.down, snapshot.down_best_ask, down_required_edge, cfg)
         if down_edge >= down_required_edge:
             cooldown_reason = _risk_exit_cooldown_reason(snapshot, state, "down", cfg)
             if cooldown_reason is not None:

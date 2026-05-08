@@ -264,7 +264,8 @@ The bot keeps two separate prices for each candidate:
   The bot no longer pre-accumulates ask depth before posting FAK. For SELL this
   remains the deepest bid level required to sell the held shares.
 - `limit_price`: formula-derived hard cap/floor used by execution. For BUY,
-  `limit_price = model_prob - required_edge`. For SELL, it remains the
+  the base cap is `model_prob - required_edge`, then optional buy-cap relaxation
+  may raise it for selected price/probability buckets. For SELL, it remains the
   executable bid floor returned by the exit quote.
 
 For BUY, the formula probability acts as a maximum acceptable token price:
@@ -302,6 +303,36 @@ minimum entry price: recent paper data showed low-priced tokens can contain both
 the largest losses and the largest winners, so the current preference is to
 require more edge rather than discard the whole bucket.
 
+The aggressive profile also enables buy-cap relaxation for FAK execution. This
+does not change the entry edge test: `edge >= required_edge` must still pass.
+It only raises the maximum acceptable FAK price after a signal is already valid,
+using both token price and model probability:
+
+```text
+low price:  best_ask <= 0.25 and model_prob >= 0.40
+            retained_edge = 0.08, max extra = 8 ticks
+
+mid price:  best_ask <= 0.65 and model_prob >= 0.60
+            retained_edge = 0.06, max extra = 8 ticks
+
+mid strong: best_ask <= 0.65 and model_prob >= 0.75
+            retained_edge = 0.05, max extra = 10 ticks
+
+high price: best_ask > 0.65 and model_prob >= 0.95
+            retained_edge = 0.08, max extra = 4 ticks
+```
+
+The relaxed cap is:
+
+```text
+relaxed_cap = min(model_prob - retained_edge,
+                  best_ask + max_extra_ticks * tick_size)
+fair_cap = max(model_prob - required_edge, relaxed_cap)
+```
+
+This is intended to improve FAK fill rate for low-priced/mid-priced edge while
+limiting high-priced tickets where the upside is small.
+
 Live-oriented configs add a one-tick fair-cap margin:
 
 ```text
@@ -335,8 +366,8 @@ price_hint = min(0.50 + 0.02, 0.56) = 0.52
 ```
 
 If enough depth exists up to the capped hint, FAK fills. If not, the bot records
-`order_no_fill`; on retry it refreshes the full strategy snapshot and only
-reposts if the same side still passes the entry rules.
+`order_no_fill`; BUY retry is a second POST attempt for the same signal and
+does not re-run the full strategy refresh between attempts.
 
 For SELL, the bot uses `bid_limit`, the lowest bid level needed to sell the
 position size, rather than `bid_avg`.
@@ -558,7 +589,7 @@ reductions.
 BUY FAK hints use a dynamic fair-room buffer when
 `buy_dynamic_buffer_enabled=true`. Instead of always posting `best_ask + N`
 ticks, the bot clamps the attempt-specific max tick buffer to the current
-`fair_cap`:
+`fair_cap`, which may already include the price/probability cap relaxation above:
 
 ```text
 attempt 1 hint = min(fair_cap, best_ask + 5 ticks)

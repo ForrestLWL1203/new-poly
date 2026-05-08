@@ -154,17 +154,21 @@ Current default strategy behavior:
   default; use `--dynamic-entry` to test `60-70s` strong-move and `70-100s`
   fast-move entry gates.
 - FAK entry decisions use fresh top-of-book `best_ask` for edge and require
-  the formula cap to leave at least one configured tick of margin:
-  `best_ask + margin <= model_prob - required_edge`. BUY hints are then sent as
-  `min(best_ask + configured_tick_buffer, model_prob - required_edge)`.
+  the formula cap to leave at least one configured tick of margin. The base cap
+  is `model_prob - required_edge`. The aggressive profile can relax that cap
+  after the edge test passes, using price/probability buckets: low-priced
+  `<=0.25` tickets with `prob>=0.40`, mid-priced `<=0.65` tickets with
+  `prob>=0.60/0.75`, and only highly confirmed high-priced tickets with
+  `prob>=0.95`.
 - If Coinbase is enabled and both sources have live prices that disagree beyond
   `cross_source_max_bps`, the bot treats the proxy input as unreliable and skips
   new entries with `source_divergence`.
 - Ask-depth summaries are still logged for analysis, but BUY entry no longer
   pre-accumulates depth. If the visible depth moves or is insufficient, FAK
   simply returns `order_no_fill` and the retry path revalidates the signal.
-- FAK BUY gets one capped retry. The default live BUY hint ladder is
-  `+2 ticks` then `+4 ticks`, always capped by formula fair cap. FAK SELL also
+- FAK BUY gets one capped retry. With dynamic BUY buffering enabled, the live
+  hint ladder is up to `+5 ticks` then `+8 ticks`, always capped by the
+  possibly relaxed fair cap. FAK SELL also
   retries once, but the sell floor
   depends on exit urgency: normal profit/stop exits use `-4 ticks` then
   `-5 ticks`, and `final_force_exit` uses a fixed `-5/-10 tick` emergency
@@ -222,9 +226,9 @@ Current parameter files:
 - `configs/prob_edge_mvp.yaml`: conservative baseline/default config.
 - `configs/prob_edge_aggressive.yaml`: current live-oriented aggressive paper
   candidate. It uses `100-240s` entry timing, `0.16/0.14` early/core edge
-  thresholds, `min_entry_model_prob=0.40`, `max_entries_per_market=2`, `$1`
-  paper notional/depth, Binance as the model source, and Polymarket live-data
-  as a reference risk guard.
+  thresholds, `min_entry_model_prob=0.40`, price/probability buy-cap
+  relaxation, `max_entries_per_market=2`, `$1` paper notional/depth, Binance
+  as the model source, and Polymarket live-data as a reference risk guard.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
   profiles and health thresholds. It only changes entry timing/edge/max-entry
   settings, and only at window boundaries.

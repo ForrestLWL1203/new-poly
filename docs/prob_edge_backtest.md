@@ -69,6 +69,7 @@ amount_usd = 1
 min_entry_model_prob = 0.40
 low_price_extra_edge_threshold = 0.30
 low_price_extra_edge = 0.04
+buy_cap_relax_enabled = true
 model_decay_buffer = 0.03
 prob_drop_exit disabled by default
 ```
