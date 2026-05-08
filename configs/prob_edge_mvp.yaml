@@ -25,6 +25,11 @@ strategy:
   final_hold_min_prob: 0.98
   final_hold_min_bid_avg: 0.97
   final_hold_min_bid_limit: 0.95
+  hold_to_settlement_enabled: false
+  hold_to_settlement_min_profit_ratio: 2.0
+  hold_to_settlement_min_model_prob: 0.90
+  hold_to_settlement_min_bid_avg: 0.80
+  hold_to_settlement_min_bid_limit: 0.75
   prob_stagnation_window_sec: 3.0
   prob_stagnation_epsilon: 0.002
   prob_drop_exit_window_sec: 0.0

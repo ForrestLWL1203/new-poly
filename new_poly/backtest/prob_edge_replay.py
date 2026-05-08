@@ -48,6 +48,11 @@ class BacktestConfig:
     prob_drop_exit_window_sec: float = 0.0
     prob_drop_exit_threshold: float = 0.0
     final_force_exit_remaining_sec: float = 30.0
+    hold_to_settlement_enabled: bool = False
+    hold_to_settlement_min_profit_ratio: float = 2.0
+    hold_to_settlement_min_model_prob: float = 0.90
+    hold_to_settlement_min_bid_avg: float = 0.80
+    hold_to_settlement_min_bid_limit: float = 0.75
     profit_protection_start_remaining_sec: float = 15.0
     profit_protection_end_remaining_sec: float = 30.0
     defensive_take_profit_start_remaining_sec: float = 30.0
@@ -93,6 +98,11 @@ class BacktestConfig:
             prob_drop_exit_window_sec=self.prob_drop_exit_window_sec,
             prob_drop_exit_threshold=self.prob_drop_exit_threshold,
             final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
+            hold_to_settlement_enabled=self.hold_to_settlement_enabled,
+            hold_to_settlement_min_profit_ratio=self.hold_to_settlement_min_profit_ratio,
+            hold_to_settlement_min_model_prob=self.hold_to_settlement_min_model_prob,
+            hold_to_settlement_min_bid_avg=self.hold_to_settlement_min_bid_avg,
+            hold_to_settlement_min_bid_limit=self.hold_to_settlement_min_bid_limit,
             profit_protection_start_remaining_sec=self.profit_protection_start_remaining_sec,
             profit_protection_end_remaining_sec=self.profit_protection_end_remaining_sec,
             defensive_take_profit_start_remaining_sec=self.defensive_take_profit_start_remaining_sec,

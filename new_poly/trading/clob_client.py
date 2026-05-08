@@ -22,9 +22,10 @@ def _build_http_client_kwargs() -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "http2": True,
         "limits": httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
-        # Trading decisions expire quickly in 5m markets. Keep POST waits short
-        # so an unhealthy CLOB HTTP stream reaches reconciliation/retry while
-        # the entry signal can still matter.
+        # Give live FAK POST enough time to return a real matched/no-match
+        # response. A too-short read timeout can create false "unknown" results
+        # where the order fills but accounting reconciliation sees it too early.
+        # Connect/pool waits stay short so connection issues fail fast.
         "timeout": httpx.Timeout(
             config.CLOB_HTTP_TIMEOUT_SEC,
             connect=config.CLOB_HTTP_CONNECT_TIMEOUT_SEC,

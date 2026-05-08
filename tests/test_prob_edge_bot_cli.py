@@ -171,6 +171,11 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.retry_interval_sec == 0.0
     assert opts.config.interval_sec == 0.5
     assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
+    assert opts.config.edge.hold_to_settlement_enabled is True
+    assert opts.config.edge.hold_to_settlement_min_profit_ratio == 2.0
+    assert opts.config.edge.hold_to_settlement_min_model_prob == 0.90
+    assert opts.config.edge.hold_to_settlement_min_bid_avg == 0.80
+    assert opts.config.edge.hold_to_settlement_min_bid_limit == 0.75
     assert opts.config.edge.prob_drop_exit_window_sec == 0.0
     assert opts.config.edge.prob_drop_exit_threshold == 0.0
     assert opts.config.edge.model_decay_buffer == 0.03

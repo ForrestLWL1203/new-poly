@@ -111,6 +111,19 @@ Current Sweden VPS:
 - SSH user: `root`
 - Authentication is password-based. Do not print the password in logs or docs;
   use `SSHPASS` or an interactive prompt when automation is required.
+- Local ignored password file:
+  `/Users/forrestliao/workspace/new-poly/docs/sweden-vps-secret.txt`.
+  This file is under ignored `docs/`; keep permissions at `600` and never copy
+  it into tracked files or command output.
+- When the user says "VPS" without specifying Ireland/AWS, default to this
+  Sweden VPS.
+- Do not waste time trying the Ireland PEM key against this host. Public-key
+  auth has been observed failing with `Permission denied (publickey,password)`;
+  use the password-based path directly when the user has authorized remote
+  access.
+- If using `sshpass`, pass the password through the `SSHPASS` environment
+  variable and keep commands read-only unless the user asked to deploy/start/stop
+  a run. Never echo the password or write it into tracked files.
 
 Runtime layout:
 
@@ -118,6 +131,15 @@ Runtime layout:
 - Virtualenv: `/opt/new-poly/venv`
 - Shared secrets/config: `/opt/new-poly/shared/polymarket_config.json`
 - Logs: `/opt/new-poly/logs`
+
+Useful read-only status checks:
+
+```bash
+SSHPASS="$(cat /Users/forrestliao/workspace/new-poly/docs/sweden-vps-secret.txt)" \
+  sshpass -e ssh root@70.34.207.45 'pgrep -af "run_prob_edge_bot|collect_prob_edge_data" || true'
+SSHPASS="$(cat /Users/forrestliao/workspace/new-poly/docs/sweden-vps-secret.txt)" \
+  sshpass -e ssh root@70.34.207.45 'ls -lt /opt/new-poly/logs | head -20'
+```
 
 Use the venv explicitly:
 

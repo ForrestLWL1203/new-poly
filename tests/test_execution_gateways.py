@@ -99,12 +99,12 @@ class BalanceErrorClient:
         raise Exception("PolyApiException[status_code=400, error_message={'error': 'not enough balance / allowance: the balance is not enough'}]")
 
 
-def test_clob_http_timeout_is_capped_for_fast_fak_retry() -> None:
+def test_clob_http_timeout_allows_slow_fak_response() -> None:
     timeout = _build_http_client_kwargs()["timeout"]
 
     assert timeout.connect == 0.5
-    assert timeout.read == 1.0
-    assert timeout.write == 1.0
+    assert timeout.read == 5.0
+    assert timeout.write == 5.0
     assert timeout.pool == 0.2
 
 
