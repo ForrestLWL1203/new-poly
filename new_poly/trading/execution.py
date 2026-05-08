@@ -151,14 +151,9 @@ def _dynamic_buy_price_hint(
     fair_room = max(0.0, max_price - best_ask)
     if fair_room <= 0:
         return buffer_buy_price_hint(token_id, best_ask, buffer_ticks=fallback_buffer_ticks, max_price=max_price)
-    room_frac = attempt1_room_frac if attempt == 0 else attempt2_room_frac
     max_ticks = attempt1_max_ticks if attempt == 0 else attempt2_max_ticks
-    reserved = max(0.0, min_reserved_edge, fair_room * max(0.0, reserved_room_frac))
-    max_hint = max(best_ask, max_price - reserved)
-    desired = best_ask + min(fair_room * max(0.0, room_frac), max(0.0, max_ticks) * tick)
-    capped = min(desired, max_hint, max_price)
-    rounded = min(capped, max_price)
-    rounded = round(max(0.0, min(1.0, rounded)), 6)
+    desired = best_ask + max(0.0, max_ticks) * tick
+    rounded = round(max(0.0, min(1.0, desired, max_price)), 6)
     return rounded
 
 
@@ -481,32 +476,6 @@ class PaperExecutionGateway:
         for attempt in range(self.config.retry_count + 1):
             if attempt > 0:
                 retry_wait_ms += await self._retry_wait()
-                if retry_refresh is not None:
-                    refresh_start = time.monotonic()
-                    refreshed = await retry_refresh(attempt)
-                    retry_refresh_ms += _ms_since(refresh_start)
-                    if refreshed is None:
-                        total_latency_ms = _ms_since(start)
-                        return _retry_skipped(
-                            ExecutionResult(
-                                False,
-                                message="paper buy no fill",
-                                mode="paper",
-                                timing=self._paper_timing(
-                                    start=start,
-                                    attempts=attempt,
-                                    sleep_ms=sleep_ms,
-                                    retry_wait_ms=retry_wait_ms,
-                                    retry_refresh_ms=retry_refresh_ms,
-                                    book_read_ms=book_read_ms,
-                                ),
-                            ),
-                            attempt=attempt,
-                            total_latency_ms=total_latency_ms,
-                        )
-                    max_price = refreshed.max_price
-                    best_ask = refreshed.best_ask
-                    price_hint_base = refreshed.price_hint_base
             book_start = time.monotonic()
             levels = self.stream.get_latest_ask_levels_with_size(token_id, max_age_sec=self.config.max_book_age_sec)
             book_read_ms += _ms_since(book_start)
@@ -912,17 +881,6 @@ class LiveFakExecutionGateway:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
             if self.retry_interval_sec > 0:
                 await asyncio.sleep(self.retry_interval_sec)
-            if retry_refresh is not None:
-                refreshed = await retry_refresh(attempt + 1)
-                if refreshed is None:
-                    return _retry_skipped(
-                        last,
-                        attempt=attempt + 1,
-                        total_latency_ms=round((time.monotonic() - start) * 1000),
-                    )
-                max_price = refreshed.max_price
-                best_ask = refreshed.best_ask
-                base_price = refreshed.price_hint_base if refreshed.price_hint_base is not None else refreshed.best_ask
         return last
 
     def _reconcile_unknown_buy(

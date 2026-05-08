@@ -184,7 +184,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.core_to_late_age_sec == 240.0
     assert opts.config.edge.min_entry_model_prob == 0.35
     assert opts.config.edge.low_price_extra_edge_threshold == 0.30
-    assert opts.config.edge.low_price_extra_edge == 0.02
+    assert opts.config.edge.low_price_extra_edge == 0.04
     assert opts.config.edge.cross_source_max_bps == 5.0
     assert opts.config.edge.market_disagrees_exit_threshold == 0.25
     assert opts.config.edge.low_price_market_disagrees_entry_threshold == 0.20

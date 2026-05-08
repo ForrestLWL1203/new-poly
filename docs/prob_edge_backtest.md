@@ -67,7 +67,7 @@ core_required_edge = 0.14
 max_entries_per_market = 4
 amount_usd = 1
 low_price_extra_edge_threshold = 0.30
-low_price_extra_edge = 0.02
+low_price_extra_edge = 0.04
 model_decay_buffer = 0.03
 prob_drop_exit disabled by default
 ```
@@ -123,7 +123,7 @@ python3 scripts/backtest_prob_edge.py \
   --entry-tick-size 0.01 \
   --min-entry-model-prob 0.35 \
   --low-price-extra-edge-threshold 0.30 \
-  --low-price-extra-edge 0.02 \
+  --low-price-extra-edge 0.04 \
   --slippage-ticks 3
 ```
 

@@ -41,7 +41,7 @@ strategy:
   entry_tick_size: 0.01
   min_entry_model_prob: 0.35
   low_price_extra_edge_threshold: 0.30
-  low_price_extra_edge: 0.02
+  low_price_extra_edge: 0.04
   cross_source_max_bps: 5.0
   market_disagrees_exit_threshold: 0.25
   low_price_market_disagrees_entry_threshold: 0.20

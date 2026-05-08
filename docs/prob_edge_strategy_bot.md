@@ -299,8 +299,8 @@ if best_ask < low_price_extra_edge_threshold:
 ```
 
 Both values default to `0` in code, which disables the guard. The current
-aggressive profile enables a light guard at `<0.30 + 0.02`, based on replaying
-the combined 168-window paper sample. This is intentionally softer than a
+aggressive profile enables a light guard at `<0.30 + 0.04`, based on replaying
+the recent paper sample. This is intentionally softer than a
 minimum entry price: recent paper data showed low-priced tokens can contain both
 the largest losses and the largest winners, so the current preference is to
 require more edge rather than discard the whole bucket.

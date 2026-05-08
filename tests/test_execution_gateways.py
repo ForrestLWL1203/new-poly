@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from new_poly.trading import fak_quotes
 from new_poly.trading.execution import (
     BUY,
-    BuyRetryParams,
     ExecutionConfig,
     ExecutionResult,
     LiveFakExecutionGateway,
@@ -19,6 +18,7 @@ from new_poly.trading.execution import (
     SELL,
     SellRetryParams,
 )
+from new_poly.trading.clob_client import _build_http_client_kwargs
 
 
 class FakeStream:
@@ -87,6 +87,15 @@ class BalanceErrorClient:
 
     def post_order(self, signed, order_type):
         raise Exception("PolyApiException[status_code=400, error_message={'error': 'not enough balance / allowance: the balance is not enough'}]")
+
+
+def test_clob_http_timeout_is_capped_for_fast_fak_retry() -> None:
+    timeout = _build_http_client_kwargs()["timeout"]
+
+    assert timeout.connect == 0.5
+    assert timeout.read == 1.0
+    assert timeout.write == 1.0
+    assert timeout.pool == 0.2
 
 
 class TradeLookupClient:
@@ -221,7 +230,7 @@ def test_live_buy_hint_never_exceeds_depth_limit(monkeypatch) -> None:
     assert captured["price_hint"] == 0.55
 
 
-def test_live_buy_dynamic_buffer_uses_fair_room_without_spending_reserved_edge(monkeypatch) -> None:
+def test_live_buy_dynamic_buffer_uses_tick_ladder_capped_by_fair_cap(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
@@ -232,7 +241,7 @@ def test_live_buy_dynamic_buffer_uses_fair_room_without_spending_reserved_edge(m
 
     assert result.success is True
     assert gateway.calls[0][3] == pytest.approx(0.22)
-    assert gateway.calls[1][3] == pytest.approx(0.248)
+    assert gateway.calls[1][3] == pytest.approx(0.25)
 
 
 def test_live_buy_dynamic_buffer_clamps_when_fair_room_is_tight(monkeypatch) -> None:
@@ -244,10 +253,10 @@ def test_live_buy_dynamic_buffer_clamps_when_fair_room_is_tight(monkeypatch) -> 
     result = asyncio.run(gateway.buy("down", amount_usd=1.0, max_price=0.485355, best_ask=0.47))
 
     assert result.success is True
-    assert gateway.calls[0][3] == pytest.approx(0.47)
+    assert gateway.calls[0][3] == pytest.approx(0.485355)
 
 
-def test_live_buy_retry_refreshes_signal_before_second_post(monkeypatch) -> None:
+def test_live_buy_retry_reuses_same_signal_without_refresh(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
@@ -255,8 +264,7 @@ def test_live_buy_retry_refreshes_signal_before_second_post(monkeypatch) -> None
     ], buy_dynamic_buffer_enabled=False)
 
     async def refresh_retry(attempt):
-        assert attempt == 1
-        return BuyRetryParams(max_price=0.57, best_ask=0.54, price_hint_base=0.55)
+        raise AssertionError("BUY retry should reuse the same signal without refresh")
 
     result = asyncio.run(
         gateway.buy(
@@ -272,19 +280,20 @@ def test_live_buy_retry_refreshes_signal_before_second_post(monkeypatch) -> None
     assert result.success is True
     assert len(gateway.calls) == 2
     assert gateway.calls[0][3] == 0.52
-    assert gateway.calls[1][3] == 0.57
+    assert gateway.calls[1][3] == 0.54
     assert result.attempt == 2
     assert result.total_latency_ms is not None
 
 
-def test_live_buy_retry_skips_when_signal_refresh_fails(monkeypatch) -> None:
+def test_live_buy_retry_ignores_signal_refresh_failure(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
+        ExecutionResult(True, filled_size=10.0, avg_price=0.54, message="MATCHED", mode="live"),
     ])
 
     async def refresh_retry(attempt):
-        return None
+        raise AssertionError("BUY retry should not refresh signal")
 
     result = asyncio.run(
         gateway.buy(
@@ -297,10 +306,9 @@ def test_live_buy_retry_skips_when_signal_refresh_fails(monkeypatch) -> None:
         )
     )
 
-    assert result.success is False
-    assert len(gateway.calls) == 1
-    assert result.attempt == 1
-    assert "retry skipped" in result.message
+    assert result.success is True
+    assert len(gateway.calls) == 2
+    assert result.attempt == 2
 
 
 def test_live_buy_retry_can_use_configured_four_tick_buffer(monkeypatch) -> None:
@@ -802,45 +810,61 @@ def test_paper_retry_uses_one_latency_plus_retry_interval() -> None:
     asyncio.run(scenario())
 
 
-def test_paper_buy_retry_uses_refreshed_signal_params() -> None:
+def test_paper_buy_retry_reuses_same_signal_params() -> None:
     async def scenario() -> None:
         stream = FakeStream()
-        stream.asks["up"] = [(0.58, 10.0)]
+        stream.asks["up"] = [(0.70, 10.0)]
+        reads = 0
+
+        async def mutate_between_attempts():
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                stream.asks["up"] = [(0.56, 10.0)]
+
         gateway = PaperExecutionGateway(
             stream=stream,
             config=ExecutionConfig(paper_latency_sec=0.0, retry_interval_sec=0.0, retry_count=1),
+            before_fill=mutate_between_attempts,
         )
 
         async def refresh_retry(attempt):
-            assert attempt == 1
-            return BuyRetryParams(max_price=0.60, best_ask=0.58, price_hint_base=0.58)
+            raise AssertionError("paper BUY retry should not refresh signal")
 
-        result = await gateway.buy("up", amount_usd=5.0, max_price=0.55, retry_refresh=refresh_retry)
+        result = await gateway.buy("up", amount_usd=5.0, max_price=0.60, best_ask=0.50, retry_refresh=refresh_retry)
 
         assert result.success is True
         assert result.attempt == 2
-        assert result.avg_price == 0.58
+        assert result.avg_price == 0.56
 
     asyncio.run(scenario())
 
 
-def test_paper_buy_retry_skips_when_signal_refresh_fails() -> None:
+def test_paper_buy_retry_ignores_signal_refresh_failure() -> None:
     async def scenario() -> None:
         stream = FakeStream()
-        stream.asks["up"] = [(0.58, 10.0)]
+        stream.asks["up"] = [(0.70, 10.0)]
+        reads = 0
+
+        async def mutate_between_attempts():
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                stream.asks["up"] = [(0.56, 10.0)]
+
         gateway = PaperExecutionGateway(
             stream=stream,
             config=ExecutionConfig(paper_latency_sec=0.0, retry_interval_sec=0.0, retry_count=1),
+            before_fill=mutate_between_attempts,
         )
 
         async def refresh_retry(attempt):
-            return None
+            raise AssertionError("paper BUY retry should not refresh signal")
 
-        result = await gateway.buy("up", amount_usd=5.0, max_price=0.55, retry_refresh=refresh_retry)
+        result = await gateway.buy("up", amount_usd=5.0, max_price=0.60, best_ask=0.50, retry_refresh=refresh_retry)
 
-        assert result.success is False
-        assert result.attempt == 1
-        assert "retry skipped" in result.message
+        assert result.success is True
+        assert result.attempt == 2
 
     asyncio.run(scenario())
 

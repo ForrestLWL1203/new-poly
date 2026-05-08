@@ -22,10 +22,10 @@ def _build_http_client_kwargs() -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "http2": True,
         "limits": httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
-        # Trading decisions expire quickly in 5m markets. Keep connect short
-        # and cap read/write waits so one degraded CLOB HTTP stream cannot
-        # freeze the strategy loop for most of an entry/exit window.
-        "timeout": httpx.Timeout(3.0, connect=2.0, pool=1.0),
+        # Trading decisions expire quickly in 5m markets. Keep POST waits short
+        # so an unhealthy CLOB HTTP stream reaches reconciliation/retry while
+        # the entry signal can still matter.
+        "timeout": httpx.Timeout(1.0, connect=0.5, pool=0.2),
     }
     if proxy:
         kwargs["proxy"] = proxy
