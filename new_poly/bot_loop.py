@@ -192,14 +192,17 @@ async def _advance_dvol_refresh(
             refreshed = dvol.refresh_task.result()
         except Exception:
             refreshed = None
+        was_stale = is_dvol_stale(dvol.state.current, now_wall=time.time(), max_age_sec=cfg.max_dvol_age_sec)
+        failed_before = dvol.state.failed_refreshes
         if dvol.state.apply_refresh_result(refreshed):
-            logger.write({
-                "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-                "event": "volatility_recovered",
-                "mode": options.mode,
-                "market_slug": dvol.refresh_market_slug or window_slug,
-                "volatility": dvol.state.current.to_json() if dvol.state.current is not None else None,
-            })
+            if was_stale or failed_before > 0:
+                logger.write({
+                    "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "event": "volatility_recovered",
+                    "mode": options.mode,
+                    "market_slug": dvol.refresh_market_slug or window_slug,
+                    "volatility": dvol.state.current.to_json() if dvol.state.current is not None else None,
+                })
         else:
             logger.write({
                 "ts": dt.datetime.now(dt.timezone.utc).isoformat(),

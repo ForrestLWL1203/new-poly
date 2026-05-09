@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import time
 from dataclasses import replace
 
-from new_poly.bot_loop import DvolRuntime, FeedContext, WindowCloseResult
+from new_poly.bot_loop import DvolRuntime, FeedContext, WindowCloseResult, _advance_dvol_refresh
 from new_poly.bot_runner import BotRunner, StartedContext, StartupContext
 from new_poly.bot_runtime import DvolRefreshState, WindowPrices, build_arg_parser, build_runtime_options
 from new_poly.market.deribit import DvolSnapshot
@@ -472,6 +473,51 @@ def test_prepare_tick_context_collects_snapshot_and_row(monkeypatch) -> None:
         assert tick.row["sigma_source"] == "test_dvol"
         assert tick.price_analysis == {"s_price": 101.0, "k_price": 100.0}
         assert tick.reference_meta == {}
+
+    asyncio.run(scenario())
+
+
+def test_normal_volatility_refresh_is_silent() -> None:
+    async def scenario() -> None:
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+        logger = DummyLogger()
+        now = time.time()
+        old = DvolSnapshot(
+            source="test_dvol",
+            currency="BTC",
+            dvol=60.0,
+            sigma=0.6,
+            timestamp_ms=1,
+            fetched_at=now,
+        )
+        new = DvolSnapshot(
+            source="test_dvol",
+            currency="BTC",
+            dvol=61.0,
+            sigma=0.61,
+            timestamp_ms=2,
+            fetched_at=now,
+        )
+        task = asyncio.create_task(asyncio.sleep(0, result=new))
+        await task
+        dvol = DvolRuntime(
+            state=DvolRefreshState(old),
+            refresh_task=task,
+            refresh_market_slug="m1",
+            next_refresh=999999999.0,
+        )
+
+        sigma_eff, stale = await _advance_dvol_refresh(
+            dvol=dvol,
+            cfg=options.config,
+            logger=logger,
+            options=options,
+            window_slug="m1",
+        )
+
+        assert sigma_eff == 0.61
+        assert stale is False
+        assert logger.rows == []
 
     asyncio.run(scenario())
 

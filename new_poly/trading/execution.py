@@ -893,6 +893,16 @@ class LiveFakExecutionGateway:
                 attempt2_max_ticks=self.buy_dynamic_buffer_attempt2_max_ticks,
             )
             last = await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)
+            if last.success:
+                last = await asyncio.to_thread(
+                    self._reconcile_successful_buy,
+                    token_id,
+                    before_balance,
+                    amount_usd,
+                    max_price,
+                    price_hint,
+                    last,
+                )
             if not last.success and _is_buy_execution_unknown(last):
                 reconciled = await asyncio.to_thread(
                     self._reconcile_unknown_buy,
@@ -916,6 +926,54 @@ class LiveFakExecutionGateway:
             if self.retry_interval_sec > 0:
                 await asyncio.sleep(self.retry_interval_sec)
         return last
+
+    def _reconcile_successful_buy(
+        self,
+        token_id: str,
+        before_balance: float | None,
+        amount_usd: float,
+        max_price: float | None,
+        price_hint: float | None,
+        last: ExecutionResult,
+    ) -> ExecutionResult:
+        after_balance = get_token_balance(token_id, safe=True)
+        if before_balance is None or after_balance is None:
+            return replace(
+                last,
+                timing={**last.timing, "success_reconciliation": "balance_unavailable"},
+            )
+        bought_by_balance = max(0.0, after_balance - before_balance)
+        min_size = _min_adopt_buy_shares(amount_usd)
+        if bought_by_balance < max(1e-9, min_size):
+            return replace(
+                last,
+                timing={
+                    **last.timing,
+                    "success_reconciliation": "no_balance_increase",
+                    "balance_before": round(before_balance, 6),
+                    "balance_after": round(after_balance, 6),
+                    "min_adopt_buy_shares": round(min_size, 6),
+                },
+            )
+        price = last.avg_price if last.avg_price > 0 else _buy_balance_price(amount_usd, bought_by_balance, max_price or price_hint)
+        timing = {
+            **last.timing,
+            "reconciliation": "balance_increase_after_success",
+            "balance_before": round(before_balance, 6),
+            "balance_after": round(after_balance, 6),
+            "bought_by_balance": round(bought_by_balance, 6),
+            "response_fill_size": round(last.filled_size, 6),
+            "fallback_price": round(price, 6),
+        }
+        if abs(bought_by_balance - last.filled_size) <= 1e-6 and last.avg_price > 0:
+            return replace(last, timing=timing)
+        return replace(
+            last,
+            filled_size=bought_by_balance,
+            avg_price=price,
+            message="live buy reconciled after successful POST response",
+            timing=timing,
+        )
 
     def _reconcile_unknown_buy(
         self,
@@ -982,8 +1040,7 @@ class LiveFakExecutionGateway:
         exit_reason: str | None = None,
         retry_refresh: SellRetryRefresh | None = None,
     ) -> ExecutionResult:
-        balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
-        amount = min(shares, balance or 0.0)
+        amount = max(0.0, shares)
         if amount <= 0:
             return ExecutionResult(
                 False,

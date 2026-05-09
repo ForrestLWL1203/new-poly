@@ -582,7 +582,7 @@ def test_live_sell_no_balance_is_not_fatal_and_is_not_an_order_attempt(monkeypat
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
     gateway = SequencedLiveGateway([])
 
-    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40))
+    result = asyncio.run(gateway.sell("up", shares=0.0, min_price=0.40))
 
     assert result.success is False
     assert result.attempt == 0
@@ -607,8 +607,7 @@ def test_live_sell_balance_error_is_not_fatal(monkeypatch) -> None:
 
 
 def test_live_sell_request_exception_reconciles_from_balance_and_trades(monkeypatch) -> None:
-    balances = iter([4.0, 0.0])
-    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
     monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([
         {"asset_id": "up", "side": "SELL", "size": "4.0", "price": "0.085", "timestamp": "1778213316"},
     ]))
@@ -633,8 +632,7 @@ def test_live_sell_request_exception_reconciles_from_balance_and_trades(monkeypa
 
 
 def test_live_sell_success_reconciles_when_response_understates_fill(monkeypatch) -> None:
-    balances = iter([5.872351, 0.012176])
-    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.012176)
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
     gateway = SequencedLiveGateway([
         ExecutionResult(
@@ -691,6 +689,39 @@ def test_live_buy_request_exception_reconciles_from_balance_and_trades(monkeypat
     assert len(gateway.calls) == 1
 
 
+def test_live_buy_success_reconciles_real_position_balance(monkeypatch) -> None:
+    balances = iter([0.0, 5.0])
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            True,
+            filled_size=1.0,
+            avg_price=0.20,
+            message="matched",
+            mode="live",
+        ),
+    ])
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.24,
+            best_ask=0.20,
+            price_hint_base=0.20,
+        )
+    )
+
+    assert result.success is True
+    assert result.filled_size == pytest.approx(5.0)
+    assert result.avg_price == pytest.approx(0.20)
+    assert result.message == "live buy reconciled after successful POST response"
+    assert result.timing["reconciliation"] == "balance_increase_after_success"
+    assert result.timing["response_fill_size"] == pytest.approx(1.0)
+    assert len(gateway.calls) == 1
+
+
 def test_live_buy_adopts_existing_balance_before_reposting(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 1.6566)
     gateway = SequencedLiveGateway([])
@@ -743,6 +774,27 @@ def test_live_buy_unknown_result_adopts_existing_balance_without_increase(monkey
     assert result.timing["reconciliation"] == "existing_balance"
     assert result.timing["min_adopt_buy_shares"] == pytest.approx(0.9)
     assert len(gateway.calls) == 1
+
+
+def test_live_sell_first_attempt_uses_cached_shares_without_balance_lookup(monkeypatch) -> None:
+    balance_calls = 0
+
+    def fake_balance(token_id, safe=True):
+        nonlocal balance_calls
+        balance_calls += 1
+        return 10.0
+
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fake_balance)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(False, message="UNMATCHED", mode="live"),
+    ], retry_count=0)
+
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="logic_decay_exit"))
+
+    assert result.success is False
+    assert gateway.calls == [("up", 10.0, SELL, 0.32)]
+    assert balance_calls == 0
 
 
 def test_live_post_balance_error_is_only_fatal_for_buy(monkeypatch) -> None:
