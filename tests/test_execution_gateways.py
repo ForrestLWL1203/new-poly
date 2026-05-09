@@ -475,9 +475,42 @@ def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) ->
         ExecutionResult(False, message="UNMATCHED", mode="live"),
         ExecutionResult(True, filled_size=10.0, avg_price=0.45, message="MATCHED", mode="live"),
     ])
+    attempts = []
 
     async def refresh_retry(attempt):
-        assert attempt == 1
+        attempts.append(attempt)
+        if attempt == 0:
+            return SellRetryParams(min_price=0.40, exit_reason="logic_decay_exit")
+        if attempt == 1:
+            return SellRetryParams(min_price=0.50, exit_reason="logic_decay_exit")
+        raise AssertionError(f"unexpected attempt {attempt}")
+
+    result = asyncio.run(
+        gateway.sell(
+            "up",
+            shares=10.0,
+            min_price=0.40,
+            exit_reason="logic_decay_exit",
+            retry_refresh=refresh_retry,
+        )
+    )
+
+    assert result.success is True
+    assert attempts == [0, 1]
+    assert gateway.calls[0][3] == 0.32
+    assert gateway.calls[1][3] == 0.38
+
+
+def test_live_sell_refreshes_exit_floor_before_first_post(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 10.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(True, filled_size=10.0, avg_price=0.45, message="MATCHED", mode="live"),
+    ])
+    attempts = []
+
+    async def refresh_retry(attempt):
+        attempts.append(attempt)
         return SellRetryParams(min_price=0.50, exit_reason="logic_decay_exit")
 
     result = asyncio.run(
@@ -491,8 +524,8 @@ def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) ->
     )
 
     assert result.success is True
-    assert gateway.calls[0][3] == 0.32
-    assert gateway.calls[1][3] == 0.38
+    assert attempts == [0]
+    assert gateway.calls[0][3] == 0.42
 
 
 def test_live_batch_sell_posts_multiple_fak_slices(monkeypatch) -> None:

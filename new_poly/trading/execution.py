@@ -1060,6 +1060,11 @@ class LiveFakExecutionGateway:
         last = ExecutionResult(False, message="live sell not attempted", mode="live")
         start = time.monotonic()
         for attempt in range(self.retry_count + 1):
+            if attempt == 0 and retry_refresh is not None:
+                refreshed = await retry_refresh(0)
+                if refreshed is not None:
+                    min_price = refreshed.min_price
+                    exit_reason = refreshed.exit_reason
             before_balance = amount
             price_hint = _sell_price_hint(
                 token_id,

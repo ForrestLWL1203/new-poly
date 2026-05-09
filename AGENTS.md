@@ -372,7 +372,8 @@ Execution behavior:
   the cap.
 - BUY retry is a second attempt for the same signal. It does not re-run the
   full strategy signal refresh between attempts.
-- SELL still refreshes sell parameters and uses more aggressive buffers for
+- SELL refreshes sell parameters from the latest local book immediately before
+  the first POST and again before retries, then uses more aggressive buffers for
   risk/force exits.
 - Unknown or timed-out FAK responses must be reconciled by balance before
   retrying or declaring failure. A timeout does not prove the order failed.
