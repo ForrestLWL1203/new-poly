@@ -88,6 +88,9 @@ def test_token_state_uses_safety_multiplier_without_changing_trade_average() -> 
         def get_latest_best_ask_age(self, token_id):
             return 0.01
 
+        def get_latest_best_bid_age(self, token_id):
+            return 0.01
+
     state = data_helpers.token_state(FakeStream(), "up", depth_notional=1.0, depth_safety_multiplier=1.5)
 
     assert state["ask_avg"] == 0.5
@@ -118,14 +121,49 @@ def test_token_state_can_require_fresh_top_of_book_without_depth() -> None:
         def get_latest_best_ask_age(self, token_id):
             return None
 
+        def get_latest_best_bid_age(self, token_id):
+            return None
+
     stream = FakeStream()
     state = data_helpers.token_state(stream, "up", depth_notional=1.0, top_max_age_sec=1.0)
 
     assert state["ask"] == 0.20
     assert state["bid"] == 0.19
+    assert state["ask_age_ms"] is None
+    assert state["bid_age_ms"] is None
     assert state["ask_avg"] is None
     assert state["ask_depth_ok"] is False
     assert ("ask", 1.0) in stream.max_age_args
+
+
+def test_token_state_reports_bid_age_when_only_bid_depth_exists() -> None:
+    class FakeStream:
+        def get_latest_ask_levels_with_size(self, token_id):
+            return []
+
+        def get_latest_bid_levels_with_size(self, token_id):
+            return [(0.49, 10.0)]
+
+        def get_latest_best_bid(self, token_id, max_age_sec=None):
+            return 0.49
+
+        def get_latest_best_ask(self, token_id, max_age_sec=None):
+            return None
+
+        def get_latest_best_ask_age(self, token_id):
+            return None
+
+        def get_latest_best_bid_age(self, token_id):
+            return 0.25
+
+    state = data_helpers.token_state(FakeStream(), "up", depth_notional=1.0)
+
+    assert state["ask"] is None
+    assert state["bid"] == 0.49
+    assert state["book_age_ms"] == 250.0
+    assert state["ask_age_ms"] is None
+    assert state["bid_age_ms"] == 250.0
+    assert state["bid_depth_ok"] is True
 
 
 def test_window_tracker_counts_only_valid_windows() -> None:
@@ -223,6 +261,9 @@ def test_collector_row_is_strategy_neutral() -> None:
         def get_latest_best_ask_age(self, token_id):
             return 0.25
 
+        def get_latest_best_bid_age(self, token_id):
+            return 0.25
+
     window = collector.MarketWindow(
         question="Bitcoin Up or Down",
         up_token="up",
@@ -310,6 +351,9 @@ def test_collector_warns_when_polymarket_ws_open_disagrees_with_api() -> None:
         def get_latest_best_ask_age(self, token_id):
             return 0.25
 
+        def get_latest_best_bid_age(self, token_id):
+            return 0.25
+
     window = collector.MarketWindow(
         question="Bitcoin Up or Down",
         up_token="up",
@@ -366,6 +410,9 @@ def test_collector_row_marks_stale_volatility() -> None:
             return 0.51
 
         def get_latest_best_ask_age(self, token_id):
+            return 0.25
+
+        def get_latest_best_bid_age(self, token_id):
             return 0.25
 
     window = collector.MarketWindow(

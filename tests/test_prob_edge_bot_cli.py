@@ -578,6 +578,9 @@ def test_binance_proxy_is_model_source_while_polymarket_is_reference() -> None:
         def get_latest_best_ask_age(self, _token_id):
             return 0.01
 
+        def get_latest_best_bid_age(self, _token_id):
+            return 0.01
+
     window = type("Window", (), {
         "slug": "m1",
         "start_time": dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=120),
@@ -827,7 +830,7 @@ def test_exit_analysis_records_exit_floor_and_profit() -> None:
 
     analysis = _exit_analysis(decision, result)
 
-    assert analysis["order_intent"] == "exit"
+    assert analysis["exit_intent"] == "exit"
     assert analysis["exit_reason"] == "logic_decay_exit"
     assert analysis["exit_min_price"] == 0.40
     assert analysis["exit_profit_per_share"] == -0.03

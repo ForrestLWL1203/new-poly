@@ -40,7 +40,7 @@ def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None =
 def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
     fill_price = result.avg_price if result is not None and result.success else None
     row = {
-        "order_intent": "exit",
+        "exit_intent": "exit",
         "exit_side": decision.side,
         "exit_reason": decision.reason,
         "exit_model_prob": _compact(decision.model_prob),

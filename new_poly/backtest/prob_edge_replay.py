@@ -225,6 +225,8 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
         down_bid_depth_ok=bool(down.get("bid_depth_ok")),
         up_book_age_ms=_float(up.get("book_age_ms")),
         down_book_age_ms=_float(down.get("book_age_ms")),
+        up_bid_age_ms=_float(up.get("bid_age_ms")),
+        down_bid_age_ms=_float(down.get("bid_age_ms")),
         source_spread_bps=_first_float(row.get("source_spread_bps"), analysis_sources.get("source_spread_bps")),
         polymarket_divergence_bps=_first_float(
             row.get("polymarket_divergence_bps"),
@@ -432,7 +434,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
             snap = snapshot_from_row(row)
             if cfg.honor_order_events:
                 if row.get("event") == "order_no_fill":
-                    intent = str(row.get("order_intent") or "order")
+                    intent = str(row.get("order_intent") or row.get("exit_intent") or "order")
                     skip_reasons[f"{intent}_no_fill"] += 1
                     continue
                 if not state.has_position:

@@ -401,10 +401,17 @@ def token_state(
     bids = stream.get_latest_bid_levels_with_size(token_id)
     ask_avg, ask_ok, _, ask_limit = avg_price_for_notional(asks, depth_notional)
     bid_avg, bid_ok, _, bid_limit = avg_price_for_notional(bids, depth_notional)
+    bid = compact_float(_latest_best_bid(stream, token_id, top_max_age_sec))
+    ask = compact_float(_latest_best_ask(stream, token_id, top_max_age_sec))
+    ask_age_sec = stream.get_latest_best_ask_age(token_id) if ask is not None or asks else None
+    bid_age_sec = stream.get_latest_best_bid_age(token_id) if bid is not None or bids else None
+    present_ages = [age for age in (ask_age_sec, bid_age_sec) if age is not None]
     state = {
-        "bid": compact_float(_latest_best_bid(stream, token_id, top_max_age_sec)),
-        "ask": compact_float(_latest_best_ask(stream, token_id, top_max_age_sec)),
-        "book_age_ms": compact_float((stream.get_latest_best_ask_age(token_id) or 0) * 1000, 0) if asks or bids else None,
+        "bid": bid,
+        "ask": ask,
+        "book_age_ms": compact_float(min(present_ages) * 1000, 0) if present_ages else None,
+        "ask_age_ms": compact_float(ask_age_sec * 1000, 0) if ask_age_sec is not None else None,
+        "bid_age_ms": compact_float(bid_age_sec * 1000, 0) if bid_age_sec is not None else None,
         "ask_avg": ask_avg,
         "bid_avg": bid_avg,
         "ask_limit": ask_limit,

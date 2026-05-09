@@ -96,10 +96,29 @@ def test_price_stream_updates_order_book_from_events() -> None:
     asks = stream.get_latest_ask_levels_with_size(token_id)
     assert asks[0] == (0.5, 5.0)
 
+    stream._handle_event({
+        "event_type": "price_change",
+        "asset_id": token_id,
+        "price_changes": [{"asset_id": token_id, "side": "BUY", "price": "0.52", "size": "7"}],
+    })
+
+    bids = stream.get_latest_bid_levels_with_size(token_id)
+    assert bids[0] == (0.52, 7.0)
+
+    stream._handle_event({
+        "event_type": "price_change",
+        "asset_id": token_id,
+        "price_changes": [{"asset_id": token_id, "side": "SELL", "price": "0.50", "size": "0"}],
+    })
+
+    asks = stream.get_latest_ask_levels_with_size(token_id)
+    assert (0.5, 5.0) not in asks
+    assert asks == [(0.51, 12.0)]
+
     diag = stream.diagnostics(reset_counts=True)
     assert diag["event_counts_since_read"]["book"] == 1
-    assert diag["event_counts_since_read"]["price_change"] == 1
-    assert diag["depth_events_since_read"] == 2
+    assert diag["event_counts_since_read"]["price_change"] == 3
+    assert diag["depth_events_since_read"] == 4
     assert stream.diagnostics()["event_counts_since_read"] == {}
 
 
@@ -125,6 +144,8 @@ def test_price_stream_level_one_prefers_newer_best_bid_ask_but_keeps_depth_age()
 
     assert stream.get_latest_best_bid(token_id) == 0.52
     assert stream.get_latest_best_ask(token_id) == 0.53
+    assert stream.get_latest_ask_levels_with_size(token_id) == [(0.51, 12.0)]
+    assert stream.get_latest_bid_levels_with_size(token_id) == [(0.49, 10.0)]
     assert stream.get_latest_best_ask_age(token_id) > 1.0
 
 

@@ -27,14 +27,16 @@ def _order_intent_row(
     options: RuntimeOptions,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    event = "order_intent" if intent == "entry" else "exit_intent"
+    intent_field = "order_intent" if intent == "entry" else "exit_intent"
     out = {
         "ts": row.get("ts"),
         "mode": options.mode,
-        "event": "order_intent",
+        "event": event,
         "market_slug": row.get("market_slug"),
         "age_sec": row.get("age_sec"),
         "remaining_sec": row.get("remaining_sec"),
-        "order_intent": intent,
+        intent_field: intent,
         "token_id": token_id,
         "side": decision.side,
         f"{intent}_side": decision.side,
@@ -152,13 +154,13 @@ async def handle_open_position_tick(
         row["exit_price"] = 0.0
         row["exit_shares"] = _compact(exiting_position.filled_shares)
         row["exit_pnl"] = _compact(pnl, 4)
-        row["order_intent"] = "exit"
+        row["exit_intent"] = "exit"
         if options.analysis_logs:
             row["position_before_exit"] = _position_log(exiting_position, compact=False)
             row["position_after_exit"] = _position_log(state.open_position, compact=False)
     else:
         row["event"] = "order_no_fill"
-        row["order_intent"] = "exit"
+        row["exit_intent"] = "exit"
         if options.analysis_logs:
             row["analysis"] = {"price_sources": price_analysis, **_exit_analysis(decision, result)}
     return decision

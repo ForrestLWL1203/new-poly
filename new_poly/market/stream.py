@@ -636,7 +636,7 @@ class PriceStream:
         self._prices[asset_id] = update
         self._schedule_callback(update)
         log.debug(
-            "best_bid_ask %s: bid=%.3f ask=%.3f mid=%.3f",
+            "best_bid_ask %s: bid=%s ask=%s mid=%s",
             asset_id[:20], bid, ask, midpoint,
         )
 

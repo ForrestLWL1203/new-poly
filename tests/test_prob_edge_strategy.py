@@ -820,6 +820,71 @@ def test_exit_waits_on_stale_book_before_final_window() -> None:
     assert decision.model_prob is not None
 
 
+def test_exit_uses_held_side_bid_freshness_not_opposite_token_book() -> None:
+    cfg = EdgeConfig(final_force_exit_remaining_sec=30.0, max_book_age_ms=1000.0)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=120.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.20,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=150.0,
+        remaining_sec=90.0,
+        s_price=100.1,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_bid_avg=0.41,
+        up_bid_limit=0.40,
+        up_bid_depth_ok=True,
+        up_book_age_ms=8_000.0,
+        up_bid_age_ms=20.0,
+        down_book_age_ms=8_000.0,
+    )
+
+    decision = evaluate_exit(snap, pos, cfg)
+
+    assert decision.reason != "stale_book_wait"
+    assert decision.reason != "risk_exit"
+
+
+def test_exit_does_not_require_same_side_ask_when_bid_depth_is_fresh() -> None:
+    cfg = EdgeConfig(final_force_exit_remaining_sec=30.0, max_book_age_ms=1000.0)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="down",
+        token_id="down-token",
+        entry_time=120.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.20,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=150.0,
+        remaining_sec=90.0,
+        s_price=99.9,
+        k_price=100.0,
+        sigma_eff=0.55,
+        down_bid_avg=0.41,
+        down_bid_limit=0.40,
+        down_bid_depth_ok=True,
+        down_book_age_ms=None,
+        down_bid_age_ms=20.0,
+    )
+
+    decision = evaluate_exit(snap, pos, cfg)
+
+    assert decision.reason != "stale_book_wait"
+    assert decision.reason != "risk_exit"
+
+
 def test_exit_final_force_uses_stale_book_near_window_end() -> None:
     cfg = EdgeConfig(final_force_exit_remaining_sec=30.0, max_book_age_ms=1000.0)
     pos = PositionSnapshot(

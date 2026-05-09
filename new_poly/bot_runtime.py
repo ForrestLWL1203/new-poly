@@ -924,6 +924,8 @@ def _snapshot(
         down_bid_depth_ok=bool(down["bid_depth_ok"]),
         up_book_age_ms=up["book_age_ms"],
         down_book_age_ms=down["book_age_ms"],
+        up_bid_age_ms=up.get("bid_age_ms"),
+        down_bid_age_ms=down.get("bid_age_ms"),
         source_spread_bps=price.spread_bps,
         polymarket_divergence_bps=lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps,
     )

@@ -131,7 +131,7 @@ def test_entry_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
-def test_exit_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
+def test_exit_writes_exit_intent_before_gateway_returns(monkeypatch) -> None:
     async def scenario() -> None:
         from new_poly.bot_execution_flow import handle_open_position_tick
         from new_poly.trading.execution import ExecutionResult
@@ -196,8 +196,8 @@ def test_exit_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
         await gateway_started.wait()
 
         assert logger.rows
-        assert logger.rows[0]["event"] == "order_intent"
-        assert logger.rows[0]["order_intent"] == "exit"
+        assert logger.rows[0]["event"] == "exit_intent"
+        assert logger.rows[0]["exit_intent"] == "exit"
         assert logger.rows[0]["exit_side"] == "down"
         assert logger.rows[0]["exit_reason"] == "logic_decay_exit"
         assert logger.rows[0]["shares"] == 2.0

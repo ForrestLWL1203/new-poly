@@ -123,6 +123,8 @@ class MarketSnapshot:
     down_bid_depth_ok: bool = False
     up_book_age_ms: float | None = None
     down_book_age_ms: float | None = None
+    up_bid_age_ms: float | None = None
+    down_bid_age_ms: float | None = None
     source_spread_bps: float | None = None
     polymarket_divergence_bps: float | None = None
 
@@ -155,9 +157,15 @@ def _missing_model_inputs(snapshot: MarketSnapshot) -> bool:
     return snapshot.s_price is None or snapshot.k_price is None or snapshot.sigma_eff is None
 
 
-def _stale_books(snapshot: MarketSnapshot, cfg: EdgeConfig) -> bool:
-    ages = [snapshot.up_book_age_ms, snapshot.down_book_age_ms]
-    return any(age is None or age > cfg.max_book_age_ms for age in ages)
+def _exit_book_age_ms(snapshot: MarketSnapshot, side: str) -> float | None:
+    if side == "up":
+        return snapshot.up_bid_age_ms if snapshot.up_bid_age_ms is not None else snapshot.up_book_age_ms
+    return snapshot.down_bid_age_ms if snapshot.down_bid_age_ms is not None else snapshot.down_book_age_ms
+
+
+def _stale_exit_book(snapshot: MarketSnapshot, side: str, cfg: EdgeConfig) -> bool:
+    age = _exit_book_age_ms(snapshot, side)
+    return age is None or age > cfg.max_book_age_ms
 
 
 def _probs(snapshot: MarketSnapshot):
@@ -398,7 +406,7 @@ def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: Edg
         bid_limit = snapshot.down_bid_limit
         depth_ok = snapshot.down_bid_depth_ok
 
-    if _stale_books(snapshot, cfg):
+    if _stale_exit_book(snapshot, position.token_side, cfg):
         if snapshot.remaining_sec > cfg.final_force_exit_remaining_sec:
             return StrategyDecision(action="hold", reason="stale_book_wait", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down)
         if depth_ok and bid is not None and bid_limit is not None:

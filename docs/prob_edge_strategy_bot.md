@@ -431,6 +431,27 @@ sell floor with the original exit reason. This is based on the 2026-05-05
 48-window paper run where 5 exit no-fills were observed and 4/5 became worse
 after the retry was skipped as "signal no longer valid".
 
+For exit freshness, the bot only requires the held token's executable bid side
+to be fresh. A late-window market may legitimately become one-sided: for
+example, the winning side can have no asks left while bids remain available.
+That is treated as a liquidity state, not a WebSocket failure. Missing asks can
+block new BUY entries, but they should not trigger a stale-book risk exit when
+the held-side bid depth is fresh enough to sell.
+
+CLOB WS data is layered deliberately:
+
+- `book` seeds/replaces the local L2 book.
+- `price_change` mutates local bid/ask levels (`BUY` updates bids, `SELL`
+  updates asks, `size=0` removes the level). This is the main source for fresh
+  executable depth.
+- `best_bid_ask` can refresh top-of-book price hints and diagnostics, but it
+  does not carry reliable size and therefore does not overwrite local depth.
+
+The bot does not wait extra time before FAK just to catch another WS tick.
+Instead, every strategy tick uses the freshest cache already maintained by the
+WS reader. Reconnects are driven by long message silence, not by one-sided
+liquidity or an unchanged depth side.
+
 ## Batch Exit
 
 Small positions still use the single-order SELL FAK path above. Larger
@@ -563,11 +584,13 @@ switching. This means the latency-only CLOB metadata warmup failed on either
 `get_tick_size` or `get_neg_risk`; the row includes `failed_operation` and the
 bot continues without treating it as a strategy failure.
 
-Before every entry or exit FAK call, the bot writes an `order_intent` row. This
-row is emitted before awaiting the CLOB response and includes the token id,
-side, signal price, fair cap or exit floor, and intended amount/shares. The
-subsequent `entry`, `exit`, `position_reduce`, `dust_position`, or
-`order_no_fill` row records the response. `position_reduce` means the bot
+Before every entry FAK call, the bot writes an `order_intent` row. Exit FAK
+calls write `exit_intent` instead, so entry-intent/fill-rate analysis is not
+polluted by normal stop-loss or take-profit sells. These rows are emitted before
+awaiting the CLOB response and include the token id, side, signal price, fair
+cap or exit floor, and intended amount/shares. The subsequent `entry`, `exit`,
+`position_reduce`, `dust_position`, or `order_no_fill` row records the response.
+`position_reduce` means the bot
 intentionally sold a safe balance below the full position and left a tiny
 residual for a follow-up/dust path; it is not treated as an exceptional partial
 fill. If `POST /order` times out after Polymarket has already matched the order,
@@ -652,7 +675,7 @@ Entry/exit/order-no-fill rows also include strategy execution diagnostics in
 the same `analysis` object:
 
 ```text
-order_intent
+order_intent or exit_intent
 entry/exit side
 entry/exit model probability
 entry signal price

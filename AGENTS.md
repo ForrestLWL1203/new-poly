@@ -384,9 +384,11 @@ Logging:
 
 - Analysis-heavy fields should be emitted for paper/dry-run and short live
   diagnostics, not as permanent noisy live logs.
-- Log order lifecycle as `order_intent` before POST and then the resulting
-  `entry`, `position_reduce`, `exit`, `order_no_fill`, `dust_position`, or
-  fatal/error event.
+- Log entry lifecycle as `order_intent` before BUY POST and then the resulting
+  `entry` or entry `order_no_fill` event. Log SELL attempts as `exit_intent`
+  before POST so buy-intent/fill-rate statistics do not mix with normal
+  stop/take-profit exits. Exit responses can be `position_reduce`, `exit`,
+  `order_no_fill`, `dust_position`, or fatal/error events.
 - Do not log signed orders, private keys, API credentials, full account config,
   or full order books.
 
@@ -648,8 +650,15 @@ Book parsing notes:
   - old implementation treated `side == "SELL"` as ask-side update
   - if new size is zero, remove the level
   - otherwise insert/update and re-sort
+- Treat `book + price_change` as the executable-depth source. Use
+  `best_bid_ask` for top-of-book price hints and diagnostics only; it does not
+  include reliable size and should not overwrite local depth.
 - Track freshness with local monotonic timestamps.
-- Any execution logic that uses book depth should reject stale or missing books.
+- Any execution logic that uses book depth should reject stale or missing books,
+  but freshness should match the action being taken. A one-sided late-window
+  book is normal: if asks disappear but the held token still has fresh bids,
+  exit logic should treat the bid side as usable instead of forcing a WS
+  reconnect or stale-book risk exit.
 
 ### CLOB REST/SDK Trading Notes
 
