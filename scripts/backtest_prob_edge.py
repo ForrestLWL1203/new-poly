@@ -89,6 +89,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prob-drop-exit-window-sec", type=float, default=0.0)
     parser.add_argument("--prob-drop-exit-threshold", type=float, default=0.0)
     parser.add_argument("--final-force-exit-remaining-sec", type=float, default=30.0)
+    parser.add_argument("--defensive-take-profit", dest="defensive_take_profit_enabled", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cross-source-max-bps", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-threshold", type=float, default=0.0)
     parser.add_argument("--low-price-market-disagrees-entry-threshold", type=float, default=0.0)
@@ -147,6 +148,7 @@ def main() -> int:
         prob_drop_exit_window_sec=args.prob_drop_exit_window_sec,
         prob_drop_exit_threshold=args.prob_drop_exit_threshold,
         final_force_exit_remaining_sec=args.final_force_exit_remaining_sec,
+        defensive_take_profit_enabled=args.defensive_take_profit_enabled,
         cross_source_max_bps=args.cross_source_max_bps,
         market_disagrees_exit_threshold=args.market_disagrees_exit_threshold,
         low_price_market_disagrees_entry_threshold=args.low_price_market_disagrees_entry_threshold,

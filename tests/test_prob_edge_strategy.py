@@ -1038,6 +1038,45 @@ def test_defensive_take_profit_requires_three_second_stagnation_history() -> Non
     assert rising.prob_stagnant is False
 
 
+def test_defensive_take_profit_can_be_disabled() -> None:
+    cfg = EdgeConfig(
+        defensive_take_profit_enabled=False,
+        defensive_profit_min=0.03,
+        prob_stagnation_epsilon=0.002,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=1.0,
+        entry_avg_price=0.50,
+        filled_shares=10.0,
+        entry_model_prob=0.60,
+        entry_edge=0.10,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=245.0,
+        remaining_sec=55.0,
+        s_price=100.1,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_bid_avg=0.54,
+        up_bid_limit=0.53,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+    state = StrategyState(current_market_slug="m1")
+    baseline = evaluate_exit(snap, pos, EdgeConfig(defensive_profit_min=0.03), state)
+    state.prob_history = [(241.5, baseline.model_prob + 0.001)]
+
+    decision = evaluate_exit(snap, pos, cfg, state)
+
+    assert decision.reason != "defensive_take_profit"
+    assert decision.prob_stagnant is True
+
+
 def test_late_profit_protection_and_final_force_exit() -> None:
     cfg = EdgeConfig()
     pos = PositionSnapshot(

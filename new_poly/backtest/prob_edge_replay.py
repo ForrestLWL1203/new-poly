@@ -53,6 +53,7 @@ class BacktestConfig:
     hold_to_settlement_min_model_prob: float = 0.90
     hold_to_settlement_min_bid_avg: float = 0.80
     hold_to_settlement_min_bid_limit: float = 0.75
+    defensive_take_profit_enabled: bool = True
     profit_protection_start_remaining_sec: float = 15.0
     profit_protection_end_remaining_sec: float = 30.0
     defensive_take_profit_start_remaining_sec: float = 30.0
@@ -121,6 +122,7 @@ class BacktestConfig:
             hold_to_settlement_min_bid_limit=self.hold_to_settlement_min_bid_limit,
             profit_protection_start_remaining_sec=self.profit_protection_start_remaining_sec,
             profit_protection_end_remaining_sec=self.profit_protection_end_remaining_sec,
+            defensive_take_profit_enabled=self.defensive_take_profit_enabled,
             defensive_take_profit_start_remaining_sec=self.defensive_take_profit_start_remaining_sec,
             defensive_take_profit_end_remaining_sec=self.defensive_take_profit_end_remaining_sec,
             min_fair_cap_margin_ticks=self.min_fair_cap_margin_ticks,

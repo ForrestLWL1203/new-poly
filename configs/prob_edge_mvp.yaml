@@ -15,6 +15,7 @@ strategy:
   late_entry_enabled: false
   late_required_edge: 0.10
   late_max_spread: 0.02
+  defensive_take_profit_enabled: false
   defensive_profit_min: 0.03
   protection_profit_min: 0.01
   profit_protection_start_remaining_sec: 15

@@ -181,6 +181,7 @@ strong_move_required_edge
 late_entry_enabled
 late_required_edge
 late_max_spread
+defensive_take_profit_enabled
 defensive_profit_min
 protection_profit_min
 profit_protection_start_remaining_sec
@@ -417,7 +418,7 @@ profit-taking and stop-loss exits use the same configurable aggressive floor:
 
 ```text
 normal exits:
-  market_overprice_exit / defensive_take_profit / profit_protection_exit
+  market_overprice_exit / defensive_take_profit (if enabled) / profit_protection_exit
   logic_decay_exit / risk_exit / market_disagrees_exit
   polymarket_divergence_exit
   attempt 1: bid_limit - 5 ticks
@@ -517,11 +518,16 @@ late-window profit protection:
   thesis that was just invalidated cannot immediately re-open in the same
   direction.
 - `market_overprice_exit`: executable bid is above model probability by `0.02`.
-- `defensive_take_profit`: when
+- `defensive_take_profit`: optional classic late profit-taking guard. When
+  `defensive_take_profit_enabled=true`,
   `defensive_take_profit_start_remaining_sec < remaining_sec <= defensive_take_profit_end_remaining_sec`,
   profit is at least `defensive_profit_min`, and the held-side model
-  probability has not risen over `prob_stagnation_window_sec`. Current configs
-  use the classic `30s-60s` band.
+  probability has not risen over `prob_stagnation_window_sec`, the bot can sell
+  a small profit. Current MVP/aggressive configs set
+  `defensive_take_profit_enabled=false`: if the model probability has not
+  clearly deteriorated and no market-disagreement/divergence guard fires, the
+  strategy prefers holding profitable late positions toward settlement instead
+  of clipping a few cents of profit.
 - `prob_drop_exit`: when enabled, the held-side model probability drops by at
   least `prob_drop_exit_threshold` over `prob_drop_exit_window_sec` and is below
   the entry-time model probability. Current MVP/aggressive configs set
@@ -554,7 +560,7 @@ Exit decisions log `profit_now`, `prob_stagnant`, `prob_delta_3s`,
 
 If the probability history is too short to compare against the configured
 stagnation window, `prob_stagnant=false` and `defensive_take_profit` does not
-trigger.
+trigger even when the optional guard is enabled.
 
 ## Logs
 

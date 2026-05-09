@@ -343,6 +343,11 @@ Current tuned strategy shape:
   `/opt/new-poly/logs/<run-id>.yaml` before comparing logs.
 - `prob_drop_exit` is disabled by default because `market_disagrees_exit` and
   Polymarket divergence exits now cover the main observed failure mode.
+- `defensive_take_profit` is configurable but disabled in current MVP/aggressive
+  configs. If the model probability has not clearly deteriorated and no
+  market-disagreement/divergence guard fires, late profitable positions should
+  usually keep their settlement upside instead of selling only because the
+  probability has stalled.
 
 Risk exits:
 

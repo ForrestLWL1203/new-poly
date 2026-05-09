@@ -215,6 +215,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.final_force_exit_remaining_sec == 30.0
     assert opts.config.edge.profit_protection_start_remaining_sec == 15.0
     assert opts.config.edge.profit_protection_end_remaining_sec == 30.0
+    assert opts.config.edge.defensive_take_profit_enabled is False
     assert opts.config.edge.defensive_take_profit_start_remaining_sec == 30.0
     assert opts.config.edge.defensive_take_profit_end_remaining_sec == 60.0
     assert opts.config.polymarket_stale_reconnect_sec == 5.0
@@ -377,6 +378,7 @@ def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
     assert opts.config.edge.core_required_edge == 0.14
     assert opts.config.edge.entry_start_age_sec == 90.0
     assert opts.config.edge.late_entry_enabled is False
+    assert opts.config.edge.defensive_take_profit_enabled is False
     assert opts.config.edge.defensive_profit_min == 0.03
     assert opts.config.edge.protection_profit_min == 0.01
     assert opts.config.edge.final_hold_min_prob == 0.98

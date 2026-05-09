@@ -328,6 +328,7 @@ def test_scan_configs_preserves_base_config_fields() -> None:
         core_to_late_age_sec=222.0,
         profit_protection_start_remaining_sec=12.0,
         profit_protection_end_remaining_sec=34.0,
+        defensive_take_profit_enabled=False,
         defensive_take_profit_start_remaining_sec=35.0,
         defensive_take_profit_end_remaining_sec=67.0,
     )
@@ -344,6 +345,7 @@ def test_scan_configs_preserves_base_config_fields() -> None:
     cfg = replace(base, early_required_edge=0.10, core_required_edge=0.08, entry_start_age_sec=60.0, entry_end_age_sec=250.0)
     assert cfg.early_to_core_age_sec == 111.0
     assert cfg.core_to_late_age_sec == 222.0
+    assert cfg.defensive_take_profit_enabled is False
     assert cfg.defensive_take_profit_end_remaining_sec == 67.0
 
 
