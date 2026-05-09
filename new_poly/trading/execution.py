@@ -1023,6 +1023,16 @@ class LiveFakExecutionGateway:
                 last = await asyncio.to_thread(self._post_batch_sell, token_id, amount, min_price, exit_reason, attempt)
             else:
                 last = await asyncio.to_thread(self._post, token_id, amount, SELL, price_hint or min_price)
+            if last.success:
+                last = await asyncio.to_thread(
+                    self._reconcile_successful_sell,
+                    token_id,
+                    before_balance,
+                    amount,
+                    min_price,
+                    price_hint,
+                    last,
+                )
             if not last.success and _is_sell_execution_unknown(last):
                 reconciled = await asyncio.to_thread(
                     self._reconcile_unknown_sell,
@@ -1067,6 +1077,57 @@ class LiveFakExecutionGateway:
             if dust is not None:
                 return _with_attempt(dust, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
         return last
+
+    def _reconcile_successful_sell(
+        self,
+        token_id: str,
+        before_balance: float,
+        attempted_amount: float,
+        min_price: float | None,
+        price_hint: float | None,
+        last: ExecutionResult,
+    ) -> ExecutionResult:
+        after_balance = get_token_balance(token_id, safe=True)
+        if after_balance is None:
+            return replace(
+                last,
+                timing={**last.timing, "success_reconciliation": "balance_unavailable"},
+            )
+        sold_by_balance = max(0.0, before_balance - after_balance)
+        min_reconcile_size = max(
+            1e-9,
+            min(self.live_min_sell_shares, attempted_amount) if self.live_min_sell_shares > 0 else 1e-9,
+        )
+        if sold_by_balance < min_reconcile_size:
+            return replace(
+                last,
+                timing={
+                    **last.timing,
+                    "success_reconciliation": "no_balance_decrease",
+                    "balance_before": round(before_balance, 6),
+                    "balance_after": round(after_balance, 6),
+                },
+            )
+        sold = min(sold_by_balance, attempted_amount)
+        price = last.avg_price if last.avg_price > 0 else max(0.0, price_hint or min_price or 0.0)
+        timing = {
+            **last.timing,
+            "reconciliation": "balance_decrease_after_success",
+            "balance_before": round(before_balance, 6),
+            "balance_after": round(after_balance, 6),
+            "sold_by_balance": round(sold_by_balance, 6),
+            "response_fill_size": round(last.filled_size, 6),
+            "fallback_price": round(price, 6),
+        }
+        if abs(sold - last.filled_size) <= 1e-6 and last.avg_price > 0:
+            return replace(last, timing=timing)
+        return replace(
+            last,
+            filled_size=sold,
+            avg_price=price,
+            message="live sell reconciled after successful POST response",
+            timing=timing,
+        )
 
     def _reconcile_unknown_sell(
         self,

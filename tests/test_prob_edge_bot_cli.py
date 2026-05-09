@@ -56,6 +56,10 @@ def test_default_mode_is_paper() -> None:
     assert opts.config.polymarket_unhealthy_log_after_sec == 10.0
     assert opts.config.dvol_retry_interval_sec == 5.0
     assert opts.config.dvol_retry_attempts == 10
+    assert opts.config.volatility_source == "binance_rv"
+    assert opts.config.rv_lookback_minutes == 60
+    assert opts.config.rv_refresh_sec == 60.0
+    assert opts.config.dvol_fallback_enabled is True
     assert opts.config.coinbase_enabled is False
 
 

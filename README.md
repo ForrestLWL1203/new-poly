@@ -140,9 +140,11 @@ and `--i-understand-live-risk` are provided.
 Current default strategy behavior:
 
 - The tuned live-oriented profile evaluates the strategy loop every `0.5s`.
-- Startup must obtain Deribit DVOL before the strategy loop begins. Runtime
-  refresh failures keep the last valid DVOL until it exceeds the configured
-  stale age, so a temporary Deribit outage does not poison the sigma cache.
+- Startup must obtain a valid volatility snapshot before the strategy loop
+  begins. The default source is Binance 1-minute realized volatility over the
+  latest 60 minutes (`binance_1m_rv`), refreshed every 60 seconds. DVOL remains
+  a fallback if Binance RV is unavailable. Runtime refresh failures keep the
+  last valid sigma until it exceeds the configured stale age.
 - S is the Binance proxy price by default. This is intentional: the current
   strategy treats Binance as the faster model signal and Polymarket live-data as
   the settlement-reference risk signal. With `--coinbase` or

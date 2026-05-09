@@ -308,7 +308,7 @@ Current architecture:
 
 - `new_poly/bot_loop.py` owns the higher-level bot loop.
 - `new_poly/bot_runtime.py` owns config loading, logging helpers, snapshots,
-  settlement helpers, and DVOL retry helpers.
+  settlement helpers, and volatility retry helpers.
 - `new_poly/strategy/prob_edge.py` is IO-free strategy logic.
 - `new_poly/trading/execution.py` contains paper/live execution gateways.
 
@@ -429,9 +429,10 @@ new_poly/trading/fak_quotes.py
 
 Future strategy scripts should reuse these for Binance model pricing,
 Polymarket live-data reference pricing, optional Coinbase diagnostics,
-Polymarket window discovery, CLOB WebSocket book handling, Deribit DVOL
-snapshots, and FAK quote/depth selection. Do not reuse old `poly-bot` strategy
-modules or old thresholds.
+Polymarket window discovery, CLOB WebSocket book handling, Binance 1-minute
+realized-volatility snapshots, Deribit DVOL fallback snapshots, and FAK
+quote/depth selection. Do not reuse old `poly-bot` strategy modules or old
+thresholds.
 
 - Shared collector/bot helpers such as `WindowPrices`, K refresh,
   boundary-open refresh, effective price calculation, token depth summaries,
@@ -445,12 +446,16 @@ modules or old thresholds.
   `s_price = proxy_live - (proxy_open - k_price)`.
 - `price_source` is normally `proxy_binance` or
   `proxy_binance_basis_adjusted`. `polymarket_price` is a reference field.
-- Deribit BTC DVOL is collected once at startup by default and written as
-  `volatility`; use `--dvol-refresh-sec N` only when a run should refresh it.
-- Strategy startup must obtain a valid DVOL snapshot before entering the main
-  loop. Runtime refresh failures must not overwrite the last valid snapshot with
-  an empty one; keep using the previous sigma until `max_dvol_age_sec` marks it
-  stale.
+- Strategy volatility defaults to Binance 1-minute realized volatility:
+  `volatility_source=binance_rv`, `rv_lookback_minutes=60`, `rv_refresh_sec=60`.
+  It fetches one Binance kline response with 61 candles, computes close-to-close
+  EWMA RV and Parkinson high-low RV, annualizes them, and uses the larger
+  clamped value as `sigma_eff`.
+- Deribit BTC DVOL remains a fallback when `dvol_fallback_enabled=true`.
+- Strategy startup must obtain a valid volatility snapshot before entering the
+  main loop. Runtime refresh failures must not overwrite the last valid snapshot
+  with an empty one; keep using the previous sigma until `max_dvol_age_sec`
+  marks it stale.
 - `settlement_aligned` means the Polymarket reference source is available and
   the resolution source looks like Chainlink BTC/USD; it does not mean the model
   `S` came from Polymarket.

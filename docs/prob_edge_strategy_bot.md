@@ -107,14 +107,20 @@ python3 scripts/run_prob_edge_bot.py \
 - The default strategy loop interval is `0.5s`, so paper/live decisions run at
   roughly 2Hz. Time-window guards such as `prob_stagnation_window_sec=3` are
   wall-clock windows, not tick counts.
-- `sigma_eff` uses Deribit BTC DVOL divided by 100.
-- Startup requires a valid DVOL snapshot. If the first request fails, the bot
-  retries every `runtime.dvol_retry_interval_sec` seconds for
-  `runtime.dvol_retry_attempts` retries and exits with `dvol_startup_failed` if
-  it still cannot obtain sigma.
-- Runtime DVOL refreshes do not overwrite the last valid snapshot with an empty
-  one. Failed refreshes retry in the background; while the previous snapshot is
-  still younger than `runtime.max_dvol_age_sec`, the strategy keeps using it.
+- `sigma_eff` defaults to Binance 1-minute realized volatility
+  (`runtime.volatility_source=binance_rv`). The bot fetches one Binance kline
+  response with `runtime.rv_lookback_minutes + 1` candles, computes close-to-close
+  EWMA RV and Parkinson high-low RV, annualizes both, and uses the larger value
+  clamped by `runtime.rv_floor_annual` / `runtime.rv_cap_annual`.
+- Startup requires a valid volatility snapshot. If Binance RV cannot be obtained
+  and `runtime.dvol_fallback_enabled=true`, the bot falls back to Deribit DVOL.
+  If all attempts fail, it retries every `runtime.dvol_retry_interval_sec`
+  seconds for `runtime.dvol_retry_attempts` retries and exits with
+  `volatility_startup_failed` if it still cannot obtain sigma.
+- Runtime volatility refreshes do not overwrite the last valid snapshot with an
+  empty one. Failed refreshes retry in the background; while the previous
+  snapshot is still younger than `runtime.max_dvol_age_sec`, the strategy keeps
+  using it.
   Once it becomes stale, new entries fail closed with `missing_model_inputs`
   while existing positions can still run exit checks.
 - K is the Polymarket UI Price to Beat from the crypto price API.
@@ -219,6 +225,13 @@ dvol_refresh_sec
 max_dvol_age_sec
 dvol_retry_interval_sec
 dvol_retry_attempts
+volatility_source
+rv_refresh_sec
+rv_lookback_minutes
+rv_ewma_half_life_minutes
+rv_floor_annual
+rv_cap_annual
+dvol_fallback_enabled
 coinbase_enabled
 ```
 

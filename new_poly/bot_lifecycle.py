@@ -15,6 +15,8 @@ from new_poly.bot_runtime import (
     _noop_price_update,
     _warmup_warning_row,
     fetch_valid_dvol_with_retries,
+    make_volatility_fetcher,
+    volatility_refresh_interval_sec,
 )
 from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
@@ -73,16 +75,18 @@ async def startup_dvol_runtime(*, cfg: BotConfig, options: RuntimeOptions, logge
         state=DvolRefreshState(),
         refresh_task=None,
         refresh_market_slug=None,
-        next_refresh=time.monotonic() + cfg.dvol_refresh_sec,
+        next_refresh=time.monotonic() + volatility_refresh_interval_sec(cfg),
     )
     startup_dvol = await fetch_valid_dvol_with_retries(
+        fetcher=make_volatility_fetcher(cfg),
         retry_interval_sec=cfg.dvol_retry_interval_sec,
         max_retries=cfg.dvol_retry_attempts,
         on_retry=lambda attempt, snapshot, error: logger.write({
             "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "event": "dvol_retry",
+            "event": "volatility_retry",
             "mode": options.mode,
             "phase": "startup",
+            "volatility_source": cfg.volatility_source,
             "attempt": attempt,
             "max_retries": cfg.dvol_retry_attempts,
             "retry_interval_sec": cfg.dvol_retry_interval_sec,
@@ -93,8 +97,9 @@ async def startup_dvol_runtime(*, cfg: BotConfig, options: RuntimeOptions, logge
     if startup_dvol is None:
         logger.write({
             "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "event": "dvol_startup_failed",
+            "event": "volatility_startup_failed",
             "mode": options.mode,
+            "volatility_source": cfg.volatility_source,
             "max_retries": cfg.dvol_retry_attempts,
             "action": "stop",
         })
@@ -102,7 +107,7 @@ async def startup_dvol_runtime(*, cfg: BotConfig, options: RuntimeOptions, logge
     dvol.state.apply_refresh_result(startup_dvol)
     logger.write({
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "event": "dvol_ready",
+        "event": "volatility_ready",
         "mode": options.mode,
         "phase": "startup",
         "volatility": startup_dvol.to_json(),

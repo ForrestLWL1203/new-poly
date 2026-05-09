@@ -632,6 +632,31 @@ def test_live_sell_request_exception_reconciles_from_balance_and_trades(monkeypa
     assert len(gateway.calls) == 1
 
 
+def test_live_sell_success_reconciles_when_response_understates_fill(monkeypatch) -> None:
+    balances = iter([5.872351, 0.012176])
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            True,
+            filled_size=0.01,
+            avg_price=0.62,
+            message="matched",
+            mode="live",
+        ),
+    ])
+
+    result = asyncio.run(gateway.sell("down", shares=5.872351, min_price=0.62, exit_reason="market_overprice_exit"))
+
+    assert result.success is True
+    assert result.filled_size == pytest.approx(5.860175)
+    assert result.avg_price == pytest.approx(0.62)
+    assert result.message == "live sell reconciled after successful POST response"
+    assert result.timing["reconciliation"] == "balance_decrease_after_success"
+    assert result.timing["response_fill_size"] == pytest.approx(0.01)
+    assert len(gateway.calls) == 1
+
+
 def test_live_buy_request_exception_reconciles_from_balance_and_trades(monkeypatch) -> None:
     balances = iter([0.0, 5.0])
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))

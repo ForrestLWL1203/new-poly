@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.market import stream as stream_module
 from new_poly.market.binance import BinancePriceFeed
+from new_poly.market.binance_rv import compute_binance_rv_sigma_from_klines
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.prob_edge_data import WindowPrices, effective_price
@@ -37,6 +38,46 @@ def test_binance_price_feed_history_lookup_helpers() -> None:
     assert feed.price_at_or_before(104.0, max_backward_sec=3.0) is None
     assert feed.first_price_at_or_after(101.0, max_forward_sec=10.0) == 10.5
     assert feed.first_price_at_or_after(101.0, max_forward_sec=1.0) is None
+
+
+def test_binance_rv_sigma_uses_recent_klines_and_clamps() -> None:
+    klines = []
+    price = 100.0
+    for idx in range(61):
+        open_price = price
+        close_price = price * (1.0 + (0.0005 if idx % 2 == 0 else -0.0004))
+        high_price = max(open_price, close_price) * 1.001
+        low_price = min(open_price, close_price) * 0.999
+        klines.append([
+            idx * 60_000,
+            str(open_price),
+            str(high_price),
+            str(low_price),
+            str(close_price),
+            "1.0",
+            idx * 60_000 + 59_999,
+        ])
+        price = close_price
+
+    sigma = compute_binance_rv_sigma_from_klines(
+        klines,
+        ewma_half_life_minutes=10.0,
+        floor_annual=0.20,
+        cap_annual=2.50,
+    )
+
+    assert sigma.close_sigma_annual is not None
+    assert sigma.parkinson_sigma_annual is not None
+    assert 0.20 <= sigma.sigma <= 2.50
+    assert sigma.sigma == max(sigma.close_sigma_annual, sigma.parkinson_sigma_annual, 0.20)
+    assert sigma.lookback_minutes == 60
+
+
+def test_binance_rv_sigma_rejects_insufficient_klines() -> None:
+    sigma = compute_binance_rv_sigma_from_klines([], floor_annual=0.20, cap_annual=2.50)
+
+    assert sigma.sigma is None
+    assert sigma.lookback_minutes == 0
 
 
 def test_coinbase_price_feed_parses_match_messages() -> None:

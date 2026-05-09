@@ -22,10 +22,12 @@ from new_poly.bot_runtime import (
     fetch_valid_dvol_with_retries,
     find_following_window,
     is_dvol_stale,
+    make_volatility_fetcher,
     refresh_binance_open,
     refresh_coinbase_open,
     refresh_k_price,
     refresh_polymarket_open,
+    volatility_refresh_interval_sec,
 )
 from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
@@ -193,7 +195,7 @@ async def _advance_dvol_refresh(
         if dvol.state.apply_refresh_result(refreshed):
             logger.write({
                 "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-                "event": "dvol_recovered",
+                "event": "volatility_recovered",
                 "mode": options.mode,
                 "market_slug": dvol.refresh_market_slug or window_slug,
                 "volatility": dvol.state.current.to_json() if dvol.state.current is not None else None,
@@ -201,7 +203,7 @@ async def _advance_dvol_refresh(
         else:
             logger.write({
                 "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-                "event": "dvol_refresh_failed",
+                "event": "volatility_refresh_failed",
                 "mode": options.mode,
                 "market_slug": dvol.refresh_market_slug or window_slug,
                 "failed_refreshes": dvol.state.failed_refreshes,
@@ -210,19 +212,21 @@ async def _advance_dvol_refresh(
             })
         dvol.refresh_task = None
         dvol.refresh_market_slug = None
-        dvol.next_refresh = time.monotonic() + cfg.dvol_refresh_sec
+        dvol.next_refresh = time.monotonic() + volatility_refresh_interval_sec(cfg)
     if dvol.refresh_task is None and time.monotonic() >= dvol.next_refresh:
         refresh_market_slug = window_slug
         dvol.refresh_market_slug = refresh_market_slug
         dvol.refresh_task = asyncio.create_task(fetch_valid_dvol_with_retries(
+            fetcher=make_volatility_fetcher(cfg),
             retry_interval_sec=cfg.dvol_retry_interval_sec,
             max_retries=cfg.dvol_retry_attempts,
             on_retry=lambda attempt, snapshot, error: logger.write({
                 "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-                "event": "dvol_retry",
+                "event": "volatility_retry",
                 "mode": options.mode,
                 "market_slug": refresh_market_slug,
                 "phase": "refresh",
+                "volatility_source": cfg.volatility_source,
                 "attempt": attempt,
                 "max_retries": cfg.dvol_retry_attempts,
                 "retry_interval_sec": cfg.dvol_retry_interval_sec,

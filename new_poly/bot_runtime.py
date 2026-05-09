@@ -9,7 +9,7 @@ import json
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 try:
     import yaml
@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - pyyaml is installed on target hosts
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 from new_poly.market.binance import BinancePriceFeed
+from new_poly.market.binance_rv import BinanceRvSnapshot, fetch_binance_rv_snapshot
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import fetch_dvol_snapshot
 from new_poly.market.deribit import DvolSnapshot
@@ -60,6 +61,15 @@ DEFAULT_DYNAMIC_CONFIG = REPO_ROOT / "configs" / "prob_edge_dynamic.yaml"
 DEFAULT_DYNAMIC_STATE = REPO_ROOT / "data" / "prob-edge-dynamic-state.json"
 
 
+class VolatilitySnapshot(Protocol):
+    source: str
+    sigma: float | None
+    fetched_at: float
+
+    def to_json(self) -> dict[str, Any]:
+        ...
+
+
 @dataclass(frozen=True)
 class RiskConfig:
     consecutive_loss_limit: int = 5
@@ -75,6 +85,13 @@ class BotConfig:
     amount_usd: float
     interval_sec: float
     warmup_timeout_sec: float
+    volatility_source: str
+    rv_refresh_sec: float
+    rv_lookback_minutes: int
+    rv_ewma_half_life_minutes: float
+    rv_floor_annual: float
+    rv_cap_annual: float
+    dvol_fallback_enabled: bool
     dvol_refresh_sec: float
     max_dvol_age_sec: float
     dvol_retry_interval_sec: float
@@ -106,11 +123,11 @@ class RuntimeOptions:
 
 @dataclass
 class DvolRefreshState:
-    current: DvolSnapshot | None = None
+    current: VolatilitySnapshot | None = None
     failed_refreshes: int = 0
     last_error: str | None = None
 
-    def apply_refresh_result(self, snapshot: DvolSnapshot | None) -> bool:
+    def apply_refresh_result(self, snapshot: VolatilitySnapshot | None) -> bool:
         if is_valid_dvol(snapshot):
             self.current = snapshot
             self.failed_refreshes = 0
@@ -384,6 +401,13 @@ def load_bot_config(path: Path) -> BotConfig:
         amount_usd=amount_usd,
         interval_sec=float(_deep_get(raw, ("runtime", "interval_sec"), 0.5)),
         warmup_timeout_sec=float(_deep_get(raw, ("runtime", "warmup_timeout_sec"), 8.0)),
+        volatility_source=str(_deep_get(raw, ("runtime", "volatility_source"), "binance_rv")),
+        rv_refresh_sec=float(_deep_get(raw, ("runtime", "rv_refresh_sec"), 60.0)),
+        rv_lookback_minutes=max(2, int(_deep_get(raw, ("runtime", "rv_lookback_minutes"), 60))),
+        rv_ewma_half_life_minutes=float(_deep_get(raw, ("runtime", "rv_ewma_half_life_minutes"), 10.0)),
+        rv_floor_annual=float(_deep_get(raw, ("runtime", "rv_floor_annual"), 0.20)),
+        rv_cap_annual=float(_deep_get(raw, ("runtime", "rv_cap_annual"), 2.50)),
+        dvol_fallback_enabled=bool(_deep_get(raw, ("runtime", "dvol_fallback_enabled"), True)),
         dvol_refresh_sec=float(_deep_get(raw, ("runtime", "dvol_refresh_sec"), 300.0)),
         max_dvol_age_sec=float(_deep_get(raw, ("runtime", "max_dvol_age_sec"), 900.0)),
         dvol_retry_interval_sec=float(_deep_get(raw, ("runtime", "dvol_retry_interval_sec"), 5.0)),
@@ -508,6 +532,13 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
         "runtime": {
             "interval_sec": cfg.interval_sec,
             "warmup_timeout_sec": cfg.warmup_timeout_sec,
+            "volatility_source": cfg.volatility_source,
+            "rv_refresh_sec": cfg.rv_refresh_sec,
+            "rv_lookback_minutes": cfg.rv_lookback_minutes,
+            "rv_ewma_half_life_minutes": cfg.rv_ewma_half_life_minutes,
+            "rv_floor_annual": cfg.rv_floor_annual,
+            "rv_cap_annual": cfg.rv_cap_annual,
+            "dvol_fallback_enabled": cfg.dvol_fallback_enabled,
             "dvol_refresh_sec": cfg.dvol_refresh_sec,
             "max_dvol_age_sec": cfg.max_dvol_age_sec,
             "dvol_retry_interval_sec": cfg.dvol_retry_interval_sec,
@@ -729,25 +760,47 @@ async def _noop_price_update(_update) -> None:
     return None
 
 
-def is_dvol_stale(volatility: DvolSnapshot | None, *, now_wall: float, max_age_sec: float) -> bool:
+def volatility_refresh_interval_sec(cfg: BotConfig) -> float:
+    if cfg.volatility_source == "binance_rv":
+        return max(1.0, cfg.rv_refresh_sec)
+    return max(1.0, cfg.dvol_refresh_sec)
+
+
+def make_volatility_fetcher(cfg: BotConfig) -> Callable[[], VolatilitySnapshot]:
+    if cfg.volatility_source == "binance_rv":
+        def fetch() -> VolatilitySnapshot:
+            snapshot = fetch_binance_rv_snapshot(
+                lookback_minutes=cfg.rv_lookback_minutes,
+                ewma_half_life_minutes=cfg.rv_ewma_half_life_minutes,
+                floor_annual=cfg.rv_floor_annual,
+                cap_annual=cfg.rv_cap_annual,
+            )
+            if is_valid_dvol(snapshot) or not cfg.dvol_fallback_enabled:
+                return snapshot
+            return fetch_dvol_snapshot()
+        return fetch
+    return fetch_dvol_snapshot
+
+
+def is_dvol_stale(volatility: VolatilitySnapshot | None, *, now_wall: float, max_age_sec: float) -> bool:
     return volatility is None or now_wall - volatility.fetched_at > max_age_sec
 
 
-def is_valid_dvol(volatility: DvolSnapshot | None) -> bool:
+def is_valid_dvol(volatility: VolatilitySnapshot | None) -> bool:
     return volatility is not None and volatility.sigma is not None and volatility.sigma > 0
 
 
 async def fetch_valid_dvol_with_retries(
     *,
-    fetcher: Callable[[], DvolSnapshot] = fetch_dvol_snapshot,
+    fetcher: Callable[[], VolatilitySnapshot] = fetch_dvol_snapshot,
     retry_interval_sec: float = 5.0,
     max_retries: int = 10,
     sleep: Callable[[float], Any] = asyncio.sleep,
-    on_retry: Callable[[int, DvolSnapshot | None, str | None], None] | None = None,
-) -> DvolSnapshot | None:
+    on_retry: Callable[[int, VolatilitySnapshot | None, str | None], None] | None = None,
+) -> VolatilitySnapshot | None:
     retries = max(0, int(max_retries))
     for attempt in range(retries + 1):
-        snapshot: DvolSnapshot | None = None
+        snapshot: VolatilitySnapshot | None = None
         error: str | None = None
         try:
             snapshot = await asyncio.to_thread(fetcher)

@@ -112,6 +112,13 @@ risk:
 runtime:
   interval_sec: 0.5
   warmup_timeout_sec: 8.0
+  volatility_source: binance_rv
+  rv_refresh_sec: 60
+  rv_lookback_minutes: 60
+  rv_ewma_half_life_minutes: 10
+  rv_floor_annual: 0.20
+  rv_cap_annual: 2.50
+  dvol_fallback_enabled: true
   dvol_refresh_sec: 300
   max_dvol_age_sec: 900
   dvol_retry_interval_sec: 5
