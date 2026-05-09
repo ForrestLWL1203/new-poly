@@ -164,60 +164,50 @@ Config files:
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
   profile set. It is disabled unless `--dynamic-params` is passed.
 
-Config knobs include:
+The active `mvp` and `aggressive` YAML files are intentionally compact. They
+show the live decision surface, important safety switches, and the FAK ladders
+that are actively tuned. Disabled experiments and values that match code
+defaults are omitted so normal parameter reviews can focus on the few levers
+that are really in play.
+
+Primary live-tuned knobs:
 
 ```text
 early_required_edge
 core_required_edge
 early_to_core_age_sec
 core_to_late_age_sec
-dynamic_entry_enabled
-fast_move_entry_start_age_sec
-fast_move_min_abs_sk_usd
-fast_move_required_edge
-strong_move_entry_start_age_sec
-strong_move_min_abs_sk_usd
-strong_move_required_edge
-late_entry_enabled
-late_required_edge
-late_max_spread
 defensive_take_profit_enabled
-defensive_profit_min
-protection_profit_min
-profit_protection_start_remaining_sec
-profit_protection_end_remaining_sec
-defensive_take_profit_start_remaining_sec
-defensive_take_profit_end_remaining_sec
-final_hold_min_prob
-final_hold_min_bid_avg
-final_hold_min_bid_limit
-prob_stagnation_window_sec
-prob_stagnation_epsilon
-prob_drop_exit_window_sec
-prob_drop_exit_threshold
+final_force_exit_remaining_sec
+hold_to_settlement_enabled
 min_entry_model_prob
 low_price_extra_edge_threshold
 low_price_extra_edge
+buy_cap_relax_enabled
 cross_source_max_bps
 market_disagrees_exit_threshold
+low_price_market_disagrees_entry_threshold
+low_price_market_disagrees_exit_threshold
 market_disagrees_exit_max_remaining_sec
 market_disagrees_exit_min_loss
 market_disagrees_exit_min_age_sec
 market_disagrees_exit_max_profit
+market_disagrees_exit_min_model_drop
 polymarket_divergence_exit_bps
 polymarket_divergence_exit_min_age_sec
+logic_decay_reentry_cooldown_sec
 retry_count
-retry_interval_sec
 buy_dynamic_buffer_enabled
 buy_dynamic_buffer_attempt1_max_ticks
 buy_dynamic_buffer_attempt2_max_ticks
+sell_dynamic_buffer_enabled
+sell_profit_exit_buffer_ticks
+sell_profit_exit_retry_buffer_ticks
+sell_risk_exit_buffer_ticks
+sell_risk_exit_retry_buffer_ticks
+sell_force_exit_buffer_ticks
+sell_force_exit_retry_buffer_ticks
 batch_exit_enabled
-batch_exit_min_shares
-batch_exit_min_notional_usd
-batch_exit_slices
-batch_exit_extra_buffer_ticks
-live_min_sell_shares
-live_min_sell_notional_usd
 polymarket_price_enabled
 max_polymarket_price_age_sec
 polymarket_stale_reconnect_sec
@@ -235,6 +225,11 @@ rv_cap_annual
 dvol_fallback_enabled
 coinbase_enabled
 ```
+
+Advanced or currently disabled knobs such as dynamic early entry, late entry,
+probability-drop exits, defensive take-profit thresholds, batch-slice details,
+and dust thresholds still exist in code defaults for targeted experiments. Add
+them to YAML only when a run is explicitly testing that mechanism.
 
 The current `0.16/0.14` edge thresholds and `0.40` model-probability floor are
 the committed live-oriented defaults. They replace earlier looser settings

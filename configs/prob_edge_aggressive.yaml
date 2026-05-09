@@ -10,60 +10,21 @@ strategy:
   entry_end_age_sec: 240
   early_to_core_age_sec: 120
   core_to_late_age_sec: 240
-  dynamic_entry_enabled: false
-  fast_move_entry_start_age_sec: 70
-  fast_move_min_abs_sk_usd: 80
-  fast_move_required_edge: 0.22
-  strong_move_entry_start_age_sec: 60
-  strong_move_min_abs_sk_usd: 120
-  strong_move_required_edge: 0.24
   final_no_entry_remaining_sec: 30
   max_entries_per_market: 2
   max_book_age_ms: 1000
-  late_entry_enabled: false
-  late_required_edge: 0.10
-  late_max_spread: 0.02
   defensive_take_profit_enabled: false
-  defensive_profit_min: 0.03
-  protection_profit_min: 0.01
-  profit_protection_start_remaining_sec: 15
-  profit_protection_end_remaining_sec: 30
-  defensive_take_profit_start_remaining_sec: 30
-  defensive_take_profit_end_remaining_sec: 60
   final_force_exit_remaining_sec: 30.0
-  final_hold_min_prob: 0.98
-  final_hold_min_bid_avg: 0.97
-  final_hold_min_bid_limit: 0.95
   hold_to_settlement_enabled: true
   hold_to_settlement_min_profit_ratio: 2.0
   hold_to_settlement_min_model_prob: 0.90
   hold_to_settlement_min_bid_avg: 0.80
   hold_to_settlement_min_bid_limit: 0.75
-  prob_stagnation_window_sec: 3.0
-  prob_stagnation_epsilon: 0.002
-  prob_drop_exit_window_sec: 0.0
-  prob_drop_exit_threshold: 0.0
   min_fair_cap_margin_ticks: 1.0
-  entry_tick_size: 0.01
   min_entry_model_prob: 0.40
   low_price_extra_edge_threshold: 0.30
   low_price_extra_edge: 0.04
   buy_cap_relax_enabled: true
-  buy_low_price_relax_max_ask: 0.25
-  buy_low_price_relax_min_prob: 0.40
-  buy_low_price_relax_retained_edge: 0.08
-  buy_low_price_relax_max_extra_ticks: 8
-  buy_mid_price_relax_max_ask: 0.65
-  buy_mid_price_relax_min_prob: 0.60
-  buy_mid_price_relax_retained_edge: 0.06
-  buy_mid_price_relax_max_extra_ticks: 8
-  buy_mid_strong_relax_min_prob: 0.75
-  buy_mid_strong_relax_retained_edge: 0.05
-  buy_mid_strong_relax_max_extra_ticks: 10
-  buy_high_price_relax_min_ask: 0.65
-  buy_high_price_relax_min_prob: 0.95
-  buy_high_price_relax_retained_edge: 0.08
-  buy_high_price_relax_max_extra_ticks: 4
   cross_source_max_bps: 5.0
   market_disagrees_exit_threshold: 0.20
   low_price_market_disagrees_entry_threshold: 0.30
@@ -80,10 +41,8 @@ strategy:
 execution:
   amount_usd: 1.0
   depth_notional: 1.0
-  paper_latency_sec: 0.0
   max_book_age_sec: 1.0
   retry_count: 1
-  retry_interval_sec: 0.0
   buy_price_buffer_ticks: 2
   buy_retry_price_buffer_ticks: 4
   buy_dynamic_buffer_enabled: true
@@ -99,12 +58,6 @@ execution:
   sell_force_exit_buffer_ticks: 10
   sell_force_exit_retry_buffer_ticks: 15
   batch_exit_enabled: true
-  batch_exit_min_shares: 20
-  batch_exit_min_notional_usd: 5
-  batch_exit_slices: [0.4, 0.3, 1.0]
-  batch_exit_extra_buffer_ticks: [0, 3, 6]
-  live_min_sell_shares: 0.01
-  live_min_sell_notional_usd: 0.0
 
 risk:
   consecutive_loss_limit: 5

@@ -239,6 +239,12 @@ Current parameter files:
   profiles and health thresholds. It only changes entry timing/edge/max-entry
   settings, and only at window boundaries.
 
+The active YAML files are intentionally compact. They list the live decision
+surface plus a few important safety toggles; disabled experiments and values
+that match code defaults are left out so parameter reviews do not turn into a
+wall of stale knobs. Advanced knobs remain available through code defaults or
+explicit YAML overrides when running a focused experiment.
+
 Longer aggressive paper run:
 
 ```bash
