@@ -1628,6 +1628,57 @@ def test_market_disagrees_exit_does_not_fire_when_model_prob_improves() -> None:
     assert decision.reason != "market_disagrees_exit"
 
 
+def test_market_disagrees_exit_requires_minimum_model_drop() -> None:
+    cfg = EdgeConfig(
+        market_disagrees_exit_threshold=0.10,
+        market_disagrees_exit_min_model_drop=0.06,
+        market_disagrees_exit_max_remaining_sec=90.0,
+        market_disagrees_exit_min_loss=0.03,
+        market_disagrees_exit_min_age_sec=3.0,
+        market_disagrees_exit_max_profit=0.01,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="down",
+        token_id="down-token",
+        entry_time=100.0,
+        entry_avg_price=0.24,
+        filled_shares=4.16,
+        entry_model_prob=0.448,
+        entry_edge=0.208,
+    )
+
+    shallow_drop = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=210.0,
+        remaining_sec=90.0,
+        s_price=100.0065,
+        k_price=100.0,
+        sigma_eff=0.20,
+        down_bid_avg=0.10,
+        down_bid_limit=0.10,
+        down_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg)
+    deep_drop = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=210.0,
+        remaining_sec=90.0,
+        s_price=100.015,
+        k_price=100.0,
+        sigma_eff=0.20,
+        down_bid_avg=0.10,
+        down_bid_limit=0.10,
+        down_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg)
+
+    assert shallow_drop.reason != "market_disagrees_exit"
+    assert deep_drop.reason == "market_disagrees_exit"
+
+
 def test_state_records_window_settlement_pnl() -> None:
     state = StrategyState(current_market_slug="m1")
     state.record_entry(PositionSnapshot(

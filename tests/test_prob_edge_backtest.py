@@ -331,6 +331,7 @@ def test_scan_configs_preserves_base_config_fields() -> None:
         defensive_take_profit_enabled=False,
         defensive_take_profit_start_remaining_sec=35.0,
         defensive_take_profit_end_remaining_sec=67.0,
+        market_disagrees_exit_min_model_drop=0.07,
     )
     results = scan_configs(
         [],
@@ -347,6 +348,7 @@ def test_scan_configs_preserves_base_config_fields() -> None:
     assert cfg.core_to_late_age_sec == 222.0
     assert cfg.defensive_take_profit_enabled is False
     assert cfg.defensive_take_profit_end_remaining_sec == 67.0
+    assert cfg.market_disagrees_exit_min_model_drop == 0.07
 
 
 def test_backtest_config_passes_max_entries_to_strategy() -> None:

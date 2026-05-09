@@ -212,6 +212,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.low_price_market_disagrees_exit_threshold == 0.06
     assert opts.config.edge.market_disagrees_exit_max_remaining_sec == 90.0
     assert opts.config.edge.market_disagrees_exit_min_loss == 0.03
+    assert opts.config.edge.market_disagrees_exit_min_model_drop == 0.06
     assert opts.config.edge.final_force_exit_remaining_sec == 30.0
     assert opts.config.edge.profit_protection_start_remaining_sec == 15.0
     assert opts.config.edge.profit_protection_end_remaining_sec == 30.0

@@ -98,6 +98,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-disagrees-exit-min-loss", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-min-age-sec", type=float, default=0.0)
     parser.add_argument("--market-disagrees-exit-max-profit", type=float, default=0.01)
+    parser.add_argument("--market-disagrees-exit-min-model-drop", type=float, default=0.0)
     parser.add_argument("--polymarket-divergence-exit-bps", type=float, default=3.0)
     parser.add_argument("--polymarket-divergence-exit-min-age-sec", type=float, default=3.0)
     parser.add_argument("--honor-order-events", action="store_true", help="For paper/live strategy JSONL, replay actual entry/exit/no-fill events instead of idealized fills.")
@@ -157,6 +158,7 @@ def main() -> int:
         market_disagrees_exit_min_loss=args.market_disagrees_exit_min_loss,
         market_disagrees_exit_min_age_sec=args.market_disagrees_exit_min_age_sec,
         market_disagrees_exit_max_profit=args.market_disagrees_exit_max_profit,
+        market_disagrees_exit_min_model_drop=args.market_disagrees_exit_min_model_drop,
         polymarket_divergence_exit_bps=args.polymarket_divergence_exit_bps,
         polymarket_divergence_exit_min_age_sec=args.polymarket_divergence_exit_min_age_sec,
         honor_order_events=args.honor_order_events,

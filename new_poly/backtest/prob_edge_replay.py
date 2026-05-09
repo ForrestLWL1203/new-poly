@@ -88,6 +88,7 @@ class BacktestConfig:
     market_disagrees_exit_min_loss: float = 0.0
     market_disagrees_exit_min_age_sec: float = 0.0
     market_disagrees_exit_max_profit: float = 0.01
+    market_disagrees_exit_min_model_drop: float = 0.0
     polymarket_divergence_exit_bps: float = 3.0
     polymarket_divergence_exit_min_age_sec: float = 3.0
     logic_decay_reentry_cooldown_sec: float = 30.0
@@ -154,6 +155,7 @@ class BacktestConfig:
             market_disagrees_exit_min_loss=self.market_disagrees_exit_min_loss,
             market_disagrees_exit_min_age_sec=self.market_disagrees_exit_min_age_sec,
             market_disagrees_exit_max_profit=self.market_disagrees_exit_max_profit,
+            market_disagrees_exit_min_model_drop=self.market_disagrees_exit_min_model_drop,
             polymarket_divergence_exit_bps=self.polymarket_divergence_exit_bps,
             polymarket_divergence_exit_min_age_sec=self.polymarket_divergence_exit_min_age_sec,
             logic_decay_reentry_cooldown_sec=self.logic_decay_reentry_cooldown_sec,

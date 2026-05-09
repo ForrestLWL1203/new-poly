@@ -543,9 +543,11 @@ late-window profit protection:
   intentionally constrained to late, already-losing positions:
   `remaining_sec <= market_disagrees_exit_max_remaining_sec`, loss at least
   `market_disagrees_exit_min_loss`, position age at least
-  `market_disagrees_exit_min_age_sec`, and no meaningful current profit. This
-  catches cases where the model probability stays high but the market is
-  increasingly unwilling to pay for that outcome.
+  `market_disagrees_exit_min_age_sec`, model probability deterioration of at
+  least `market_disagrees_exit_min_model_drop`, and no meaningful current
+  profit. This catches cases where both the model and the market are moving
+  against the held side. It intentionally avoids selling solely because the
+  CLOB bid is temporarily cheap while the model thesis is still mostly intact.
 - `profit_protection_exit`: configurable late profit guard active when
   `profit_protection_start_remaining_sec < remaining_sec <= profit_protection_end_remaining_sec`;
   the current 30-second final-force boundary normally supersedes most of this

@@ -90,6 +90,7 @@ class EdgeConfig:
     market_disagrees_exit_min_loss: float = 0.0
     market_disagrees_exit_min_age_sec: float = 0.0
     market_disagrees_exit_max_profit: float = 0.01
+    market_disagrees_exit_min_model_drop: float = 0.0
     polymarket_divergence_exit_bps: float = 3.0
     polymarket_divergence_exit_min_age_sec: float = 3.0
     logic_decay_reentry_cooldown_sec: float = 30.0
@@ -289,6 +290,8 @@ def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, m
     if position.entry_model_prob <= 0.0 or model_prob <= 0.0:
         return None
     if model_prob >= position.entry_model_prob:
+        return None
+    if cfg.market_disagrees_exit_min_model_drop > 0.0 and position.entry_model_prob - model_prob < cfg.market_disagrees_exit_min_model_drop:
         return None
     entry_ratio = position.entry_avg_price / position.entry_model_prob
     current_ratio = bid / model_prob

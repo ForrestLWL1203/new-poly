@@ -196,7 +196,8 @@ Current default strategy behavior:
   state.
 - FAK exits use `bid_avg` / `bid_limit` for executable sell-depth checks.
 - Exits include logic decay, market-overprice exits, market-disagrees exits for
-  late losing positions whose bid/model ratio deteriorates,
+  late losing positions whose bid/model ratio deteriorates and whose model
+  probability has also dropped by the configured minimum,
   Polymarket-reference divergence exits, and final-30s forced risk exit. The
   older final-60s defensive take-profit guard is now configurable and disabled
   in current live-oriented configs so strong late positions can keep their
