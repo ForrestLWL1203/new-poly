@@ -850,6 +850,26 @@ def test_live_post_no_match_exception_is_no_fill_with_latency(monkeypatch) -> No
     assert result.total_latency_ms == result.latency_ms
 
 
+def test_live_post_execution_rejected_exception_is_no_fill(monkeypatch) -> None:
+    class Client:
+        def create_market_order(self, args, options=None):
+            return {"signed": True}
+
+        def post_order(self, signed, order_type):
+            raise RuntimeError("PolyApiException[status_code=400, error_message={'error': 'could not run the execution'}]")
+
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: Client())
+    monkeypatch.setattr("new_poly.trading.execution.get_order_options", lambda token_id: None)
+    gateway = LiveFakExecutionGateway(live_risk_ack=True)
+
+    result = gateway._post("up", 1.0, "SELL", 0.08)
+
+    assert result.success is False
+    assert result.message == "live no fill: execution rejected"
+    assert result.latency_ms is not None
+    assert result.total_latency_ms == result.latency_ms
+
+
 def test_live_post_request_exception_is_no_fill_not_crash(monkeypatch) -> None:
     class Client:
         def create_market_order(self, args, options=None):

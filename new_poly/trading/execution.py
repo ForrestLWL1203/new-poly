@@ -686,6 +686,10 @@ def _is_fak_no_match_error(exc: Exception) -> bool:
     return "no orders found to match" in text and "fak" in text
 
 
+def _is_execution_rejected_error(exc: Exception) -> bool:
+    return "could not run the execution" in str(exc).lower()
+
+
 def _is_invalid_amount_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "invalid amounts" in text and "maker and taker amount" in text
@@ -1168,6 +1172,8 @@ class LiveFakExecutionGateway:
             latency_ms = round((time.monotonic() - start) * 1000)
             if _is_fak_no_match_error(exc):
                 return ExecutionResult(False, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+            if _is_execution_rejected_error(exc):
+                return ExecutionResult(False, message="live no fill: batch execution rejected", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
             if _is_invalid_amount_error(exc):
                 return ExecutionResult(False, message="live invalid amount", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
             if _is_insufficient_balance_error(exc):
@@ -1234,6 +1240,16 @@ class LiveFakExecutionGateway:
                     success=False,
                     order_id=_order_id_from_error(exc),
                     message="live no fill: FAK no match",
+                    mode="live",
+                    latency_ms=latency_ms,
+                    total_latency_ms=latency_ms,
+                    timing=timing,
+                )
+            if _is_execution_rejected_error(exc):
+                return ExecutionResult(
+                    success=False,
+                    order_id=_order_id_from_error(exc),
+                    message="live no fill: execution rejected",
                     mode="live",
                     latency_ms=latency_ms,
                     total_latency_ms=latency_ms,
