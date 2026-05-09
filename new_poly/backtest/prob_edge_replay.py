@@ -48,6 +48,7 @@ class BacktestConfig:
     prob_drop_exit_window_sec: float = 0.0
     prob_drop_exit_threshold: float = 0.0
     final_force_exit_remaining_sec: float = 30.0
+    final_profit_hold_min_profit_ratio: float = 0.10
     hold_to_settlement_enabled: bool = False
     hold_to_settlement_min_profit_ratio: float = 2.0
     hold_to_settlement_min_model_prob: float = 0.90
@@ -116,6 +117,7 @@ class BacktestConfig:
             prob_drop_exit_window_sec=self.prob_drop_exit_window_sec,
             prob_drop_exit_threshold=self.prob_drop_exit_threshold,
             final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
+            final_profit_hold_min_profit_ratio=self.final_profit_hold_min_profit_ratio,
             hold_to_settlement_enabled=self.hold_to_settlement_enabled,
             hold_to_settlement_min_profit_ratio=self.hold_to_settlement_min_profit_ratio,
             hold_to_settlement_min_model_prob=self.hold_to_settlement_min_model_prob,

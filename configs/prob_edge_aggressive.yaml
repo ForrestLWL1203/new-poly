@@ -15,6 +15,7 @@ strategy:
   max_book_age_ms: 1000
   defensive_take_profit_enabled: false
   final_force_exit_remaining_sec: 30.0
+  final_profit_hold_min_profit_ratio: 0.10
   hold_to_settlement_enabled: true
   hold_to_settlement_min_profit_ratio: 2.0
   hold_to_settlement_min_model_prob: 0.90

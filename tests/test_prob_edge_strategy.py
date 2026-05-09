@@ -1112,13 +1112,58 @@ def test_late_profit_protection_and_final_force_exit() -> None:
         s_price=100.1,
         k_price=100.0,
         sigma_eff=0.55,
-        up_bid_avg=0.70,
-        up_bid_limit=0.69,
+        up_bid_avg=0.52,
+        up_bid_limit=0.51,
         up_bid_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     ), pos, cfg, StrategyState(current_market_slug="m1"))
     assert force.reason == "final_force_exit"
+
+    tiny_profit = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=288.0,
+        remaining_sec=12.0,
+        s_price=100.1,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_bid_avg=0.54,
+        up_bid_limit=0.53,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg, StrategyState(current_market_slug="m1"))
+    assert tiny_profit.reason == "final_force_exit"
+
+    modest_profit = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=288.0,
+        remaining_sec=12.0,
+        s_price=100.1,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_bid_avg=0.56,
+        up_bid_limit=0.55,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg, StrategyState(current_market_slug="m1"))
+    assert modest_profit.reason == "final_profit_hold"
+
+    obvious_profit = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=288.0,
+        remaining_sec=12.0,
+        s_price=100.1,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_bid_avg=0.65,
+        up_bid_limit=0.64,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg, StrategyState(current_market_slug="m1"))
+    assert obvious_profit.reason == "final_profit_hold"
 
     hold = evaluate_exit(MarketSnapshot(
         market_slug="m1",

@@ -484,6 +484,7 @@ def candidate_results_from_rows(rows: Iterable[dict[str, Any]], cfg: DynamicConf
                 prob_drop_exit_window_sec=base.prob_drop_exit_window_sec,
                 prob_drop_exit_threshold=base.prob_drop_exit_threshold,
                 final_force_exit_remaining_sec=base.final_force_exit_remaining_sec,
+                final_profit_hold_min_profit_ratio=base.final_profit_hold_min_profit_ratio,
                 hold_to_settlement_enabled=base.hold_to_settlement_enabled,
                 hold_to_settlement_min_profit_ratio=base.hold_to_settlement_min_profit_ratio,
                 hold_to_settlement_min_model_prob=base.hold_to_settlement_min_model_prob,

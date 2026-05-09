@@ -49,6 +49,7 @@ class EdgeConfig:
     defensive_take_profit_start_remaining_sec: float = 30.0
     defensive_take_profit_end_remaining_sec: float = 60.0
     final_force_exit_remaining_sec: float = 30.0
+    final_profit_hold_min_profit_ratio: float = 0.10
     final_hold_min_prob: float = 0.98
     final_hold_min_bid_avg: float = 0.97
     final_hold_min_bid_limit: float = 0.95
@@ -334,6 +335,12 @@ def _hold_to_settlement_candidate(
     )
 
 
+def _final_profit_hold_candidate(position: PositionSnapshot, profit_now: float, cfg: EdgeConfig) -> bool:
+    if position.entry_avg_price <= 0 or cfg.final_profit_hold_min_profit_ratio <= 0:
+        return False
+    return profit_now / position.entry_avg_price >= cfg.final_profit_hold_min_profit_ratio
+
+
 def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConfig) -> StrategyDecision:
     if state.has_position:
         return StrategyDecision(action="skip", reason="already_holding")
@@ -415,6 +422,8 @@ def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: Edg
             return StrategyDecision(action="hold", reason="stale_book_wait", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down)
         if depth_ok and bid is not None and bid_limit is not None:
             profit_now = bid - position.entry_avg_price
+            if _final_profit_hold_candidate(position, profit_now, cfg):
+                return StrategyDecision(action="hold", reason="final_profit_hold", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now)
             return StrategyDecision(action="exit", reason="final_force_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now)
         return StrategyDecision(action="exit", reason="risk_exit", side=position.token_side, model_prob=model_prob, up_prob=probs.up, down_prob=probs.down)
 
@@ -431,8 +440,11 @@ def evaluate_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: Edg
         return StrategyDecision(action="exit", reason="polymarket_divergence_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement, polymarket_divergence_bps=polymarket_divergence_bps)
     if snapshot.remaining_sec <= cfg.final_force_exit_remaining_sec:
         strong_hold = model_prob >= cfg.final_hold_min_prob and bid >= cfg.final_hold_min_bid_avg and bid_limit >= cfg.final_hold_min_bid_limit
-        if not strong_hold and not hold_to_settlement:
+        final_profit_hold = _final_profit_hold_candidate(position, profit_now, cfg)
+        if not strong_hold and not hold_to_settlement and not final_profit_hold:
             return StrategyDecision(action="exit", reason="final_force_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement, polymarket_divergence_bps=polymarket_divergence_bps)
+        if final_profit_hold and not hold_to_settlement:
+            return StrategyDecision(action="hold", reason="final_profit_hold", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement, polymarket_divergence_bps=polymarket_divergence_bps)
     if not hold_to_settlement and cfg.profit_protection_start_remaining_sec < snapshot.remaining_sec <= cfg.profit_protection_end_remaining_sec and profit_now >= cfg.protection_profit_min:
         return StrategyDecision(action="exit", reason="profit_protection_exit", side=position.token_side, model_prob=model_prob, price=bid, limit_price=bid_limit, up_prob=probs.up, down_prob=probs.down, profit_now=profit_now, prob_stagnant=prob_stagnant, prob_delta_3s=prob_delta_3s, prob_drop_delta=prob_drop_delta, market_disagreement=market_disagreement, polymarket_divergence_bps=polymarket_divergence_bps)
     if cfg.defensive_take_profit_enabled and not hold_to_settlement and cfg.defensive_take_profit_start_remaining_sec < snapshot.remaining_sec <= cfg.defensive_take_profit_end_remaining_sec and profit_now >= cfg.defensive_profit_min and prob_stagnant:
