@@ -159,8 +159,8 @@ Config files:
 - `configs/prob_edge_mvp.yaml`: baseline/default config.
 - `configs/prob_edge_aggressive.yaml`: current optimized aggressive paper
   candidate. It is aggressive by entry count but stricter by entry quality:
-  `100-240s` entry timing, `0.16/0.14` early/core edge thresholds,
-  `min_entry_model_prob=0.55`, `max_entries_per_market=2`, and `$1`
+  `100-240s` entry timing, `0.12/0.10` early/core edge thresholds,
+  `min_entry_model_prob=0.60`, `max_entries_per_market=2`, and `$1`
   notional/depth. Dynamic early entry remains available as an explicit
   experiment via `--dynamic-entry`.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor

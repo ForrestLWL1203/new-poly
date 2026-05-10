@@ -198,11 +198,11 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.prob_drop_exit_window_sec == 0.0
     assert opts.config.edge.prob_drop_exit_threshold == 0.0
     assert opts.config.edge.model_decay_buffer == 0.03
-    assert opts.config.edge.early_required_edge == 0.16
-    assert opts.config.edge.core_required_edge == 0.14
+    assert opts.config.edge.early_required_edge == 0.12
+    assert opts.config.edge.core_required_edge == 0.10
     assert opts.config.edge.early_to_core_age_sec == 120.0
     assert opts.config.edge.core_to_late_age_sec == 240.0
-    assert opts.config.edge.min_entry_model_prob == 0.55
+    assert opts.config.edge.min_entry_model_prob == 0.60
     assert opts.config.edge.low_price_extra_edge_threshold == 0.30
     assert opts.config.edge.low_price_extra_edge == 0.04
     assert opts.config.edge.weak_sk_entry_filter_enabled is True

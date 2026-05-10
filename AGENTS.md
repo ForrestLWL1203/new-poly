@@ -328,10 +328,10 @@ Current tuned strategy shape:
   follows Polymarket/Chainlink, not Binance.
 - Coinbase is disabled by default.
 - New entries normally use `entry_start_age_sec=100`,
-  `entry_end_age_sec=240`, `early_required_edge=0.16`,
-  `core_required_edge=0.14`.
+  `entry_end_age_sec=240`, `early_required_edge=0.12`,
+  `core_required_edge=0.10`.
 - The aggressive config is aggressive by entry count but stricter by entry
-  quality. It currently uses `min_entry_model_prob=0.55`,
+  quality. It currently uses `min_entry_model_prob=0.60`,
   `max_entries_per_market=2`, `low_price_extra_edge_threshold=0.30`, and
   `low_price_extra_edge=0.04`.
 - The aggressive config also filters weak-distance mid-priced entries:
@@ -341,9 +341,9 @@ Current tuned strategy shape:
 - Recent live analysis showed many large losses came from low-certainty
   "cheap ticket" entries where `model_prob` was near `0.50` but edge looked
   large because the ask was low. Backtests on recent live/paper/collector logs
-  suggest raising `min_entry_model_prob` toward `0.55-0.60` improves win rate
-  and drawdown at the cost of fewer trades. Treat this as the next parameter
-  family to validate before widening entry windows or lowering edge thresholds.
+  suggested `min_entry_model_prob=0.60` with looser `0.12/0.10` early/core edge
+  as a better live-log balance than the previous `0.55` with `0.16/0.14`.
+  Continue validating this before widening entry windows further.
 - The aggressive config also enables price/probability BUY cap relaxation after
   a normal edge signal passes: low-priced tickets (`ask<=0.25`, `prob>=0.40`)
   can use up to `+8` ticks, mid-priced tickets (`ask<=0.65`, `prob>=0.60/0.75`)

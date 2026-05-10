@@ -495,7 +495,7 @@ def test_backtest_cli_config_loads_aggressive_yaml_defaults() -> None:
     assert cfg.amount_usd == 1.0
     assert cfg.entry_start_age_sec == 100
     assert cfg.entry_end_age_sec == 240
-    assert cfg.min_entry_model_prob == 0.55
+    assert cfg.min_entry_model_prob == 0.60
     assert cfg.settlement_hold_enabled is True
     assert cfg.max_polymarket_price_age_sec == 4.0
 
@@ -516,4 +516,4 @@ def test_backtest_cli_config_allows_explicit_overrides() -> None:
     assert cfg.entry_start_age_sec == 120
     assert cfg.entry_end_age_sec == 240
     assert cfg.settlement_hold_enabled is False
-    assert cfg.min_entry_model_prob == 0.55
+    assert cfg.min_entry_model_prob == 0.60
