@@ -257,13 +257,13 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def _source_name(*, has_binance: bool, has_coinbase: bool, basis_adjusted: bool) -> str:
+def _source_name(*, has_binance: bool, has_coinbase: bool) -> str:
     if has_binance and has_coinbase:
-        return "proxy_multi_source_basis_adjusted" if basis_adjusted else "proxy_multi_source"
+        return "proxy_multi_source"
     if has_binance:
-        return "proxy_binance_basis_adjusted" if basis_adjusted else "proxy_binance"
+        return "proxy_binance"
     if has_coinbase:
-        return "proxy_coinbase_basis_adjusted" if basis_adjusted else "proxy_coinbase"
+        return "proxy_coinbase"
     return "missing"
 
 
@@ -320,23 +320,18 @@ def effective_price(
         (coinbase_latest, prices.coinbase_open_price if coinbase_enabled else None),
     ]
     basis_pairs = [(latest, open_price) for latest, open_price in paired_sources if latest is not None and open_price is not None]
-    has_paired_binance = binance_latest is not None and prices.binance_open_price is not None
-    has_paired_coinbase = coinbase_enabled and coinbase_latest is not None and prices.coinbase_open_price is not None
     spread_usd = abs(binance_latest - coinbase_latest) if binance_latest is not None and coinbase_latest is not None else None
     spread_bps = (spread_usd / all_proxy) * 10_000.0 if spread_usd is not None and all_proxy else None
 
     if prices.k_price is not None and basis_pairs:
-        proxy = _mean([latest for latest, _open in basis_pairs])
         proxy_open = _mean([open_price for _latest, open_price in basis_pairs])
-        assert proxy is not None
         assert proxy_open is not None
         basis = proxy_open - prices.k_price
-        effective = proxy - basis
         return _with_polymarket(EffectivePrice(
-            _source_name(has_binance=has_paired_binance, has_coinbase=has_paired_coinbase, basis_adjusted=True),
-            effective,
+            _source_name(has_binance=binance_latest is not None, has_coinbase=coinbase_latest is not None),
+            all_proxy,
             (basis / prices.k_price) * 10_000.0,
-            proxy=proxy,
+            proxy=all_proxy,
             proxy_open=proxy_open,
             binance=binance_latest,
             coinbase=coinbase_latest,
@@ -344,7 +339,7 @@ def effective_price(
             spread_bps=spread_bps,
         ))
     return _with_polymarket(EffectivePrice(
-        _source_name(has_binance=binance_latest is not None, has_coinbase=coinbase_latest is not None, basis_adjusted=False),
+        _source_name(has_binance=binance_latest is not None, has_coinbase=coinbase_latest is not None),
         all_proxy,
         None,
         proxy=all_proxy,

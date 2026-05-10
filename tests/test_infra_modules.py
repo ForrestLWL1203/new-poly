@@ -98,17 +98,18 @@ def test_coinbase_price_feed_history_lookup_helpers() -> None:
     assert feed.first_price_at_or_after(101.0, max_forward_sec=10.0) == 10.5
 
 
-def test_prob_edge_data_effective_price_basis_adjustment_is_shared() -> None:
+def test_prob_edge_data_effective_price_uses_raw_binance_as_model_source() -> None:
     feed = BinancePriceFeed("btcusdt")
     feed._inject(100.0, 105.0)
     prices = WindowPrices(k_price=102.0, binance_open_price=100.0)
 
     price = effective_price(feed, None, prices, coinbase_enabled=False)
 
-    assert price.source == "proxy_binance_basis_adjusted"
+    assert price.source == "proxy_binance"
     assert price.proxy == 105.0
     assert price.proxy_open == 100.0
-    assert price.effective == 107.0
+    assert price.effective == 105.0
+    assert price.basis_bps == pytest.approx(-196.07843137254903)
 
 
 def test_price_stream_updates_order_book_from_events() -> None:

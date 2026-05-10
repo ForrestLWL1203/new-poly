@@ -426,3 +426,17 @@ def test_backtest_config_passes_buy_cap_relaxation_to_strategy() -> None:
     assert edge_cfg.buy_low_price_relax_retained_edge == 0.07
     assert edge_cfg.buy_mid_strong_relax_max_extra_ticks == 11.0
     assert edge_cfg.buy_high_price_relax_min_prob == 0.96
+
+
+def test_backtest_config_passes_weak_sk_entry_filter_to_strategy() -> None:
+    cfg = BacktestConfig(
+        weak_sk_entry_filter_enabled=True,
+        weak_sk_entry_min_ask=0.36,
+        weak_sk_entry_min_abs_sk_bps=2.5,
+    )
+
+    edge_cfg = cfg.edge_config()
+
+    assert edge_cfg.weak_sk_entry_filter_enabled is True
+    assert edge_cfg.weak_sk_entry_min_ask == 0.36
+    assert edge_cfg.weak_sk_entry_min_abs_sk_bps == 2.5

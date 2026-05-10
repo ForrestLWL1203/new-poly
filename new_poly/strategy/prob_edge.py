@@ -68,6 +68,9 @@ class EdgeConfig:
     min_entry_model_prob: float = 0.0
     low_price_extra_edge_threshold: float = 0.0
     low_price_extra_edge: float = 0.0
+    weak_sk_entry_filter_enabled: bool = False
+    weak_sk_entry_min_ask: float = 0.35
+    weak_sk_entry_min_abs_sk_bps: float = 2.0
     buy_cap_relax_enabled: bool = False
     buy_low_price_relax_max_ask: float = 0.25
     buy_low_price_relax_min_prob: float = 0.40
@@ -224,6 +227,19 @@ def _entry_required_edge(base_edge: float, ask_avg: float, cfg: EdgeConfig) -> f
     return base_edge
 
 
+def _weak_sk_entry_filter(snapshot: MarketSnapshot, ask: float, cfg: EdgeConfig) -> bool:
+    if not cfg.weak_sk_entry_filter_enabled:
+        return False
+    if cfg.weak_sk_entry_min_abs_sk_bps <= 0.0:
+        return False
+    if ask <= cfg.weak_sk_entry_min_ask:
+        return False
+    if snapshot.s_price is None or snapshot.k_price is None or snapshot.k_price <= 0.0:
+        return False
+    sk_bps = abs(snapshot.s_price - snapshot.k_price) / snapshot.k_price * 10000.0
+    return sk_bps < cfg.weak_sk_entry_min_abs_sk_bps
+
+
 def _relaxed_entry_fair_cap(model_prob: float, best_ask: float, required_edge: float, cfg: EdgeConfig) -> float:
     base_cap = model_prob - required_edge
     if not cfg.buy_cap_relax_enabled:
@@ -370,6 +386,7 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
     assert phase.required_edge is not None
     attempted_required_edges: list[float] = []
     rejected_cooldown_reason: str | None = None
+    rejected_weak_sk_distance = False
     if snapshot.up_best_ask is not None:
         up_edge = probs.up - snapshot.up_best_ask
         up_required_edge = _entry_required_edge(phase.required_edge, snapshot.up_best_ask, cfg)
@@ -382,7 +399,10 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
             elif probs.up < cfg.min_entry_model_prob:
                 rejected_low_model_prob = True
             elif _entry_cap_ok(snapshot.up_best_ask, up_fair_cap, cfg) and _spread_ok(snapshot, "up", cfg, phase):
-                candidates.append(StrategyDecision("enter", "edge", "up", model_prob=probs.up, price=snapshot.up_best_ask, limit_price=up_fair_cap, depth_limit_price=snapshot.up_best_ask, best_ask=snapshot.up_best_ask, edge=up_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=up_required_edge))
+                if _weak_sk_entry_filter(snapshot, snapshot.up_best_ask, cfg):
+                    rejected_weak_sk_distance = True
+                else:
+                    candidates.append(StrategyDecision("enter", "edge", "up", model_prob=probs.up, price=snapshot.up_best_ask, limit_price=up_fair_cap, depth_limit_price=snapshot.up_best_ask, best_ask=snapshot.up_best_ask, edge=up_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=up_required_edge))
     if snapshot.down_best_ask is not None:
         down_edge = probs.down - snapshot.down_best_ask
         down_required_edge = _entry_required_edge(phase.required_edge, snapshot.down_best_ask, cfg)
@@ -395,13 +415,18 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
             elif probs.down < cfg.min_entry_model_prob:
                 rejected_low_model_prob = True
             elif _entry_cap_ok(snapshot.down_best_ask, down_fair_cap, cfg) and _spread_ok(snapshot, "down", cfg, phase):
-                candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_best_ask, limit_price=down_fair_cap, depth_limit_price=snapshot.down_best_ask, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=down_required_edge))
+                if _weak_sk_entry_filter(snapshot, snapshot.down_best_ask, cfg):
+                    rejected_weak_sk_distance = True
+                else:
+                    candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_best_ask, limit_price=down_fair_cap, depth_limit_price=snapshot.down_best_ask, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=down_required_edge))
     if not candidates:
         effective_required_edge = max(attempted_required_edges) if attempted_required_edges else phase.required_edge
         if rejected_cooldown_reason is not None:
             return StrategyDecision(action="skip", reason=rejected_cooldown_reason, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
         if rejected_low_model_prob:
             return StrategyDecision(action="skip", reason="model_prob_too_low", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
+        if rejected_weak_sk_distance:
+            return StrategyDecision(action="skip", reason="weak_sk_distance", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
         return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
     return max(candidates, key=lambda item: item.edge or 0.0)
 

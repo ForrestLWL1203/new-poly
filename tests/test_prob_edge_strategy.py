@@ -323,6 +323,62 @@ def test_entry_ignores_safety_depth_when_best_ask_is_inside_formula_cap() -> Non
     assert decision.depth_limit_price == 0.40
 
 
+def test_entry_rejects_mid_price_when_signed_distance_is_too_weak() -> None:
+    cfg = EdgeConfig(
+        core_required_edge=0.05,
+        weak_sk_entry_filter_enabled=True,
+        weak_sk_entry_min_ask=0.35,
+        weak_sk_entry_min_abs_sk_bps=2.0,
+    )
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.01,
+        k_price=100.0,
+        sigma_eff=2.0,
+        up_best_ask=0.40,
+        down_best_ask=0.90,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "weak_sk_distance"
+    assert decision.up_prob is not None
+    assert decision.required_edge == 0.05
+
+
+def test_entry_allows_mid_price_when_signed_distance_is_strong_enough() -> None:
+    cfg = EdgeConfig(
+        core_required_edge=0.05,
+        weak_sk_entry_filter_enabled=True,
+        weak_sk_entry_min_ask=0.35,
+        weak_sk_entry_min_abs_sk_bps=2.0,
+    )
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.03,
+        k_price=100.0,
+        sigma_eff=2.0,
+        up_best_ask=0.40,
+        down_best_ask=0.90,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "enter"
+    assert decision.side == "up"
+
+
 def test_entry_relaxes_fair_cap_for_low_price_probability_edge(monkeypatch) -> None:
     monkeypatch.setattr(prob_edge_module, "_probs", lambda snapshot: BinaryProbabilities(up=0.409046, down=0.590954, d2=None))
     cfg = EdgeConfig(

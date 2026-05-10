@@ -300,6 +300,18 @@ order becomes `order_no_fill` instead of widening beyond the model price.
 `min_entry_model_prob` is a separate quality gate: it rejects low-probability
 lottery-style entries even when their price discount is large.
 
+The current aggressive profile also has a weak S-K mid-price filter:
+
+```text
+if best_ask > weak_sk_entry_min_ask and abs(S-K in bps) < weak_sk_entry_min_abs_sk_bps:
+    skip entry
+```
+
+With `weak_sk_entry_min_ask=0.35` and `weak_sk_entry_min_abs_sk_bps=2.0`, this
+rejects trades where the token is already mid-priced but the Binance price is
+still too close to the Polymarket Price to Beat. It is intentionally not applied
+to cheap lottery-style tickets.
+
 Low-priced tokens can be guarded without banning them outright:
 
 ```text

@@ -688,6 +688,54 @@ def test_live_sell_success_reconciles_when_response_understates_fill(monkeypatch
     assert len(gateway.calls) == 1
 
 
+def test_live_sell_success_trusts_response_when_balance_lags(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 2.9311)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            True,
+            filled_size=2.94,
+            avg_price=0.11,
+            message="matched",
+            mode="live",
+        ),
+    ])
+
+    result = asyncio.run(gateway.sell("down", shares=2.941175, min_price=0.11, exit_reason="market_disagrees_exit"))
+
+    assert result.success is True
+    assert result.filled_size == pytest.approx(2.94)
+    assert result.avg_price == pytest.approx(0.11)
+    assert result.message == "matched"
+    assert result.timing["success_reconciliation"] == "balance_lagged_response_trusted"
+    assert result.timing["balance_decrease"] == pytest.approx(0.010075)
+    assert result.timing["response_fill_size"] == pytest.approx(2.94)
+    assert len(gateway.calls) == 1
+
+
+def test_live_sell_success_trusts_response_when_balance_has_not_moved_yet(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 2.941175)
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            True,
+            filled_size=2.94,
+            avg_price=0.11,
+            message="matched",
+            mode="live",
+        ),
+    ])
+
+    result = asyncio.run(gateway.sell("down", shares=2.941175, min_price=0.11, exit_reason="market_disagrees_exit"))
+
+    assert result.success is True
+    assert result.filled_size == pytest.approx(2.94)
+    assert result.avg_price == pytest.approx(0.11)
+    assert result.message == "matched"
+    assert result.timing["success_reconciliation"] == "balance_lagged_response_trusted"
+    assert result.timing["balance_decrease"] == pytest.approx(0.0)
+
+
 def test_live_buy_request_exception_reconciles_from_balance_and_trades(monkeypatch) -> None:
     balances = iter([0.0, 5.0])
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))

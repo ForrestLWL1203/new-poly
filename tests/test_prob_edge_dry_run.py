@@ -304,13 +304,13 @@ def test_collector_row_is_strategy_neutral() -> None:
         ),
     )
 
-    assert row["price_source"] == "proxy_multi_source_basis_adjusted"
+    assert row["price_source"] == "proxy_multi_source"
+    assert row["s_price"] == 100_110.0
     assert row["resolution_source"] == "https://data.chain.link/streams/btc-usd"
     assert row["binance_price"] == 100120.0
     assert row["coinbase_price"] == 100100.0
     assert row["proxy_price"] == 100110.0
     assert row["proxy_open_price"] == 100040.0
-    assert row["s_price"] == 100070.0
     assert row["basis_bps"] == 4.0
     assert row["source_spread_usd"] == 20.0
     assert row["volatility"]["sigma"] == 0.4
@@ -387,7 +387,7 @@ def test_collector_warns_when_polymarket_ws_open_disagrees_with_api() -> None:
         volatility=None,
     )
 
-    assert row["price_source"] == "proxy_binance_basis_adjusted"
+    assert row["price_source"] == "proxy_binance"
     assert "polymarket_ws_open_disagrees_with_api" in row["warnings"]
     assert row["settlement_aligned"] is False
 
@@ -454,10 +454,11 @@ def test_effective_price_falls_back_to_binance_when_coinbase_missing() -> None:
 
     price = collector.effective_price(FakeBinanceFeed(), None, prices)
 
-    assert price.source == "proxy_binance_basis_adjusted"
-    assert price.effective == 100_070.0
+    assert price.source == "proxy_binance"
+    assert price.effective == 100_120.0
     assert price.proxy == 100_120.0
     assert price.proxy_open == 100_050.0
+    assert price.basis_bps == 5.0
     assert price.spread_usd is None
 
 
@@ -489,8 +490,8 @@ def test_effective_price_uses_proxy_model_source_and_keeps_polymarket_reference(
         polymarket_enabled=True,
     )
 
-    assert price.source == "proxy_multi_source_basis_adjusted"
-    assert price.effective == 100_070.0
+    assert price.source == "proxy_multi_source"
+    assert price.effective == 100_110.0
     assert price.basis_bps == 4.0
     assert price.polymarket == 100_080.0
     assert price.polymarket_open == 100_000.0
@@ -527,8 +528,8 @@ def test_effective_price_keeps_stale_polymarket_only_as_reference() -> None:
         polymarket_enabled=True,
     )
 
-    assert price.source == "proxy_multi_source_basis_adjusted"
-    assert price.effective == 100_070.0
+    assert price.source == "proxy_multi_source"
+    assert price.effective == 100_110.0
     assert price.polymarket == 100_080.0
     assert price.polymarket_age_sec == 4.5
 
@@ -601,15 +602,16 @@ def test_effective_price_ignores_coinbase_when_disabled() -> None:
 
     price = collector.effective_price(FakeBinanceFeed(), FakeCoinbaseFeed(), prices, coinbase_enabled=False)
 
-    assert price.source == "proxy_binance_basis_adjusted"
-    assert price.effective == 100_070.0
+    assert price.source == "proxy_binance"
+    assert price.effective == 100_120.0
     assert price.proxy == 100_120.0
     assert price.proxy_open == 100_050.0
+    assert price.basis_bps == 5.0
     assert price.coinbase is None
     assert price.spread_usd is None
 
 
-def test_effective_price_uses_multi_source_basis_adjustment() -> None:
+def test_effective_price_uses_multi_source_raw_proxy_with_basis_diagnostic() -> None:
     class FakeBinanceFeed:
         latest_price = 100_120.0
 
@@ -624,15 +626,15 @@ def test_effective_price_uses_multi_source_basis_adjustment() -> None:
 
     price = collector.effective_price(FakeBinanceFeed(), FakeCoinbaseFeed(), prices)
 
-    assert price.source == "proxy_multi_source_basis_adjusted"
+    assert price.source == "proxy_multi_source"
     assert price.proxy == 100_110.0
     assert price.proxy_open == 100_040.0
-    assert price.effective == 100_070.0
+    assert price.effective == 100_110.0
     assert price.basis_bps == 4.0
     assert price.spread_usd == 20.0
 
 
-def test_effective_price_basis_adjustment_uses_only_sources_with_open_prices() -> None:
+def test_effective_price_basis_diagnostic_uses_only_sources_with_open_prices() -> None:
     class FakeBinanceFeed:
         latest_price = 100_120.0
 
@@ -643,8 +645,9 @@ def test_effective_price_basis_adjustment_uses_only_sources_with_open_prices() -
 
     price = collector.effective_price(FakeBinanceFeed(), FakeCoinbaseFeed(), prices)
 
-    assert price.source == "proxy_binance_basis_adjusted"
-    assert price.proxy == 100_120.0
+    assert price.source == "proxy_multi_source"
+    assert price.proxy == 100_110.0
     assert price.proxy_open == 100_050.0
-    assert price.effective == 100_070.0
+    assert price.effective == 100_110.0
+    assert price.basis_bps == 5.0
     assert price.spread_usd == 20.0

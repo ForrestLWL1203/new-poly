@@ -35,8 +35,8 @@ The collector records:
 - Coinbase BTC-USD match WebSocket only when explicitly enabled for backup or
   multi-source diagnostics. It is disabled by default.
 - Binance and, when enabled, Coinbase open prices inside the window boundary
-  lookaround `(window_start - 5s, window_start + 5s)`, used to compute
-  open-basis-adjusted `s_price`.
+  lookaround `(window_start - 5s, window_start + 5s)`, used only to compute
+  basis diagnostics.
 - Polymarket CLOB WebSocket top/depth summaries for UP and DOWN tokens.
 - Deribit BTC DVOL snapshot as 30-day implied-volatility reference.
 
@@ -46,16 +46,20 @@ Polymarket crypto price API exposes `openPrice`. The collector does not fetch
 or log `closePrice`; simple post-run direction checks can compare Binance
 window open/close prices instead.
 
-The model live price is now Binance by default. Polymarket live-data remains
+The model live price is now raw Binance by default. Polymarket live-data remains
 important, but only as a reference stream observed by the event UI. In a
 three-window probe on 2026-05-06, the WS boundary ticks matched the crypto price
-API `openPrice`/`closePrice` exactly. When Binance has same-window open basis,
-rows usually use:
+API `openPrice`/`closePrice` exactly. Rows usually use:
 
 ```text
-price_source = proxy_binance_basis_adjusted
-s_price = binance_live - (binance_open - k_price)
+price_source = proxy_binance
+s_price = binance_live
 ```
+
+`binance_open_price`, `proxy_open_price`, and `basis_bps` are still logged as
+diagnostics, but the basis is not applied to the model `S`. This preserves the
+strategy's current goal: use Binance as the leading signal for Polymarket CLOB
+repricing.
 
 If the Polymarket live-data stream is missing or stale, the collector keeps
 using Binance for the model price but marks the reference data as absent or old.
@@ -65,15 +69,16 @@ Polymarket reference cache is intentionally short, about 15 seconds.
 
 Coinbase is disabled by default. Enable it with `--coinbase` only for runs that
 need multi-source diagnostics. When both Binance and Coinbase are live, the
-proxy uses their arithmetic mean for `proxy_price`. Once `k_price` and at least
-one matching open price are known, it applies the open-basis adjustment using
-only sources that have both a live price and a same-window open price:
+proxy uses their arithmetic mean for `proxy_price` / `s_price`. Once `k_price`
+and at least one matching open price are known, the open-basis diagnostic is
+calculated using only sources that have both a live price and a same-window open
+price:
 
 ```text
 proxy_live = mean(valid paired live prices)
 proxy_open = mean(valid paired open prices)
 basis = proxy_open - k_price
-s_price = proxy_live - basis
+s_price = mean(live proxy sources)
 ```
 
 If Coinbase is disabled or unavailable, the collector uses the existing Binance

@@ -66,6 +66,9 @@ class BacktestConfig:
     min_entry_model_prob: float = 0.0
     low_price_extra_edge_threshold: float = 0.0
     low_price_extra_edge: float = 0.0
+    weak_sk_entry_filter_enabled: bool = False
+    weak_sk_entry_min_ask: float = 0.35
+    weak_sk_entry_min_abs_sk_bps: float = 2.0
     buy_cap_relax_enabled: bool = False
     buy_low_price_relax_max_ask: float = 0.25
     buy_low_price_relax_min_prob: float = 0.40
@@ -135,6 +138,9 @@ class BacktestConfig:
             min_entry_model_prob=self.min_entry_model_prob,
             low_price_extra_edge_threshold=self.low_price_extra_edge_threshold,
             low_price_extra_edge=self.low_price_extra_edge,
+            weak_sk_entry_filter_enabled=self.weak_sk_entry_filter_enabled,
+            weak_sk_entry_min_ask=self.weak_sk_entry_min_ask,
+            weak_sk_entry_min_abs_sk_bps=self.weak_sk_entry_min_abs_sk_bps,
             buy_cap_relax_enabled=self.buy_cap_relax_enabled,
             buy_low_price_relax_max_ask=self.buy_low_price_relax_max_ask,
             buy_low_price_relax_min_prob=self.buy_low_price_relax_min_prob,

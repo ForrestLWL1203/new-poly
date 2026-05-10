@@ -329,9 +329,13 @@ Current tuned strategy shape:
   `entry_end_age_sec=240`, `early_required_edge=0.16`,
   `core_required_edge=0.14`.
 - The aggressive config is aggressive by entry count but stricter by entry
-  quality. It currently uses `min_entry_model_prob=0.40`,
+  quality. It currently uses `min_entry_model_prob=0.55`,
   `max_entries_per_market=2`, `low_price_extra_edge_threshold=0.30`, and
   `low_price_extra_edge=0.04`.
+- The aggressive config also filters weak-distance mid-priced entries:
+  when `best_ask > 0.35` and `abs(S-K) < 2bps`, the bot skips entry with
+  `weak_sk_distance`. This targets tickets that are no longer cheap while the
+  Binance model price remains too close to Polymarket's Price to Beat.
 - Recent live analysis showed many large losses came from low-certainty
   "cheap ticket" entries where `model_prob` was near `0.50` but edge looked
   large because the ask was low. Backtests on recent live/paper/collector logs
@@ -464,13 +468,16 @@ thresholds.
   and BTC 5m window rollover live in `new_poly/market/prob_edge_data.py`.
   Entry scripts should import that module instead of importing from
   `scripts/collect_prob_edge_data.py`.
-- Basis-adjusted proxy formula:
+- Raw proxy model price formula:
   use only sources that have both a live price and same-window open price;
   `proxy_live = mean(valid paired live prices)`;
   `proxy_open = mean(valid paired open prices)`;
-  `s_price = proxy_live - (proxy_open - k_price)`.
-- `price_source` is normally `proxy_binance` or
-  `proxy_binance_basis_adjusted`. `polymarket_price` is a reference field.
+  `basis_bps = (proxy_open - k_price) / k_price * 10000`;
+  `s_price = mean(live proxy sources)`. The basis is diagnostic only and must
+  not be applied to the model `S`; this strategy uses Binance as the leading
+  signal for Polymarket CLOB repricing.
+- `price_source` is normally `proxy_binance` unless Coinbase diagnostics are
+  explicitly enabled. `polymarket_price` is a reference field.
 - Strategy volatility defaults to Binance 1-minute realized volatility:
   `volatility_source=binance_rv`, `rv_lookback_minutes=60`, `rv_refresh_sec=60`.
   It fetches one Binance kline response with 61 candles, computes close-to-close

@@ -113,11 +113,11 @@ python3 scripts/collect_prob_edge_data.py \
 ```
 
 The script extracts the Polymarket UI Price to Beat from Polymarket's crypto
-price API as `k_price`, then uses a Binance open-basis-adjusted proxy for
-current model `s_price` by default. Polymarket live-data is still collected, but
-as the settlement-reference diagnostic rather than the primary model input. Pass
-`--coinbase` only for runs that need Coinbase diagnostics or a multi-source
-proxy.
+price API as `k_price`, then uses raw Binance as the current model `s_price` by
+default. Basis fields are logged for diagnostics only. Polymarket live-data is
+still collected, but as the settlement-reference diagnostic rather than the
+primary model input. Pass `--coinbase` only for runs that need Coinbase
+diagnostics or a multi-source proxy.
 It does not fetch or log Polymarket `closePrice`; simple post-run direction
 checks should compare proxy window open/close prices.
 It also fetches Deribit BTC DVOL once at startup by default and records it under
@@ -145,11 +145,11 @@ Current default strategy behavior:
   latest 60 minutes (`binance_1m_rv`), refreshed every 60 seconds. DVOL remains
   a fallback if Binance RV is unavailable. Runtime refresh failures keep the
   last valid sigma until it exceeds the configured stale age.
-- S is the Binance proxy price by default. This is intentional: the current
+- S is the raw Binance proxy price by default. This is intentional: the current
   strategy treats Binance as the faster model signal and Polymarket live-data as
   the settlement-reference risk signal. With `--coinbase` or
   `market_data.coinbase_enabled=true`, S becomes the Binance+Coinbase paired
-  proxy, basis-adjusted once K and proxy open are known.
+  proxy. Open-basis fields are diagnostics only and are not applied to `S`.
 - Entry thresholds are time phased. The aggressive profile uses `0.16` for
   `100 <= age < 120`, `0.14` for `120 <= age < 240`, and disables late entry
   from `240s` onward. Optional dynamic early entry is available but disabled by
@@ -232,9 +232,10 @@ Current parameter files:
 - `configs/prob_edge_mvp.yaml`: conservative baseline/default config.
 - `configs/prob_edge_aggressive.yaml`: current live-oriented aggressive paper
   candidate. It uses `100-240s` entry timing, `0.16/0.14` early/core edge
-  thresholds, `min_entry_model_prob=0.40`, price/probability buy-cap
-  relaxation, `max_entries_per_market=2`, `$1` paper notional/depth, Binance
-  as the model source, and Polymarket live-data as a reference risk guard.
+  thresholds, `min_entry_model_prob=0.55`, a weak S-K mid-price entry filter
+  (`ask>0.35` and `abs(S-K)<2bps`), price/probability buy-cap relaxation,
+  `max_entries_per_market=2`, `$1` paper notional/depth, Binance as the model
+  source, and Polymarket live-data as a reference risk guard.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
   profiles and health thresholds. It only changes entry timing/edge/max-entry
   settings, and only at window boundaries.

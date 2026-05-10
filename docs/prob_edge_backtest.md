@@ -66,9 +66,12 @@ early_required_edge = 0.16
 core_required_edge = 0.14
 max_entries_per_market = 2
 amount_usd = 1
-min_entry_model_prob = 0.40
+min_entry_model_prob = 0.55
 low_price_extra_edge_threshold = 0.30
 low_price_extra_edge = 0.04
+weak_sk_entry_filter_enabled = true
+weak_sk_entry_min_ask = 0.35
+weak_sk_entry_min_abs_sk_bps = 2.0
 buy_cap_relax_enabled = true
 model_decay_buffer = 0.03
 prob_drop_exit disabled by default
@@ -227,10 +230,10 @@ fast probability-drop exit guard. The current aggressive profile uses `5` and
 
 If a position remains open after the final available row for a window, it is
 settled using the final collected effective `s_price` for that window. Current
-collector/bot logs normally use Binance, optionally open-basis-adjusted to the
-Polymarket `k_price`, as the effective model price. Polymarket live-data is kept
-as a reference field for divergence analysis rather than the default model
-source:
+collector/bot logs normally use raw Binance as the effective model price.
+Open-basis fields are diagnostics only and are not applied to `s_price`.
+Polymarket live-data is kept as a reference field for divergence analysis rather
+than the default model source:
 
 ```text
 s_price > k_price => UP wins

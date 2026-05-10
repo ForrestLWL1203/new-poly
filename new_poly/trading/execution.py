@@ -1162,6 +1162,19 @@ class LiveFakExecutionGateway:
             1e-9,
             min(self.live_min_sell_shares, attempted_amount) if self.live_min_sell_shares > 0 else 1e-9,
         )
+        if last.filled_size > 0 and last.avg_price > 0 and sold_by_balance <= last.filled_size + 1e-6:
+            return replace(
+                last,
+                timing={
+                    **last.timing,
+                    "success_reconciliation": "balance_lagged_response_trusted",
+                    "balance_before": round(before_balance, 6),
+                    "balance_after": round(after_balance, 6),
+                    "balance_decrease": round(sold_by_balance, 6),
+                    "response_fill_size": round(last.filled_size, 6),
+                    "response_avg_price": round(last.avg_price, 6),
+                },
+            )
         if sold_by_balance < min_reconcile_size:
             return replace(
                 last,

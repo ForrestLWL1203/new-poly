@@ -191,6 +191,9 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.min_entry_model_prob == 0.55
     assert opts.config.edge.low_price_extra_edge_threshold == 0.30
     assert opts.config.edge.low_price_extra_edge == 0.04
+    assert opts.config.edge.weak_sk_entry_filter_enabled is True
+    assert opts.config.edge.weak_sk_entry_min_ask == 0.35
+    assert opts.config.edge.weak_sk_entry_min_abs_sk_bps == 2.0
     assert opts.config.edge.buy_cap_relax_enabled is True
     assert opts.config.edge.buy_low_price_relax_max_ask == 0.25
     assert opts.config.edge.buy_low_price_relax_min_prob == 0.40
@@ -481,8 +484,8 @@ def test_proxy_settlement_flags_boundary_uncertain() -> None:
 
 def test_runtime_log_meta_keeps_price_diagnostics_for_analysis_logs() -> None:
     meta = {
-        "price_source": "proxy_multi_source_basis_adjusted",
-        "s_price": 100070.0,
+        "price_source": "proxy_multi_source",
+        "s_price": 100110.0,
         "k_price": 100000.0,
         "basis_bps": 4.0,
         "binance_price": 100120.0,
@@ -499,8 +502,8 @@ def test_runtime_log_meta_keeps_price_diagnostics_for_analysis_logs() -> None:
     analysis = _price_analysis(meta)
 
     assert runtime == {
-        "price_source": "proxy_multi_source_basis_adjusted",
-        "s_price": 100070.0,
+        "price_source": "proxy_multi_source",
+        "s_price": 100110.0,
         "k_price": 100000.0,
         "basis_bps": 4.0,
     }
@@ -511,7 +514,7 @@ def test_runtime_log_meta_keeps_price_diagnostics_for_analysis_logs() -> None:
 
 def test_price_analysis_uses_proxy_branch_for_reference_diagnostics() -> None:
     meta = {
-        "price_source": "proxy_binance_basis_adjusted",
+        "price_source": "proxy_binance",
         "s_price": 100080.0,
         "k_price": 100000.0,
         "basis_bps": 0.0,
@@ -538,7 +541,7 @@ def test_price_analysis_uses_proxy_branch_for_reference_diagnostics() -> None:
     analysis = _price_analysis(meta)
 
     assert analysis == {
-        "price_source": "proxy_binance_basis_adjusted",
+        "price_source": "proxy_binance",
         "s_price": 100080.0,
         "k_price": 100000.0,
         "basis_bps": 0.0,
@@ -622,8 +625,8 @@ def test_binance_proxy_is_model_source_while_polymarket_is_reference() -> None:
 
 def test_price_analysis_logs_only_backup_proxy_fields_when_fallback_active() -> None:
     meta = {
-        "price_source": "proxy_multi_source_basis_adjusted",
-        "s_price": 100070.0,
+        "price_source": "proxy_multi_source",
+        "s_price": 100110.0,
         "k_price": 100000.0,
         "basis_bps": 4.0,
         "polymarket_price": 100080.0,
@@ -640,7 +643,7 @@ def test_price_analysis_logs_only_backup_proxy_fields_when_fallback_active() -> 
 
     analysis = _price_analysis(meta)
 
-    assert analysis["price_source"] == "proxy_multi_source_basis_adjusted"
+    assert analysis["price_source"] == "proxy_multi_source"
     assert analysis["proxy_price"] == 100110.0
     assert analysis["binance_price"] == 100120.0
     assert analysis["coinbase_price"] == 100100.0

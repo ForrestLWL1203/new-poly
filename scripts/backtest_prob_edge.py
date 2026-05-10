@@ -58,6 +58,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-entry-model-prob", type=float, default=0.0)
     parser.add_argument("--low-price-extra-edge-threshold", type=float, default=0.0)
     parser.add_argument("--low-price-extra-edge", type=float, default=0.0)
+    parser.add_argument("--weak-sk-entry-filter", dest="weak_sk_entry_filter_enabled", action="store_true", default=False)
+    parser.add_argument("--weak-sk-entry-min-ask", type=float, default=0.35)
+    parser.add_argument("--weak-sk-entry-min-abs-sk-bps", type=float, default=2.0)
     parser.add_argument("--buy-cap-relax", dest="buy_cap_relax_enabled", action="store_true", default=False)
     parser.add_argument("--buy-low-price-relax-max-ask", type=float, default=0.25)
     parser.add_argument("--buy-low-price-relax-min-prob", type=float, default=0.40)
@@ -168,6 +171,9 @@ def main() -> int:
         min_entry_model_prob=args.min_entry_model_prob,
         low_price_extra_edge_threshold=args.low_price_extra_edge_threshold,
         low_price_extra_edge=args.low_price_extra_edge,
+        weak_sk_entry_filter_enabled=args.weak_sk_entry_filter_enabled,
+        weak_sk_entry_min_ask=args.weak_sk_entry_min_ask,
+        weak_sk_entry_min_abs_sk_bps=args.weak_sk_entry_min_abs_sk_bps,
         buy_cap_relax_enabled=args.buy_cap_relax_enabled,
         buy_low_price_relax_max_ask=args.buy_low_price_relax_max_ask,
         buy_low_price_relax_min_prob=args.buy_low_price_relax_min_prob,
