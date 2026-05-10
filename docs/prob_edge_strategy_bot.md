@@ -129,11 +129,13 @@ python3 scripts/run_prob_edge_bot.py \
 - S uses Binance BTC/USDT trades as the default model input. This is intentional:
   the current strategy is trying to capture the CEX-to-Polymarket information
   lead, then only trade when the Polymarket CLOB price still offers edge.
-- Polymarket live-data `crypto_prices_chainlink` is kept as a settlement-source
-  reference and risk diagnostic, not as the normal probability-model `S`. A
-  three-window probe on 2026-05-06 showed its boundary ticks matching the crypto
-  price API `openPrice`/`closePrice`, so it is useful for detecting when the CEX
-  lead is becoming dangerous near settlement.
+- Polymarket live-data `crypto_prices_chainlink` is kept as the
+  settlement-source reference for open-position risk, not as the normal entry
+  model `S`. Entry still uses Binance to catch the CEX-to-Polymarket lead, but
+  once a position is open, risk exits and final model-hold checks use the
+  Polymarket reference probability when that feed is fresh. A three-window probe
+  on 2026-05-06 showed its boundary ticks matching the crypto price API
+  `openPrice`/`closePrice`, so it is the safer source near settlement.
 - The Polymarket reference feed stores only a short rolling history, currently
   about 15 seconds. The bot only needs recent reference ticks for source
   divergence and short-horizon movement diagnostics.
@@ -158,7 +160,7 @@ Config files:
 - `configs/prob_edge_aggressive.yaml`: current optimized aggressive paper
   candidate. It is aggressive by entry count but stricter by entry quality:
   `100-240s` entry timing, `0.16/0.14` early/core edge thresholds,
-  `min_entry_model_prob=0.40`, `max_entries_per_market=2`, and `$1`
+  `min_entry_model_prob=0.55`, `max_entries_per_market=2`, and `$1`
   notional/depth. Dynamic early entry remains available as an explicit
   experiment via `--dynamic-entry`.
 - `configs/prob_edge_dynamic.yaml`: optional dynamic signal-parameter governor
@@ -179,9 +181,11 @@ early_to_core_age_sec
 core_to_late_age_sec
 defensive_take_profit_enabled
 final_force_exit_remaining_sec
-final_profit_hold_min_profit_ratio
-final_model_hold_min_prob
-hold_to_settlement_enabled
+settlement_hold_enabled
+settlement_hold_min_reference_prob
+settlement_hold_high_bid_min
+settlement_hold_profit_ratio
+settlement_hold_profit_abs
 min_entry_model_prob
 low_price_extra_edge_threshold
 low_price_extra_edge
@@ -233,7 +237,7 @@ probability-drop exits, defensive take-profit thresholds, batch-slice details,
 and dust thresholds still exist in code defaults for targeted experiments. Add
 them to YAML only when a run is explicitly testing that mechanism.
 
-The current `0.16/0.14` edge thresholds and `0.40` model-probability floor are
+The current `0.16/0.14` edge thresholds and `0.55` model-probability floor are
 the committed live-oriented defaults. They replace earlier looser settings
 because replay and live smoke tests showed those admitted too many
 low-probability lottery-style entries and larger `logic_decay_exit` losses.
@@ -522,13 +526,16 @@ without an intentional wait.
 The bot still exits on logic decay and market overpricing, and now adds
 late-window profit protection:
 
-- `logic_decay_exit`: model probability falls below entry cost by
-  `model_decay_buffer`. Current configs use `0.03`, chosen over `0.02/0.04`
-  after replay because it slightly reduced early false exits without materially
-  increasing drawdown. Same-side cooldown now applies to all risk exits, so a
-  thesis that was just invalidated cannot immediately re-open in the same
-  direction.
-- `market_overprice_exit`: executable bid is above model probability by `0.02`.
+- `logic_decay_exit`: held-side risk probability falls below entry cost by
+  `model_decay_buffer`. For open positions this uses Polymarket reference
+  probability when the reference feed is fresh, not the Binance entry model.
+  Current configs use `0.03`, chosen over `0.02/0.04` after replay because it
+  slightly reduced early false exits without materially increasing drawdown.
+  Same-side cooldown now applies to all risk exits, so a thesis that was just
+  invalidated cannot immediately re-open in the same direction.
+- `market_overprice_exit`: executable bid is above the held-side risk
+  probability by `0.02`; when Polymarket reference is fresh, that reference
+  probability is used.
 - `defensive_take_profit`: optional classic late profit-taking guard. When
   `defensive_take_profit_enabled=true`,
   `defensive_take_profit_start_remaining_sec < remaining_sec <= defensive_take_profit_end_remaining_sec`,
@@ -553,12 +560,11 @@ late-window profit protection:
   below a configured fraction of entry price. It is intentionally constrained to
   already-losing positions: loss at least
   `market_disagrees_exit_min_loss`, position age at least
-  `market_disagrees_exit_min_age_sec`, model probability deterioration of at
-  least `market_disagrees_exit_min_model_drop`, and no meaningful current
-  profit. This catches cases where the market price has collapsed and the model
-  is no longer supporting the entry thesis. It intentionally avoids selling
-  solely because the CLOB bid is temporarily cheap while the model thesis is
-  still mostly intact.
+  `market_disagrees_exit_min_age_sec`, held-side risk probability deterioration
+  of at least `market_disagrees_exit_min_model_drop`, and no meaningful current
+  profit. With fresh Polymarket reference, that deterioration check uses
+  reference probability. This catches cases where the market price has collapsed
+  and the reference settlement source no longer supports the entry thesis.
   Set `market_disagrees_exit_max_remaining_sec > 0` only when you explicitly
   want this guard limited to the end of the window; current live configs keep it
   at `0` so a mid-window bid collapse can exit before `logic_decay_exit`.
@@ -566,21 +572,23 @@ late-window profit protection:
   `profit_protection_start_remaining_sec < remaining_sec <= profit_protection_end_remaining_sec`;
   the current 30-second final-force boundary normally supersedes most of this
   band.
+- `settlement_hold`: unified keep-holding guard evaluated on every held tick.
+  It requires fresh Polymarket reference support and reference probability at
+  least `settlement_hold_min_reference_prob` (`0.75`). It then holds either
+  high-priced winners with `bid_avg >= settlement_hold_high_bid_min` (`0.70`),
+  or doubled low/mid-price winners where profit ratio is at least
+  `settlement_hold_profit_ratio` (`1.0`) and absolute single-ticket profit is
+  at least `settlement_hold_profit_abs` (`0.25`). This replaces both
+  `final_model_hold` and `hold_to_settlement`.
 - `final_force_exit`: when `remaining_sec <= final_force_exit_remaining_sec`
-  (`30s` in current configs), sell if depth exists unless
-  `model_prob`, `bid_avg`, and `bid_limit` all exceed their final-hold
-  thresholds. A position with obvious current profit is also spared from this
-  force exit when `(bid_avg - entry_avg_price) / entry_avg_price >=
-  final_profit_hold_min_profit_ratio`; the current default is `0.10`, meaning
-  at least 10% profit on the ticket, not a fixed 3-cent price gap. A position
-  is also spared when the held-side model probability is still at least
-  `final_model_hold_min_prob` (`0.80` by default) and no earlier reference-risk
-  exit such as `polymarket_divergence_exit` has fired. This prevents the final
-  force guard from selling a high-confidence but temporarily underwater ticket
-  shortly before a correct settlement.
+  (`30s` in current configs), sell if depth exists unless `settlement_hold` is
+  active. If Polymarket reference is stale or points against the position,
+  `settlement_hold` is disabled; the bot should not trust a Binance-only high
+  probability in the final window.
 
 Exit decisions log `profit_now`, `prob_stagnant`, `prob_delta_3s`,
-`prob_drop_delta`, and `market_disagreement` for post-run analysis.
+`prob_drop_delta`, `market_disagreement`, `exit_binance_model_prob`, and
+`exit_reference_model_prob` for post-run analysis.
 
 If the probability history is too short to compare against the configured
 stagnation window, `prob_stagnant=false` and `defensive_take_profit` does not

@@ -48,6 +48,7 @@ from new_poly.strategy.dynamic_params import (
     analyze_dynamic_params,
 )
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
+from new_poly.strategy.probability import binary_probabilities
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import (
     BuyRetryParams,
@@ -311,16 +312,11 @@ def load_bot_config(path: Path) -> BotConfig:
         defensive_take_profit_start_remaining_sec=float(_deep_get(raw, ("strategy", "defensive_take_profit_start_remaining_sec"), 30.0)),
         defensive_take_profit_end_remaining_sec=float(_deep_get(raw, ("strategy", "defensive_take_profit_end_remaining_sec"), 60.0)),
         final_force_exit_remaining_sec=float(_deep_get(raw, ("strategy", "final_force_exit_remaining_sec"), 30.0)),
-        final_profit_hold_min_profit_ratio=float(_deep_get(raw, ("strategy", "final_profit_hold_min_profit_ratio"), 0.10)),
-        final_model_hold_min_prob=float(_deep_get(raw, ("strategy", "final_model_hold_min_prob"), 0.0)),
-        final_hold_min_prob=float(_deep_get(raw, ("strategy", "final_hold_min_prob"), 0.98)),
-        final_hold_min_bid_avg=float(_deep_get(raw, ("strategy", "final_hold_min_bid_avg"), 0.97)),
-        final_hold_min_bid_limit=float(_deep_get(raw, ("strategy", "final_hold_min_bid_limit"), 0.95)),
-        hold_to_settlement_enabled=bool(_deep_get(raw, ("strategy", "hold_to_settlement_enabled"), False)),
-        hold_to_settlement_min_profit_ratio=float(_deep_get(raw, ("strategy", "hold_to_settlement_min_profit_ratio"), 2.0)),
-        hold_to_settlement_min_model_prob=float(_deep_get(raw, ("strategy", "hold_to_settlement_min_model_prob"), 0.90)),
-        hold_to_settlement_min_bid_avg=float(_deep_get(raw, ("strategy", "hold_to_settlement_min_bid_avg"), 0.80)),
-        hold_to_settlement_min_bid_limit=float(_deep_get(raw, ("strategy", "hold_to_settlement_min_bid_limit"), 0.75)),
+        settlement_hold_enabled=bool(_deep_get(raw, ("strategy", "settlement_hold_enabled"), False)),
+        settlement_hold_min_reference_prob=float(_deep_get(raw, ("strategy", "settlement_hold_min_reference_prob"), 0.75)),
+        settlement_hold_high_bid_min=float(_deep_get(raw, ("strategy", "settlement_hold_high_bid_min"), 0.70)),
+        settlement_hold_profit_ratio=float(_deep_get(raw, ("strategy", "settlement_hold_profit_ratio"), 1.0)),
+        settlement_hold_profit_abs=float(_deep_get(raw, ("strategy", "settlement_hold_profit_abs"), 0.25)),
         prob_stagnation_window_sec=float(_deep_get(raw, ("strategy", "prob_stagnation_window_sec"), 3.0)),
         prob_stagnation_epsilon=float(_deep_get(raw, ("strategy", "prob_stagnation_epsilon"), 0.002)),
         prob_drop_exit_window_sec=float(_deep_get(raw, ("strategy", "prob_drop_exit_window_sec"), 0.0)),
@@ -586,6 +582,8 @@ PRICE_ANALYSIS_FIELDS = {
     "coinbase_open_source",
     "polymarket_price",
     "polymarket_price_age_sec",
+    "polymarket_reference_prob_up",
+    "polymarket_reference_prob_down",
     "polymarket_open_price",
     "polymarket_open_source",
     "proxy_open_price",
@@ -629,6 +627,8 @@ def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
         fields = base_fields + (
             "polymarket_price",
             "polymarket_price_age_sec",
+            "polymarket_reference_prob_up",
+            "polymarket_reference_prob_down",
             "proxy_price",
             "proxy_open_price",
             "binance_price",
@@ -681,6 +681,8 @@ def _reference_meta(meta: dict[str, Any]) -> dict[str, Any]:
     fields = (
         "polymarket_price",
         "polymarket_price_age_sec",
+        "polymarket_reference_prob_up",
+        "polymarket_reference_prob_down",
         "lead_binance_vs_polymarket_usd",
         "lead_binance_vs_polymarket_bps",
         "polymarket_divergence_bps",
@@ -862,8 +864,11 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         prob_drop_exit_window_sec=cfg.edge.prob_drop_exit_window_sec,
         prob_drop_exit_threshold=cfg.edge.prob_drop_exit_threshold,
         final_force_exit_remaining_sec=cfg.edge.final_force_exit_remaining_sec,
-        final_profit_hold_min_profit_ratio=cfg.edge.final_profit_hold_min_profit_ratio,
-        final_model_hold_min_prob=cfg.edge.final_model_hold_min_prob,
+        settlement_hold_enabled=cfg.edge.settlement_hold_enabled,
+        settlement_hold_min_reference_prob=cfg.edge.settlement_hold_min_reference_prob,
+        settlement_hold_high_bid_min=cfg.edge.settlement_hold_high_bid_min,
+        settlement_hold_profit_ratio=cfg.edge.settlement_hold_profit_ratio,
+        settlement_hold_profit_abs=cfg.edge.settlement_hold_profit_abs,
         settlement_boundary_usd=cfg.settlement_boundary_usd,
         min_fair_cap_margin_ticks=cfg.edge.min_fair_cap_margin_ticks,
         entry_tick_size=cfg.edge.entry_tick_size,
@@ -882,15 +887,11 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         market_disagrees_exit_min_age_sec=cfg.edge.market_disagrees_exit_min_age_sec,
         market_disagrees_exit_max_profit=cfg.edge.market_disagrees_exit_max_profit,
         market_disagrees_exit_min_model_drop=cfg.edge.market_disagrees_exit_min_model_drop,
-        hold_to_settlement_enabled=cfg.edge.hold_to_settlement_enabled,
-        hold_to_settlement_min_profit_ratio=cfg.edge.hold_to_settlement_min_profit_ratio,
-        hold_to_settlement_min_model_prob=cfg.edge.hold_to_settlement_min_model_prob,
-        hold_to_settlement_min_bid_avg=cfg.edge.hold_to_settlement_min_bid_avg,
-        hold_to_settlement_min_bid_limit=cfg.edge.hold_to_settlement_min_bid_limit,
         defensive_take_profit_enabled=cfg.edge.defensive_take_profit_enabled,
         polymarket_divergence_exit_bps=cfg.edge.polymarket_divergence_exit_bps,
         polymarket_divergence_exit_min_age_sec=cfg.edge.polymarket_divergence_exit_min_age_sec,
         logic_decay_reentry_cooldown_sec=cfg.edge.logic_decay_reentry_cooldown_sec,
+        max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec,
     )
 
 
@@ -955,6 +956,16 @@ def _snapshot(
     lead_coinbase_side = side_vs_k(raw_coinbase_price, prices.k_price)
     lead_proxy_side = side_vs_k(raw_proxy_price, prices.k_price)
     lead_polymarket_side = side_vs_k(price.polymarket, prices.k_price)
+    polymarket_fresh = (
+        price.polymarket is not None
+        and price.polymarket_age_sec is not None
+        and price.polymarket_age_sec <= cfg.max_polymarket_price_age_sec
+    )
+    reference_probs = (
+        binary_probabilities(price.polymarket, prices.k_price, sigma_eff, remaining_sec)
+        if polymarket_fresh and prices.k_price is not None and sigma_eff is not None
+        else None
+    )
     up = token_state(
         stream,
         window.up_token,
@@ -995,6 +1006,10 @@ def _snapshot(
         down_bid_age_ms=down.get("bid_age_ms"),
         source_spread_bps=price.spread_bps,
         polymarket_divergence_bps=lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps,
+        polymarket_price=price.polymarket if polymarket_fresh else None,
+        polymarket_price_age_sec=price.polymarket_age_sec if polymarket_fresh else None,
+        polymarket_reference_prob_up=reference_probs.up if reference_probs is not None else None,
+        polymarket_reference_prob_down=reference_probs.down if reference_probs is not None else None,
     )
     meta = {
         "ts": now.astimezone().isoformat(),
@@ -1011,6 +1026,8 @@ def _snapshot(
         "coinbase_price": _compact(raw_coinbase_price, 2),
         "polymarket_price": _compact(price.polymarket, 2),
         "polymarket_price_age_sec": _compact(price.polymarket_age_sec, 3),
+        "polymarket_reference_prob_up": _compact(reference_probs.up if reference_probs is not None else None),
+        "polymarket_reference_prob_down": _compact(reference_probs.down if reference_probs is not None else None),
         "proxy_price": _compact(price.proxy, 2),
         "polymarket_open_price": _compact(prices.polymarket_open_price, 2),
         "polymarket_open_source": prices.polymarket_open_source,

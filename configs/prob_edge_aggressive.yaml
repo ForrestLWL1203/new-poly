@@ -15,13 +15,11 @@ strategy:
   max_book_age_ms: 1000
   defensive_take_profit_enabled: false
   final_force_exit_remaining_sec: 30.0
-  final_profit_hold_min_profit_ratio: 0.10
-  final_model_hold_min_prob: 0.80
-  hold_to_settlement_enabled: true
-  hold_to_settlement_min_profit_ratio: 2.0
-  hold_to_settlement_min_model_prob: 0.90
-  hold_to_settlement_min_bid_avg: 0.80
-  hold_to_settlement_min_bid_limit: 0.75
+  settlement_hold_enabled: true
+  settlement_hold_min_reference_prob: 0.75
+  settlement_hold_high_bid_min: 0.70
+  settlement_hold_profit_ratio: 1.0
+  settlement_hold_profit_abs: 0.25
   min_fair_cap_margin_ticks: 1.0
   min_entry_model_prob: 0.55
   low_price_extra_edge_threshold: 0.30
@@ -31,6 +29,8 @@ strategy:
   weak_sk_entry_min_abs_sk_bps: 2.0
   buy_cap_relax_enabled: true
   cross_source_max_bps: 5.0
+  # Price-ratio semantics: exit when executable bid / entry_price <= threshold,
+  # with market_disagrees_exit_min_model_drop confirmation.
   market_disagrees_exit_threshold: 0.48
   low_price_market_disagrees_entry_threshold: 0.0
   low_price_market_disagrees_exit_threshold: 0.0
@@ -39,6 +39,8 @@ strategy:
   market_disagrees_exit_min_age_sec: 3.0
   market_disagrees_exit_max_profit: 0.01
   market_disagrees_exit_min_model_drop: 0.06
+  prob_drop_exit_window_sec: 0.0
+  prob_drop_exit_threshold: 0.0
   polymarket_divergence_exit_bps: 3.0
   polymarket_divergence_exit_min_age_sec: 3.0
   logic_decay_reentry_cooldown_sec: 30.0

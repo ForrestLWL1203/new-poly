@@ -323,7 +323,9 @@ Current tuned strategy shape:
 - Binance BTC/USDT WebSocket is the primary model `S`.
 - Polymarket crypto price API `openPrice` is `K`.
 - Polymarket live-data Chainlink stream is a reference/risk source, not the
-  normal model `S`.
+  normal entry model `S`. After a position is open, risk probability and final
+  model-hold checks should prefer this reference when fresh because settlement
+  follows Polymarket/Chainlink, not Binance.
 - Coinbase is disabled by default.
 - New entries normally use `entry_start_age_sec=100`,
   `entry_end_age_sec=240`, `early_required_edge=0.16`,
@@ -348,6 +350,10 @@ Current tuned strategy shape:
   can use up to `+8/+10` ticks, and high-priced tickets only relax when
   `prob>=0.95`, capped at `+4` ticks. This improves FAK fill rate without
   broadly relaxing low-quality entries.
+- While holding, `settlement_hold` can suppress non-hard exits when Polymarket
+  reference supports the held side and reference probability is at least `0.75`.
+  It covers high-priced winners with `bid_avg >= 0.70` and lower-priced winners
+  that have doubled with at least `0.25` absolute single-ticket profit.
 - Run directly from the committed config unless the user explicitly asks for a
   temporary YAML override. Check the actual run config in
   `/opt/new-poly/logs/<run-id>.yaml` before comparing logs.
@@ -361,18 +367,22 @@ Current tuned strategy shape:
 
 Risk exits:
 
-- `logic_decay_exit`: model probability falls below entry price minus
-  `model_decay_buffer`.
+- `logic_decay_exit`: held-side risk probability falls below entry price minus
+  `model_decay_buffer`. For open positions, use Polymarket reference
+  probability when fresh; fall back to Binance only when reference is missing.
 - `market_disagrees_exit`: CLOB executable bid falls below a configured
   fraction of the entry price while model probability has dropped by at least
   `market_disagrees_exit_min_model_drop`. Current live configs use
   `market_disagrees_exit_threshold=0.48`, so a `0.42` entry can exit near
   `0.20` instead of waiting for the slower `logic_decay_exit`. CLOB price
-  collapse alone still should not force an exit while the model thesis is
-  mostly intact.
+  collapse alone still should not force an exit while the reference/model thesis
+  is mostly intact.
 - `polymarket_divergence_exit`: Binance-vs-Polymarket reference divergence is
   adverse for the held side.
-- `final_force_exit`: last-stage risk reduction before settlement.
+- `final_force_exit`: last-stage risk reduction before settlement. Model-based
+  final holds and hold-to-settlement are allowed only when fresh Polymarket
+  reference supports the held side; stale or adverse reference disables those
+  hold exemptions.
 - `risk_exit`: missing/stale model or book inputs.
 
 Execution behavior:

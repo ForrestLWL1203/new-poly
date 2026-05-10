@@ -104,6 +104,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-disagrees-exit-min-model-drop", type=float, default=0.0)
     parser.add_argument("--polymarket-divergence-exit-bps", type=float, default=3.0)
     parser.add_argument("--polymarket-divergence-exit-min-age-sec", type=float, default=3.0)
+    parser.add_argument("--max-polymarket-price-age-sec", type=float, default=4.0)
+    parser.add_argument("--settlement-hold", dest="settlement_hold_enabled", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--settlement-hold-min-reference-prob", type=float, default=0.75)
+    parser.add_argument("--settlement-hold-high-bid-min", type=float, default=0.70)
+    parser.add_argument("--settlement-hold-profit-ratio", type=float, default=1.0)
+    parser.add_argument("--settlement-hold-profit-abs", type=float, default=0.25)
     parser.add_argument("--honor-order-events", action="store_true", help="For paper/live strategy JSONL, replay actual entry/exit/no-fill events instead of idealized fills.")
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
@@ -164,6 +170,12 @@ def main() -> int:
         market_disagrees_exit_min_model_drop=args.market_disagrees_exit_min_model_drop,
         polymarket_divergence_exit_bps=args.polymarket_divergence_exit_bps,
         polymarket_divergence_exit_min_age_sec=args.polymarket_divergence_exit_min_age_sec,
+        max_polymarket_price_age_sec=args.max_polymarket_price_age_sec,
+        settlement_hold_enabled=args.settlement_hold_enabled,
+        settlement_hold_min_reference_prob=args.settlement_hold_min_reference_prob,
+        settlement_hold_high_bid_min=args.settlement_hold_high_bid_min,
+        settlement_hold_profit_ratio=args.settlement_hold_profit_ratio,
+        settlement_hold_profit_abs=args.settlement_hold_profit_abs,
         honor_order_events=args.honor_order_events,
         settlement_boundary_usd=args.settlement_boundary_usd,
         min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,

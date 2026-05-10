@@ -15,6 +15,7 @@ class PositionSnapshot:
     filled_shares: float
     entry_model_prob: float
     entry_edge: float
+    entry_reference_model_prob: float | None = None
     last_model_prob: float | None = None
     last_executable_bid: float | None = None
     exit_status: str = "open"

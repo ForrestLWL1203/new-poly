@@ -175,12 +175,11 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.execution.retry_interval_sec == 0.0
     assert opts.config.interval_sec == 0.5
     assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
-    assert opts.config.edge.hold_to_settlement_enabled is True
-    assert opts.config.edge.final_model_hold_min_prob == 0.80
-    assert opts.config.edge.hold_to_settlement_min_profit_ratio == 2.0
-    assert opts.config.edge.hold_to_settlement_min_model_prob == 0.90
-    assert opts.config.edge.hold_to_settlement_min_bid_avg == 0.80
-    assert opts.config.edge.hold_to_settlement_min_bid_limit == 0.75
+    assert opts.config.edge.settlement_hold_enabled is True
+    assert opts.config.edge.settlement_hold_min_reference_prob == 0.75
+    assert opts.config.edge.settlement_hold_high_bid_min == 0.70
+    assert opts.config.edge.settlement_hold_profit_ratio == 1.0
+    assert opts.config.edge.settlement_hold_profit_abs == 0.25
     assert opts.config.edge.prob_drop_exit_window_sec == 0.0
     assert opts.config.edge.prob_drop_exit_threshold == 0.0
     assert opts.config.edge.model_decay_buffer == 0.03
@@ -386,8 +385,11 @@ def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
     assert opts.config.edge.defensive_take_profit_enabled is False
     assert opts.config.edge.defensive_profit_min == 0.03
     assert opts.config.edge.protection_profit_min == 0.01
-    assert opts.config.edge.final_hold_min_prob == 0.98
-    assert opts.config.edge.final_model_hold_min_prob == 0.80
+    assert opts.config.edge.settlement_hold_enabled is False
+    assert opts.config.edge.settlement_hold_min_reference_prob == 0.75
+    assert opts.config.edge.settlement_hold_high_bid_min == 0.70
+    assert opts.config.edge.settlement_hold_profit_ratio == 1.0
+    assert opts.config.edge.settlement_hold_profit_abs == 0.25
     assert opts.config.edge.min_entry_model_prob == 0.35
 
 
@@ -520,6 +522,8 @@ def test_price_analysis_uses_proxy_branch_for_reference_diagnostics() -> None:
         "basis_bps": 0.0,
         "polymarket_price": 100080.0,
         "polymarket_price_age_sec": 0.8,
+        "polymarket_reference_prob_up": 0.61,
+        "polymarket_reference_prob_down": 0.39,
         "polymarket_open_price": 100000.0,
         "polymarket_open_source": "ws_first_after",
         "binance_price": None,
@@ -547,6 +551,8 @@ def test_price_analysis_uses_proxy_branch_for_reference_diagnostics() -> None:
         "basis_bps": 0.0,
         "polymarket_price": 100080.0,
         "polymarket_price_age_sec": 0.8,
+        "polymarket_reference_prob_up": 0.61,
+        "polymarket_reference_prob_down": 0.39,
         "lead_binance_vs_polymarket_usd": 40.0,
         "lead_binance_vs_polymarket_bps": 3.997,
         "polymarket_divergence_bps": 3.997,
@@ -569,7 +575,7 @@ def test_binance_proxy_is_model_source_while_polymarket_is_reference() -> None:
         latest_price = 100_080.0
 
         def latest_age_sec(self):
-            return 5.0
+            return 1.0
 
         def price_at_or_before(self, *_args, **_kwargs):
             return 100_070.0
@@ -617,6 +623,9 @@ def test_binance_proxy_is_model_source_while_polymarket_is_reference() -> None:
     assert snap.s_price == 100_120.0
     assert meta["price_source"] == "proxy_binance"
     assert meta["polymarket_price"] == 100_080.0
+    assert snap.polymarket_price == 100_080.0
+    assert snap.polymarket_reference_prob_up is not None
+    assert meta["polymarket_reference_prob_up"] == round(snap.polymarket_reference_prob_up, 6)
     assert meta["lead_binance_vs_polymarket_usd"] == 40.0
     assert "ask_safety_limit" not in meta["up"]
     assert "ask_depth_ok" not in meta["up"]

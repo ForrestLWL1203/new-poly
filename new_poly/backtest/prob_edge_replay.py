@@ -48,13 +48,11 @@ class BacktestConfig:
     prob_drop_exit_window_sec: float = 0.0
     prob_drop_exit_threshold: float = 0.0
     final_force_exit_remaining_sec: float = 30.0
-    final_profit_hold_min_profit_ratio: float = 0.10
-    final_model_hold_min_prob: float = 0.0
-    hold_to_settlement_enabled: bool = False
-    hold_to_settlement_min_profit_ratio: float = 2.0
-    hold_to_settlement_min_model_prob: float = 0.90
-    hold_to_settlement_min_bid_avg: float = 0.80
-    hold_to_settlement_min_bid_limit: float = 0.75
+    settlement_hold_enabled: bool = False
+    settlement_hold_min_reference_prob: float = 0.75
+    settlement_hold_high_bid_min: float = 0.70
+    settlement_hold_profit_ratio: float = 1.0
+    settlement_hold_profit_abs: float = 0.25
     defensive_take_profit_enabled: bool = True
     profit_protection_start_remaining_sec: float = 15.0
     profit_protection_end_remaining_sec: float = 30.0
@@ -97,6 +95,7 @@ class BacktestConfig:
     polymarket_divergence_exit_bps: float = 3.0
     polymarket_divergence_exit_min_age_sec: float = 3.0
     logic_decay_reentry_cooldown_sec: float = 30.0
+    max_polymarket_price_age_sec: float = 4.0
     honor_order_events: bool = False
 
     def edge_config(self) -> EdgeConfig:
@@ -121,13 +120,11 @@ class BacktestConfig:
             prob_drop_exit_window_sec=self.prob_drop_exit_window_sec,
             prob_drop_exit_threshold=self.prob_drop_exit_threshold,
             final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
-            final_profit_hold_min_profit_ratio=self.final_profit_hold_min_profit_ratio,
-            final_model_hold_min_prob=self.final_model_hold_min_prob,
-            hold_to_settlement_enabled=self.hold_to_settlement_enabled,
-            hold_to_settlement_min_profit_ratio=self.hold_to_settlement_min_profit_ratio,
-            hold_to_settlement_min_model_prob=self.hold_to_settlement_min_model_prob,
-            hold_to_settlement_min_bid_avg=self.hold_to_settlement_min_bid_avg,
-            hold_to_settlement_min_bid_limit=self.hold_to_settlement_min_bid_limit,
+            settlement_hold_enabled=self.settlement_hold_enabled,
+            settlement_hold_min_reference_prob=self.settlement_hold_min_reference_prob,
+            settlement_hold_high_bid_min=self.settlement_hold_high_bid_min,
+            settlement_hold_profit_ratio=self.settlement_hold_profit_ratio,
+            settlement_hold_profit_abs=self.settlement_hold_profit_abs,
             profit_protection_start_remaining_sec=self.profit_protection_start_remaining_sec,
             profit_protection_end_remaining_sec=self.profit_protection_end_remaining_sec,
             defensive_take_profit_enabled=self.defensive_take_profit_enabled,
@@ -212,12 +209,16 @@ def _warnings(row: dict[str, Any]) -> set[str]:
     return set()
 
 
-def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
+def snapshot_from_row(row: dict[str, Any], *, max_polymarket_price_age_sec: float = 4.0) -> MarketSnapshot:
     up = _token(row, "up")
     down = _token(row, "down")
     warnings = _warnings(row)
     s_price = None if "polymarket_ws_open_disagrees_with_api" in warnings else _float(row.get("s_price"))
     analysis_sources = (row.get("analysis") or {}).get("price_sources", {})
+    polymarket_price_age_sec = _first_float(row.get("polymarket_price_age_sec"), analysis_sources.get("polymarket_price_age_sec"))
+    polymarket_price = _first_float(row.get("polymarket_price"), analysis_sources.get("polymarket_price"))
+    if polymarket_price_age_sec is not None and polymarket_price_age_sec > max_polymarket_price_age_sec:
+        polymarket_price = None
     return MarketSnapshot(
         market_slug=str(row.get("market_slug") or ""),
         age_sec=float(row.get("age_sec") or 0.0),
@@ -248,6 +249,20 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
             analysis_sources.get("polymarket_divergence_bps"),
             analysis_sources.get("lead_binance_vs_polymarket_bps"),
         ),
+        polymarket_price=polymarket_price,
+        polymarket_price_age_sec=polymarket_price_age_sec if polymarket_price is not None else None,
+        polymarket_reference_prob_up=_first_float(
+            row.get("polymarket_reference_prob_up"),
+            analysis_sources.get("polymarket_reference_prob_up"),
+        )
+        if polymarket_price is not None
+        else None,
+        polymarket_reference_prob_down=_first_float(
+            row.get("polymarket_reference_prob_down"),
+            analysis_sources.get("polymarket_reference_prob_down"),
+        )
+        if polymarket_price is not None
+        else None,
     )
 
 
@@ -386,6 +401,7 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
     side = analysis.get("entry_side")
     entry_price = _float(analysis.get("entry_price")) or _float(order.get("avg_price"))
     model_prob = _float(analysis.get("entry_model_prob")) or _float((row.get("decision") or {}).get("model_prob"))
+    reference_model_prob = _float(analysis.get("entry_reference_model_prob")) or _float((row.get("decision") or {}).get("reference_model_prob"))
     edge = _float(analysis.get("entry_edge_signal")) or _float((row.get("decision") or {}).get("edge")) or 0.0
     if side not in {"up", "down"} or entry_price is None or model_prob is None:
         return None
@@ -400,6 +416,7 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
         filled_shares=shares,
         entry_model_prob=model_prob,
         entry_edge=edge,
+        entry_reference_model_prob=reference_model_prob,
     )
     trade = {
         "market_slug": slug,
@@ -408,6 +425,7 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
         "entry_age_sec": age_sec,
         "entry_price": entry_price,
         "entry_model_prob": model_prob,
+        "entry_reference_model_prob": reference_model_prob,
         "entry_edge": edge,
         "entry_edge_at_fill": model_prob - entry_price,
         "shares": shares,
@@ -445,7 +463,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
             if skip_next_row:
                 skip_next_row = False
                 continue
-            snap = snapshot_from_row(row)
+            snap = snapshot_from_row(row, max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec)
             if cfg.honor_order_events:
                 if row.get("event") == "order_no_fill":
                     intent = str(row.get("order_intent") or row.get("exit_intent") or "order")
@@ -504,7 +522,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     exit_price = _exit_fill_price(decision, cfg)
                     retry_snap: MarketSnapshot | None = None
                     if exit_price is None and index + 1 < len(group):
-                        retry_snap = snapshot_from_row(group[index + 1])
+                        retry_snap = snapshot_from_row(group[index + 1], max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec)
                         exit_price = _exit_fill_price_from_snapshot(decision, retry_snap, cfg)
                     if exit_price is None:
                         skip_reasons["exit_no_fill"] += 1
@@ -534,7 +552,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     fill_snap = snap
                     if fill_price is None:
                         if index + 1 < len(group):
-                            retry_snap = snapshot_from_row(group[index + 1])
+                            retry_snap = snapshot_from_row(group[index + 1], max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec)
                             retry_fill = _entry_fill_price_from_snapshot(decision, retry_snap, cfg)
                             if retry_fill is not None:
                                 fill_price = retry_fill
@@ -553,6 +571,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         filled_shares=shares,
                         entry_model_prob=decision.model_prob,
                         entry_edge=decision.edge,
+                        entry_reference_model_prob=decision.reference_model_prob,
                     ))
                     entry_phase = decision.phase or required_edge_for_entry(fill_snap, edge_cfg).phase
                     active_trade = {
@@ -562,6 +581,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "entry_age_sec": fill_snap.age_sec,
                         "entry_price": fill_price,
                         "entry_model_prob": decision.model_prob,
+                        "entry_reference_model_prob": decision.reference_model_prob,
                         "entry_edge": decision.edge,
                         "entry_edge_at_fill": decision.model_prob - fill_price,
                         "shares": shares,

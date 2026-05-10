@@ -95,7 +95,13 @@ async def _finish_pending_entry_order(
         if state.current_market_slug != window.slug:
             row["event"] = "order_reconcile_stale"
             row["order_intent"] = "entry"
-            row["action"] = "ignore_result_after_window_switch"
+            row["action"] = "logged_stale_fill_after_window_switch" if result.success else "ignore_result_after_window_switch"
+            if result.success:
+                row["entry_side"] = decision.side
+                row["entry_price"] = _compact(result.avg_price)
+                row["entry_shares"] = _compact(result.filled_size)
+                row["entry_model_prob"] = _compact(decision.model_prob)
+                row["entry_reference_model_prob"] = _compact(decision.reference_model_prob)
             logger.write(row)
             return
         if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
@@ -108,6 +114,7 @@ async def _finish_pending_entry_order(
                 filled_shares=result.filled_size,
                 entry_model_prob=decision.model_prob,
                 entry_edge=decision.edge,
+                entry_reference_model_prob=decision.reference_model_prob,
             ))
             row["event"] = "entry"
             row["entry_side"] = decision.side
@@ -171,7 +178,20 @@ async def _finish_pending_exit_order(
         if state.current_market_slug != window.slug:
             row["event"] = "order_reconcile_stale"
             row["exit_intent"] = "exit"
-            row["action"] = "ignore_result_after_window_switch"
+            row["action"] = "logged_stale_fill_after_window_switch" if result.success else "ignore_result_after_window_switch"
+            if result.success:
+                shares = min(max(0.0, result.filled_size), exiting_position.filled_shares)
+                pnl = (result.avg_price - exiting_position.entry_avg_price) * shares
+                row["exit_reason"] = decision.reason
+                row["exit_price"] = _compact(result.avg_price)
+                row["exit_shares"] = _compact(result.filled_size)
+                row["stale_exit_pnl"] = _compact(pnl, 4)
+                row["position_before_exit"] = _position_log(exiting_position, compact=False)
+            elif result.message.startswith("live dust sell skipped"):
+                row["exit_reason"] = "dust_position"
+                row["exit_shares"] = _compact(exiting_position.filled_shares)
+                row["stale_exit_pnl"] = _compact(-exiting_position.entry_avg_price * exiting_position.filled_shares, 4)
+                row["position_before_exit"] = _position_log(exiting_position, compact=False)
             logger.write(row)
             return
         if result.success:
@@ -425,6 +445,7 @@ async def handle_flat_tick(
             filled_shares=result.filled_size,
             entry_model_prob=decision.model_prob,
             entry_edge=decision.edge,
+            entry_reference_model_prob=decision.reference_model_prob,
         ))
         row["event"] = "entry"
         row["entry_side"] = decision.side

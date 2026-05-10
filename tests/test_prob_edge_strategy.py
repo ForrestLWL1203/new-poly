@@ -471,6 +471,44 @@ def test_entry_relaxes_mid_price_cap_but_limits_high_price_chase(monkeypatch) ->
     assert high.limit_price == pytest.approx(0.84)
 
 
+@pytest.mark.parametrize(
+    ("best_ask", "model_prob", "expected_cap"),
+    [
+        (0.25, 0.40, 0.32),
+        (0.250001, 0.40, 0.26),
+        (0.65, 0.60, 0.54),
+        (0.650001, 0.94, 0.80),
+        (0.650001, 0.95, 0.81),
+        (0.80, 0.95, 0.84),
+    ],
+)
+def test_buy_cap_relax_boundaries(best_ask: float, model_prob: float, expected_cap: float) -> None:
+    cfg = EdgeConfig(
+        core_required_edge=0.14,
+        entry_tick_size=0.01,
+        buy_cap_relax_enabled=True,
+        buy_low_price_relax_max_ask=0.25,
+        buy_low_price_relax_min_prob=0.40,
+        buy_low_price_relax_retained_edge=0.08,
+        buy_low_price_relax_max_extra_ticks=8.0,
+        buy_mid_price_relax_max_ask=0.65,
+        buy_mid_price_relax_min_prob=0.60,
+        buy_mid_price_relax_retained_edge=0.06,
+        buy_mid_price_relax_max_extra_ticks=8.0,
+        buy_mid_strong_relax_min_prob=0.75,
+        buy_mid_strong_relax_retained_edge=0.05,
+        buy_mid_strong_relax_max_extra_ticks=10.0,
+        buy_high_price_relax_min_ask=0.65,
+        buy_high_price_relax_min_prob=0.95,
+        buy_high_price_relax_retained_edge=0.08,
+        buy_high_price_relax_max_extra_ticks=4.0,
+    )
+
+    cap = prob_edge_module._relaxed_entry_fair_cap(model_prob, best_ask, 0.14, cfg)
+
+    assert cap == pytest.approx(expected_cap)
+
+
 def test_entry_rejects_low_model_probability_even_when_edge_is_large() -> None:
     cfg = EdgeConfig(core_required_edge=0.14, min_entry_model_prob=0.35)
     state = StrategyState(current_market_slug="m1")
@@ -1134,7 +1172,7 @@ def test_defensive_take_profit_can_be_disabled() -> None:
 
 
 def test_late_profit_protection_and_final_force_exit() -> None:
-    cfg = EdgeConfig(final_model_hold_min_prob=0.0)
+    cfg = EdgeConfig()
     pos = PositionSnapshot(
         market_slug="m1",
         token_side="up",
@@ -1204,7 +1242,7 @@ def test_late_profit_protection_and_final_force_exit() -> None:
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     ), pos, cfg, StrategyState(current_market_slug="m1"))
-    assert modest_profit.reason == "final_profit_hold"
+    assert modest_profit.reason == "final_force_exit"
 
     obvious_profit = evaluate_exit(MarketSnapshot(
         market_slug="m1",
@@ -1219,7 +1257,7 @@ def test_late_profit_protection_and_final_force_exit() -> None:
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     ), pos, cfg, StrategyState(current_market_slug="m1"))
-    assert obvious_profit.reason == "final_profit_hold"
+    assert obvious_profit.reason == "final_force_exit"
 
     hold = evaluate_exit(MarketSnapshot(
         market_slug="m1",
@@ -1234,177 +1272,205 @@ def test_late_profit_protection_and_final_force_exit() -> None:
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
     ), pos, cfg, StrategyState(current_market_slug="m1"))
-    assert hold.reason != "final_force_exit"
+    assert hold.reason == "final_force_exit"
 
 
-def test_final_model_hold_skips_force_exit_when_high_confidence_and_reference_not_adverse() -> None:
+def test_settlement_hold_keeps_high_bid_high_reference_position_all_window() -> None:
     cfg = EdgeConfig(
-        final_force_exit_remaining_sec=30.0,
-        final_model_hold_min_prob=0.80,
-        polymarket_divergence_exit_bps=3.0,
+        settlement_hold_enabled=True,
+        settlement_hold_min_reference_prob=0.75,
+        settlement_hold_high_bid_min=0.70,
+        settlement_hold_profit_ratio=1.0,
+        settlement_hold_profit_abs=0.25,
     )
     pos = PositionSnapshot(
         market_slug="m1",
-        token_side="down",
-        token_id="down-token",
-        entry_time=194.0,
-        entry_avg_price=0.71,
-        filled_shares=1.4,
-        entry_model_prob=0.856,
-        entry_edge=0.156,
+        token_side="up",
+        token_id="up-token",
+        entry_time=120.0,
+        entry_avg_price=0.73,
+        filled_shares=1.36,
+        entry_model_prob=0.82,
+        entry_edge=0.09,
     )
     snap = MarketSnapshot(
         market_slug="m1",
-        age_sec=273.0,
-        remaining_sec=27.0,
-        s_price=99.98,
+        age_sec=210.0,
+        remaining_sec=90.0,
+        s_price=100.03,
         k_price=100.0,
         sigma_eff=0.2,
-        down_bid_avg=0.51,
-        down_bid_limit=0.50,
-        down_bid_depth_ok=True,
-        down_bid_age_ms=10.0,
-        polymarket_divergence_bps=2.0,
+        up_bid_avg=0.75,
+        up_bid_limit=0.73,
+        up_bid_depth_ok=True,
+        up_bid_age_ms=10.0,
+        **_reference_fields(100.04, 100.0, 0.2, 90.0),
     )
 
     decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
 
     assert decision.action == "hold"
-    assert decision.reason == "final_model_hold"
-    assert decision.profit_now is not None and decision.profit_now < 0
-    assert decision.model_prob is not None and decision.model_prob >= 0.80
+    assert decision.reason == "settlement_hold"
 
 
-def test_final_model_hold_does_not_mask_adverse_polymarket_divergence() -> None:
+def test_settlement_hold_does_not_create_high_price_stop_loss() -> None:
     cfg = EdgeConfig(
-        final_force_exit_remaining_sec=30.0,
-        final_model_hold_min_prob=0.80,
-        polymarket_divergence_exit_bps=3.0,
+        settlement_hold_enabled=True,
+        settlement_hold_min_reference_prob=0.75,
+        settlement_hold_high_bid_min=0.70,
     )
     pos = PositionSnapshot(
         market_slug="m1",
-        token_side="down",
-        token_id="down-token",
-        entry_time=194.0,
-        entry_avg_price=0.71,
-        filled_shares=1.4,
-        entry_model_prob=0.856,
-        entry_edge=0.156,
+        token_side="up",
+        token_id="up-token",
+        entry_time=120.0,
+        entry_avg_price=0.73,
+        filled_shares=1.36,
+        entry_model_prob=0.82,
+        entry_edge=0.09,
     )
     snap = MarketSnapshot(
         market_slug="m1",
-        age_sec=273.0,
-        remaining_sec=27.0,
-        s_price=99.98,
+        age_sec=210.0,
+        remaining_sec=90.0,
+        s_price=100.03,
         k_price=100.0,
         sigma_eff=0.2,
-        down_bid_avg=0.51,
-        down_bid_limit=0.50,
-        down_bid_depth_ok=True,
-        down_bid_age_ms=10.0,
-        polymarket_divergence_bps=-3.5,
+        up_bid_avg=0.69,
+        up_bid_limit=0.67,
+        up_bid_depth_ok=True,
+        up_bid_age_ms=10.0,
+        **_reference_fields(100.04, 100.0, 0.2, 90.0),
     )
 
     decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
 
-    assert decision.action == "exit"
-    assert decision.reason == "polymarket_divergence_exit"
+    assert decision.action == "hold"
+    assert decision.reason != "settlement_hold"
 
 
-def test_hold_to_settlement_skips_take_profit_and_final_force_for_high_confidence_winner() -> None:
+def test_settlement_hold_keeps_doubled_position_only_when_absolute_profit_is_meaningful() -> None:
     cfg = EdgeConfig(
-        hold_to_settlement_enabled=True,
-        hold_to_settlement_min_profit_ratio=2.0,
-        hold_to_settlement_min_model_prob=0.90,
-        hold_to_settlement_min_bid_avg=0.80,
-        hold_to_settlement_min_bid_limit=0.75,
-        overprice_buffer=0.02,
-        defensive_profit_min=0.03,
-        prob_stagnation_epsilon=0.002,
+        settlement_hold_enabled=True,
+        settlement_hold_min_reference_prob=0.75,
+        settlement_hold_high_bid_min=0.70,
+        settlement_hold_profit_ratio=1.0,
+        settlement_hold_profit_abs=0.25,
+    )
+    base = dict(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=120.0,
+        filled_shares=3.0,
+        entry_model_prob=0.82,
+        entry_edge=0.09,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=210.0,
+        remaining_sec=90.0,
+        s_price=100.03,
+        k_price=100.0,
+        sigma_eff=0.2,
+        up_bid_limit=0.58,
+        up_bid_depth_ok=True,
+        up_bid_age_ms=10.0,
+        **_reference_fields(100.04, 100.0, 0.2, 90.0),
+    )
+
+    meaningful = evaluate_exit(
+        MarketSnapshot(**(snap.__dict__ | {"up_bid_avg": 0.60})),
+        PositionSnapshot(entry_avg_price=0.30, **base),
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+    too_small = evaluate_exit(
+        MarketSnapshot(**(snap.__dict__ | {"up_bid_avg": 0.30})),
+        PositionSnapshot(entry_avg_price=0.15, **base),
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert meaningful.reason == "settlement_hold"
+    assert too_small.reason != "settlement_hold"
+
+
+def test_settlement_hold_requires_reference_to_support_position() -> None:
+    cfg = EdgeConfig(
+        settlement_hold_enabled=True,
+        settlement_hold_min_reference_prob=0.75,
+        settlement_hold_high_bid_min=0.70,
         final_force_exit_remaining_sec=30.0,
     )
     pos = PositionSnapshot(
         market_slug="m1",
         token_side="up",
         token_id="up-token",
-        entry_time=100.0,
-        entry_avg_price=0.20,
-        filled_shares=5.0,
-        entry_model_prob=0.45,
-        entry_edge=0.25,
-    )
-    state = StrategyState(current_market_slug="m1")
-    state.prob_history = [(221.0, 0.97)]
-    base = dict(
-        market_slug="m1",
-        s_price=103.0,
-        k_price=100.0,
-        sigma_eff=0.4,
-        up_bid_avg=0.82,
-        up_bid_limit=0.80,
-        up_bid_depth_ok=True,
-        up_book_age_ms=20.0,
-        down_book_age_ms=20.0,
-    )
-
-    defensive_window = evaluate_exit(
-        MarketSnapshot(age_sec=225.0, remaining_sec=55.0, **base),
-        pos,
-        cfg,
-        state,
-    )
-    force_window = evaluate_exit(
-        MarketSnapshot(age_sec=285.0, remaining_sec=15.0, **base),
-        pos,
-        cfg,
-        state,
-    )
-
-    assert defensive_window.action == "hold"
-    assert defensive_window.reason == "hold_to_settlement"
-    assert force_window.action == "hold"
-    assert force_window.reason == "hold_to_settlement"
-
-
-def test_hold_to_settlement_does_not_mask_risk_exit() -> None:
-    cfg = EdgeConfig(
-        hold_to_settlement_enabled=True,
-        hold_to_settlement_min_profit_ratio=2.0,
-        hold_to_settlement_min_model_prob=0.90,
-        hold_to_settlement_min_bid_avg=0.80,
-        hold_to_settlement_min_bid_limit=0.75,
-        polymarket_divergence_exit_bps=3.0,
-        polymarket_divergence_exit_min_age_sec=3.0,
-    )
-    pos = PositionSnapshot(
-        market_slug="m1",
-        token_side="up",
-        token_id="up-token",
-        entry_time=100.0,
-        entry_avg_price=0.20,
-        filled_shares=5.0,
-        entry_model_prob=0.45,
-        entry_edge=0.25,
+        entry_time=120.0,
+        entry_avg_price=0.73,
+        filled_shares=1.36,
+        entry_model_prob=0.82,
+        entry_edge=0.09,
     )
     snap = MarketSnapshot(
         market_slug="m1",
-        age_sec=225.0,
-        remaining_sec=55.0,
-        s_price=103.0,
+        age_sec=275.0,
+        remaining_sec=25.0,
+        s_price=100.03,
         k_price=100.0,
-        sigma_eff=0.4,
-        up_bid_avg=0.82,
-        up_bid_limit=0.80,
+        sigma_eff=0.2,
+        up_bid_avg=0.75,
+        up_bid_limit=0.73,
         up_bid_depth_ok=True,
-        up_book_age_ms=20.0,
-        down_book_age_ms=20.0,
-        polymarket_divergence_bps=5.0,
+        up_bid_age_ms=10.0,
+        **_reference_fields(99.98, 100.0, 0.2, 25.0),
     )
 
     decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
 
     assert decision.action == "exit"
-    assert decision.reason == "polymarket_divergence_exit"
+    assert decision.reason == "logic_decay_exit"
+
+
+def test_settlement_hold_does_not_mask_hard_risk_exits() -> None:
+    cfg = EdgeConfig(
+        settlement_hold_enabled=True,
+        settlement_hold_min_reference_prob=0.75,
+        settlement_hold_high_bid_min=0.70,
+        market_disagrees_exit_threshold=0.48,
+        market_disagrees_exit_min_loss=0.03,
+        market_disagrees_exit_min_age_sec=3.0,
+        market_disagrees_exit_min_model_drop=0.06,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=120.0,
+        entry_avg_price=0.73,
+        filled_shares=1.36,
+        entry_model_prob=0.90,
+        entry_edge=0.09,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=210.0,
+        remaining_sec=90.0,
+        s_price=100.03,
+        k_price=100.0,
+        sigma_eff=0.2,
+        up_bid_avg=0.30,
+        up_bid_limit=0.29,
+        up_bid_depth_ok=True,
+        up_bid_age_ms=10.0,
+        **_reference_fields(100.02, 100.0, 0.2, 90.0),
+    )
+
+    decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.action == "exit"
+    assert decision.reason == "market_disagrees_exit"
 
 
 def test_profit_exit_bands_are_configurable() -> None:
@@ -1928,6 +1994,234 @@ def test_market_disagrees_exit_requires_minimum_model_drop() -> None:
 
     assert shallow_drop.reason != "market_disagrees_exit"
     assert deep_drop.reason == "market_disagrees_exit"
+
+
+def _reference_fields(price: float, k_price: float, sigma_eff: float, remaining_sec: float) -> dict[str, float]:
+    probs = binary_probabilities(price, k_price, sigma_eff, remaining_sec)
+    return {
+        "polymarket_price": price,
+        "polymarket_price_age_sec": 1.0,
+        "polymarket_reference_prob_up": probs.up,
+        "polymarket_reference_prob_down": probs.down,
+    }
+
+
+def test_exit_uses_polymarket_reference_probability_for_logic_decay() -> None:
+    cfg = EdgeConfig(model_decay_buffer=0.02, polymarket_divergence_exit_bps=0.0)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.71,
+        filled_shares=2.38,
+        entry_model_prob=0.67,
+        entry_edge=0.25,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=270.0,
+        remaining_sec=30.0,
+        s_price=100.03,
+        k_price=100.0,
+        sigma_eff=0.20,
+        up_bid_avg=0.12,
+        up_bid_limit=0.12,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+        **_reference_fields(99.99, 100.0, 0.20, 30.0),
+    )
+
+    decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.action == "exit"
+    assert decision.reason == "logic_decay_exit"
+    assert decision.binance_model_prob is not None and decision.binance_model_prob > 0.80
+    assert decision.reference_model_prob is not None and decision.reference_model_prob < 0.40
+    assert decision.model_prob == decision.reference_model_prob
+
+
+def test_market_disagrees_exit_model_drop_uses_reference_probability() -> None:
+    cfg = EdgeConfig(
+        market_disagrees_exit_threshold=0.48,
+        market_disagrees_exit_min_model_drop=0.06,
+        market_disagrees_exit_min_loss=0.03,
+        market_disagrees_exit_min_age_sec=3.0,
+        market_disagrees_exit_max_profit=0.01,
+        polymarket_divergence_exit_bps=0.0,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.42,
+        filled_shares=2.38,
+        entry_model_prob=0.67,
+        entry_edge=0.25,
+    )
+    decision = evaluate_exit(
+        MarketSnapshot(
+            market_slug="m1",
+            age_sec=187.0,
+            remaining_sec=113.0,
+            s_price=100.08,
+            k_price=100.0,
+            sigma_eff=0.20,
+            up_bid_avg=0.20,
+            up_bid_limit=0.20,
+            up_bid_depth_ok=True,
+            up_book_age_ms=20.0,
+            down_book_age_ms=20.0,
+            **_reference_fields(99.99, 100.0, 0.20, 113.0),
+        ),
+        pos,
+        cfg,
+    )
+
+    assert decision.reason == "market_disagrees_exit"
+    assert decision.binance_model_prob is not None and decision.binance_model_prob > pos.entry_model_prob
+    assert decision.reference_model_prob is not None
+    assert pos.entry_model_prob - decision.reference_model_prob >= 0.06
+
+
+def test_market_disagrees_exit_compares_reference_probability_to_entry_reference_probability() -> None:
+    cfg = EdgeConfig(
+        market_disagrees_exit_threshold=0.48,
+        market_disagrees_exit_min_model_drop=0.06,
+        market_disagrees_exit_min_loss=0.03,
+        market_disagrees_exit_min_age_sec=3.0,
+        market_disagrees_exit_max_profit=0.01,
+        polymarket_divergence_exit_bps=0.0,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.42,
+        filled_shares=2.38,
+        entry_model_prob=0.67,
+        entry_edge=0.25,
+        entry_reference_model_prob=0.40,
+    )
+
+    decision = evaluate_exit(
+        MarketSnapshot(
+            market_slug="m1",
+            age_sec=187.0,
+            remaining_sec=113.0,
+            s_price=100.08,
+            k_price=100.0,
+            sigma_eff=0.20,
+            up_bid_avg=0.20,
+            up_bid_limit=0.20,
+            up_bid_depth_ok=True,
+            up_book_age_ms=20.0,
+            down_book_age_ms=20.0,
+            polymarket_price=100.0,
+            polymarket_price_age_sec=1.0,
+            polymarket_reference_prob_up=0.42,
+            polymarket_reference_prob_down=0.58,
+        ),
+        pos,
+        cfg,
+    )
+
+    assert decision.reference_model_prob == 0.42
+    assert decision.reason != "market_disagrees_exit"
+
+
+def test_prob_drop_exit_compares_reference_probability_to_entry_reference_probability() -> None:
+    cfg = EdgeConfig(prob_drop_exit_window_sec=5.0, prob_drop_exit_threshold=0.06, polymarket_divergence_exit_bps=0.0)
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.67,
+        entry_edge=0.27,
+        entry_reference_model_prob=0.40,
+    )
+    state = StrategyState(current_market_slug="m1")
+    state.prob_history = [(135.0, 0.55)]
+
+    decision = evaluate_exit(
+        MarketSnapshot(
+            market_slug="m1",
+            age_sec=140.0,
+            remaining_sec=160.0,
+            s_price=100.10,
+            k_price=100.0,
+            sigma_eff=0.5,
+            up_bid_avg=0.41,
+            up_bid_limit=0.40,
+            up_bid_depth_ok=True,
+            up_book_age_ms=20.0,
+            down_book_age_ms=20.0,
+            polymarket_price=100.0,
+            polymarket_price_age_sec=1.0,
+            polymarket_reference_prob_up=0.42,
+            polymarket_reference_prob_down=0.58,
+        ),
+        pos,
+        cfg,
+        state,
+    )
+
+    assert decision.prob_drop_delta is not None
+    assert decision.prob_drop_delta <= -0.06
+    assert decision.reference_model_prob == 0.42
+    assert decision.reason != "prob_drop_exit"
+
+
+def test_settlement_hold_does_not_swallow_market_overprice_exit() -> None:
+    cfg = EdgeConfig(
+        settlement_hold_enabled=True,
+        settlement_hold_min_reference_prob=0.75,
+        settlement_hold_high_bid_min=0.70,
+        overprice_buffer=0.02,
+        polymarket_divergence_exit_bps=0.0,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.40,
+        filled_shares=10.0,
+        entry_model_prob=0.78,
+        entry_edge=0.38,
+        entry_reference_model_prob=0.78,
+    )
+
+    decision = evaluate_exit(
+        MarketSnapshot(
+            market_slug="m1",
+            age_sec=220.0,
+            remaining_sec=80.0,
+            s_price=100.1,
+            k_price=100.0,
+            sigma_eff=0.5,
+            up_bid_avg=0.85,
+            up_bid_limit=0.84,
+            up_bid_depth_ok=True,
+            up_book_age_ms=20.0,
+            down_book_age_ms=20.0,
+            polymarket_price=100.1,
+            polymarket_price_age_sec=1.0,
+            polymarket_reference_prob_up=0.78,
+            polymarket_reference_prob_down=0.22,
+        ),
+        pos,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.reason == "market_overprice_exit"
 
 
 def test_state_records_window_settlement_pnl() -> None:

@@ -348,6 +348,86 @@ def test_intentional_safe_sell_residual_logs_position_reduce(monkeypatch) -> Non
     asyncio.run(scenario())
 
 
+def test_live_stale_exit_reconcile_logs_fill_details_for_later_accounting(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_open_position_tick
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+            "--analysis-logs",
+        ]))
+        logger = DummyLogger()
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=295.0,
+            remaining_sec=5.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.record_entry(PositionSnapshot(
+            market_slug="m1",
+            token_side="down",
+            token_id=window.down_token,
+            entry_time=130.0,
+            entry_avg_price=0.37,
+            filled_shares=2.0,
+            entry_model_prob=0.70,
+            entry_edge=0.33,
+        ))
+        decision = StrategyDecision(
+            action="exit",
+            reason="final_force_exit",
+            side="down",
+            model_prob=0.30,
+            price=0.31,
+            limit_price=0.26,
+            profit_now=-0.06,
+        )
+        release_gateway = asyncio.Event()
+
+        class BlockingGateway:
+            async def sell(self, *args, **kwargs):
+                await release_gateway.wait()
+                return ExecutionResult(True, filled_size=2.0, avg_price=0.31, message="MATCHED")
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_exit", lambda *_args, **_kwargs: decision)
+
+        await handle_open_position_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=BlockingGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        )
+        pending_task = state.pending_execution_task
+        assert pending_task is not None
+        state.reset_for_market("m2")
+        release_gateway.set()
+        await asyncio.wait_for(pending_task, timeout=1.0)
+
+        stale = [item for item in logger.rows if item.get("event") == "order_reconcile_stale"][-1]
+        assert stale["exit_price"] == 0.31
+        assert stale["exit_shares"] == 2.0
+        assert stale["stale_exit_pnl"] == -0.12
+        assert stale["action"] == "logged_stale_fill_after_window_switch"
+
+    asyncio.run(scenario())
+
+
 def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
     async def scenario() -> None:
         options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))

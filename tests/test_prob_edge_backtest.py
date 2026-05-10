@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs
+from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs, snapshot_from_row
 
 
 def _row(slug: str, age: int, s_price: float | None, k_price: float | None = 100.0) -> dict:
@@ -238,6 +238,18 @@ def test_backtest_entry_edge_matches_strategy_edge_and_records_fill_edge() -> No
     trade = result.trades[0]
     assert trade["entry_edge"] == trade["entry_model_prob"] - rows[0]["up"]["ask"]
     assert trade["entry_edge_at_fill"] == trade["entry_model_prob"] - trade["entry_price"]
+
+
+def test_snapshot_from_row_uses_configured_polymarket_price_age_limit() -> None:
+    row = _row("m1", 120, 100.10)
+    row["polymarket_price"] = 100.05
+    row["polymarket_price_age_sec"] = 5.0
+
+    strict = snapshot_from_row(row, max_polymarket_price_age_sec=4.0)
+    loose = snapshot_from_row(row, max_polymarket_price_age_sec=6.0)
+
+    assert strict.polymarket_price is None
+    assert loose.polymarket_price == 100.05
 
 
 def test_backtest_entry_phase_uses_strategy_entry_phase() -> None:
