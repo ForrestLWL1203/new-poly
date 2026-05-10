@@ -1078,7 +1078,7 @@ def test_defensive_take_profit_can_be_disabled() -> None:
 
 
 def test_late_profit_protection_and_final_force_exit() -> None:
-    cfg = EdgeConfig()
+    cfg = EdgeConfig(final_model_hold_min_prob=0.0)
     pos = PositionSnapshot(
         market_slug="m1",
         token_side="up",
