@@ -176,6 +176,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.interval_sec == 0.5
     assert opts.config.edge.min_fair_cap_margin_ticks == 1.0
     assert opts.config.edge.hold_to_settlement_enabled is True
+    assert opts.config.edge.final_model_hold_min_prob == 0.80
     assert opts.config.edge.hold_to_settlement_min_profit_ratio == 2.0
     assert opts.config.edge.hold_to_settlement_min_model_prob == 0.90
     assert opts.config.edge.hold_to_settlement_min_bid_avg == 0.80
@@ -187,7 +188,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.core_required_edge == 0.14
     assert opts.config.edge.early_to_core_age_sec == 120.0
     assert opts.config.edge.core_to_late_age_sec == 240.0
-    assert opts.config.edge.min_entry_model_prob == 0.40
+    assert opts.config.edge.min_entry_model_prob == 0.55
     assert opts.config.edge.low_price_extra_edge_threshold == 0.30
     assert opts.config.edge.low_price_extra_edge == 0.04
     assert opts.config.edge.buy_cap_relax_enabled is True
@@ -383,6 +384,7 @@ def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
     assert opts.config.edge.defensive_profit_min == 0.03
     assert opts.config.edge.protection_profit_min == 0.01
     assert opts.config.edge.final_hold_min_prob == 0.98
+    assert opts.config.edge.final_model_hold_min_prob == 0.80
     assert opts.config.edge.min_entry_model_prob == 0.35
 
 

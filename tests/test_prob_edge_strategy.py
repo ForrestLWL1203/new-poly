@@ -1181,6 +1181,80 @@ def test_late_profit_protection_and_final_force_exit() -> None:
     assert hold.reason != "final_force_exit"
 
 
+def test_final_model_hold_skips_force_exit_when_high_confidence_and_reference_not_adverse() -> None:
+    cfg = EdgeConfig(
+        final_force_exit_remaining_sec=30.0,
+        final_model_hold_min_prob=0.80,
+        polymarket_divergence_exit_bps=3.0,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="down",
+        token_id="down-token",
+        entry_time=194.0,
+        entry_avg_price=0.71,
+        filled_shares=1.4,
+        entry_model_prob=0.856,
+        entry_edge=0.156,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=273.0,
+        remaining_sec=27.0,
+        s_price=99.98,
+        k_price=100.0,
+        sigma_eff=0.2,
+        down_bid_avg=0.51,
+        down_bid_limit=0.50,
+        down_bid_depth_ok=True,
+        down_bid_age_ms=10.0,
+        polymarket_divergence_bps=2.0,
+    )
+
+    decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.action == "hold"
+    assert decision.reason == "final_model_hold"
+    assert decision.profit_now is not None and decision.profit_now < 0
+    assert decision.model_prob is not None and decision.model_prob >= 0.80
+
+
+def test_final_model_hold_does_not_mask_adverse_polymarket_divergence() -> None:
+    cfg = EdgeConfig(
+        final_force_exit_remaining_sec=30.0,
+        final_model_hold_min_prob=0.80,
+        polymarket_divergence_exit_bps=3.0,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="down",
+        token_id="down-token",
+        entry_time=194.0,
+        entry_avg_price=0.71,
+        filled_shares=1.4,
+        entry_model_prob=0.856,
+        entry_edge=0.156,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=273.0,
+        remaining_sec=27.0,
+        s_price=99.98,
+        k_price=100.0,
+        sigma_eff=0.2,
+        down_bid_avg=0.51,
+        down_bid_limit=0.50,
+        down_bid_depth_ok=True,
+        down_bid_age_ms=10.0,
+        polymarket_divergence_bps=-3.5,
+    )
+
+    decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.action == "exit"
+    assert decision.reason == "polymarket_divergence_exit"
+
+
 def test_hold_to_settlement_skips_take_profit_and_final_force_for_high_confidence_winner() -> None:
     cfg = EdgeConfig(
         hold_to_settlement_enabled=True,

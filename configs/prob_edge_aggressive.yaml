@@ -16,13 +16,14 @@ strategy:
   defensive_take_profit_enabled: false
   final_force_exit_remaining_sec: 30.0
   final_profit_hold_min_profit_ratio: 0.10
+  final_model_hold_min_prob: 0.80
   hold_to_settlement_enabled: true
   hold_to_settlement_min_profit_ratio: 2.0
   hold_to_settlement_min_model_prob: 0.90
   hold_to_settlement_min_bid_avg: 0.80
   hold_to_settlement_min_bid_limit: 0.75
   min_fair_cap_margin_ticks: 1.0
-  min_entry_model_prob: 0.40
+  min_entry_model_prob: 0.55
   low_price_extra_edge_threshold: 0.30
   low_price_extra_edge: 0.04
   buy_cap_relax_enabled: true

@@ -180,6 +180,7 @@ core_to_late_age_sec
 defensive_take_profit_enabled
 final_force_exit_remaining_sec
 final_profit_hold_min_profit_ratio
+final_model_hold_min_prob
 hold_to_settlement_enabled
 min_entry_model_prob
 low_price_extra_edge_threshold
@@ -554,7 +555,12 @@ late-window profit protection:
   thresholds. A position with obvious current profit is also spared from this
   force exit when `(bid_avg - entry_avg_price) / entry_avg_price >=
   final_profit_hold_min_profit_ratio`; the current default is `0.10`, meaning
-  at least 10% profit on the ticket, not a fixed 3-cent price gap.
+  at least 10% profit on the ticket, not a fixed 3-cent price gap. A position
+  is also spared when the held-side model probability is still at least
+  `final_model_hold_min_prob` (`0.80` by default) and no earlier reference-risk
+  exit such as `polymarket_divergence_exit` has fired. This prevents the final
+  force guard from selling a high-confidence but temporarily underwater ticket
+  shortly before a correct settlement.
 
 Exit decisions log `profit_now`, `prob_stagnant`, `prob_delta_3s`,
 `prob_drop_delta`, and `market_disagreement` for post-run analysis.
