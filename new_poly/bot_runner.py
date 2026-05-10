@@ -353,6 +353,18 @@ class BotRunner:
         )
 
     async def roll_window(self) -> bool:
+        if self.state.pending_execution_task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(self.state.pending_execution_task), timeout=8.0)
+            except asyncio.TimeoutError:
+                self.logger.write({
+                    "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "event": "order_reconcile_timeout",
+                    "mode": self.options.mode,
+                    "market_slug": self.active.window.slug,
+                    "pending_execution": self.state.pending_execution,
+                    "action": "continue_window_close",
+                })
         result = await _handle_window_close(
             window=self.active.window,
             prices=self.active.prices,

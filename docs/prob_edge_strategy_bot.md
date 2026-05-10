@@ -634,10 +634,19 @@ residual for a follow-up/dust path; it is not treated as an exceptional partial
 fill. If `POST /order` times out after Polymarket has already matched the order,
 the intent row still proves which order the bot attempted.
 
-Live FAK responses include timing telemetry under `order.timing` when available:
-`create_order_ms`, `post_order_ms`, `sent_at_epoch_ms`, `response_at_epoch_ms`,
-and `wall_latency_ms`. This separates local signing/build time from the actual
-CLOB `POST /order` round trip.
+Live FAK responses include timing telemetry under `order_timing` when available.
+Single-order rows can include `pre_balance_ms`, `get_client_ms`,
+`build_order_args_ms`, `order_options_ms`, `create_order_ms`, `post_order_ms`,
+`sent_at_epoch_ms`, `response_at_epoch_ms`, `wall_latency_ms`, and any later
+`reconcile_balance_ms` / `reconcile_balance_poll_ms` /
+`reconcile_balance_checks` / `reconcile_trade_lookup_ms`. Batch-exit rows use
+the same shape with `batch_create_orders_ms`, `batch_order_options_ms`,
+`batch_post_orders_ms`, `batch_orders`, and `matched_orders`. This separates
+local balance checks, SDK client lookup, order argument construction, signing,
+option lookup, actual CLOB `POST /order`, and post-timeout reconciliation.
+Unknown live results poll token balance briefly before becoming `order_no_fill`,
+because Polymarket balances/trades can lag a matched order by one or more
+queries.
 
 Very small residual live positions are treated as dust. If remaining sellable
 shares are below `live_min_sell_shares` (default `0.01`) or below an optional

@@ -664,6 +664,34 @@ def test_live_sell_request_exception_reconciles_from_balance_and_trades(monkeypa
     assert len(gateway.calls) == 1
 
 
+def test_live_sell_unknown_result_polls_until_balance_decreases(monkeypatch) -> None:
+    balances = [4.0, 0.0]
+
+    def fake_balance(token_id, safe=True):
+        return balances.pop(0) if balances else 0.0
+
+    monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_TIMEOUT_SEC", 0.2)
+    monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_INTERVAL_SEC", 0.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fake_balance)
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([]))
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            False,
+            message="live order request exception",
+            mode="live",
+            timing={"sent_at_epoch_ms": 1778213315537},
+        ),
+    ])
+
+    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.12, exit_reason="market_disagrees_exit"))
+
+    assert result.success is True
+    assert result.message == "live sell reconciled after unknown POST result"
+    assert result.filled_size == pytest.approx(4.0)
+    assert result.timing["reconciliation"] == "balance_decrease"
+    assert result.timing["reconcile_balance_checks"] == 2
+
+
 def test_live_sell_success_reconciles_when_response_understates_fill(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.012176)
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
@@ -768,6 +796,42 @@ def test_live_buy_request_exception_reconciles_from_balance_and_trades(monkeypat
     assert result.timing["reconciliation"] == "balance_increase"
     assert result.timing["trade_count"] == 1
     assert len(gateway.calls) == 1
+
+
+def test_live_buy_unknown_result_polls_until_balance_increases(monkeypatch) -> None:
+    balances = [0.0, 0.0, 5.0]
+
+    def fake_balance(token_id, safe=True):
+        return balances.pop(0) if balances else 5.0
+
+    monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_TIMEOUT_SEC", 0.2)
+    monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_INTERVAL_SEC", 0.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fake_balance)
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([]))
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            False,
+            message="live order request exception",
+            mode="live",
+            timing={"sent_at_epoch_ms": 1778213315537},
+        ),
+    ])
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.24,
+            best_ask=0.20,
+            price_hint_base=0.20,
+        )
+    )
+
+    assert result.success is True
+    assert result.message == "live buy reconciled after unknown POST result"
+    assert result.filled_size == pytest.approx(5.0)
+    assert result.timing["reconciliation"] == "balance_increase"
+    assert result.timing["reconcile_balance_checks"] == 2
 
 
 def test_live_buy_success_reconciles_real_position_balance(monkeypatch) -> None:
@@ -1132,6 +1196,9 @@ def test_live_post_records_detailed_timing(monkeypatch) -> None:
     result = gateway._post("up", 1.0, "BUY", 0.60)
 
     assert result.success is True
+    assert result.timing["get_client_ms"] >= 0
+    assert result.timing["build_order_args_ms"] >= 0
+    assert result.timing["order_options_ms"] >= 0
     assert result.timing["create_order_ms"] >= 0
     assert result.timing["post_order_ms"] >= 0
     assert result.timing["wall_latency_ms"] >= 0

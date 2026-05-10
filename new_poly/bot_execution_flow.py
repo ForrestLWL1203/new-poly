@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
 from dataclasses import replace
 from typing import Any
 
@@ -13,7 +15,7 @@ from new_poly.bot_runtime import (
     _refresh_entry_retry_params,
     _refresh_exit_retry_params,
 )
-from new_poly.strategy.prob_edge import evaluate_entry, evaluate_exit
+from new_poly.strategy.prob_edge import StrategyDecision, evaluate_entry, evaluate_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 
 
@@ -67,6 +69,160 @@ def _apply_closed_trade_risk(row: dict[str, Any], *, state: StrategyState, cfg: 
         row["risk_event"] = event
 
 
+async def _finish_pending_entry_order(
+    *,
+    token_id: str,
+    decision,
+    snap,
+    window: Any,
+    cfg: BotConfig,
+    options: RuntimeOptions,
+    state: StrategyState,
+    logger,
+    order_coro,
+    price_analysis: dict[str, Any],
+) -> None:
+    try:
+        result = await order_coro
+        row: dict[str, Any] = {
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "mode": options.mode,
+            "market_slug": window.slug,
+            "age_sec": snap.age_sec,
+            "remaining_sec": snap.remaining_sec,
+            "order": result.__dict__,
+        }
+        if state.current_market_slug != window.slug:
+            row["event"] = "order_reconcile_stale"
+            row["order_intent"] = "entry"
+            row["action"] = "ignore_result_after_window_switch"
+            logger.write(row)
+            return
+        if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
+            state.record_entry(PositionSnapshot(
+                market_slug=window.slug,
+                token_side=decision.side,
+                token_id=token_id,
+                entry_time=snap.age_sec,
+                entry_avg_price=result.avg_price,
+                filled_shares=result.filled_size,
+                entry_model_prob=decision.model_prob,
+                entry_edge=decision.edge,
+            ))
+            row["event"] = "entry"
+            row["entry_side"] = decision.side
+            row["entry_price"] = _compact(result.avg_price)
+            row["entry_shares"] = _compact(result.filled_size)
+            if options.analysis_logs and state.open_position is not None:
+                row["position_after_entry"] = _position_log(state.open_position, compact=False)
+        elif (
+            options.mode == "live"
+            and cfg.risk.stop_on_live_insufficient_cash_balance
+            and result.fatal_stop_reason is not None
+        ):
+            state.fatal_stop_reason = result.fatal_stop_reason
+            row["event"] = "fatal_stop"
+            row["fatal_stop_reason"] = result.fatal_stop_reason
+            row["order_intent"] = "entry"
+        else:
+            row["event"] = "order_no_fill"
+            row["order_intent"] = "entry"
+        if options.analysis_logs:
+            row["analysis"] = {"price_sources": price_analysis, **_entry_analysis(decision, result)}
+        logger.write(row)
+    except Exception as exc:
+        logger.write({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "mode": options.mode,
+            "event": "order_reconcile_error",
+            "market_slug": window.slug,
+            "order_intent": "entry",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        })
+    finally:
+        if state.pending_execution_market_slug == window.slug:
+            state.clear_pending_execution()
+
+
+async def _finish_pending_exit_order(
+    *,
+    decision,
+    snap,
+    window: Any,
+    cfg: BotConfig,
+    options: RuntimeOptions,
+    state: StrategyState,
+    logger,
+    order_coro,
+    price_analysis: dict[str, Any],
+    exiting_position: PositionSnapshot,
+) -> None:
+    try:
+        result = await order_coro
+        row: dict[str, Any] = {
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "mode": options.mode,
+            "market_slug": window.slug,
+            "age_sec": snap.age_sec,
+            "remaining_sec": snap.remaining_sec,
+            "order": result.__dict__,
+        }
+        if state.current_market_slug != window.slug:
+            row["event"] = "order_reconcile_stale"
+            row["exit_intent"] = "exit"
+            row["action"] = "ignore_result_after_window_switch"
+            logger.write(row)
+            return
+        if result.success:
+            pnl, closed = state.record_partial_exit(result.avg_price, result.filled_size, decision.reason, snap.age_sec)
+            row["event"] = "exit" if closed else "position_reduce"
+            row["exit_reason"] = decision.reason
+            row["exit_price"] = _compact(result.avg_price)
+            row["exit_shares"] = _compact(result.filled_size)
+            row["exit_pnl"] = _compact(pnl, 4)
+            if not closed:
+                row["exit_status"] = "residual_open"
+                row["remaining_shares"] = _compact(
+                    state.open_position.filled_shares if state.open_position is not None else 0.0
+                )
+            if closed:
+                _apply_closed_trade_risk(row, state=state, cfg=cfg, pnl=pnl)
+            if options.analysis_logs:
+                row["position_before_exit"] = _position_log(exiting_position, compact=False)
+                row["position_after_exit"] = _position_log(state.open_position, compact=False)
+        elif result.message.startswith("live dust sell skipped"):
+            pnl = state.record_exit(0.0, "dust_position", snap.age_sec)
+            row["event"] = "dust_position"
+            row["exit_reason"] = "dust_position"
+            row["exit_price"] = 0.0
+            row["exit_shares"] = _compact(exiting_position.filled_shares)
+            row["exit_pnl"] = _compact(pnl, 4)
+            row["exit_intent"] = "exit"
+            if options.analysis_logs:
+                row["position_before_exit"] = _position_log(exiting_position, compact=False)
+                row["position_after_exit"] = _position_log(state.open_position, compact=False)
+        else:
+            row["event"] = "order_no_fill"
+            row["exit_intent"] = "exit"
+        if options.analysis_logs:
+            row["analysis"] = {"price_sources": price_analysis, **_exit_analysis(decision, result)}
+        logger.write(row)
+    except Exception as exc:
+        logger.write({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "mode": options.mode,
+            "event": "order_reconcile_error",
+            "market_slug": window.slug,
+            "exit_intent": "exit",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        })
+    finally:
+        if state.pending_execution_market_slug == window.slug:
+            state.clear_pending_execution()
+
+
 async def handle_open_position_tick(
     *,
     row: dict[str, Any],
@@ -83,6 +239,10 @@ async def handle_open_position_tick(
     logger=None,
 ) -> Any:
     assert state.open_position is not None
+    if state.has_pending_execution:
+        decision = StrategyDecision(action="hold", reason="pending_order_reconciliation", side=state.open_position.token_side)
+        row["decision"] = _decision_log(decision)
+        return decision
     decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
     row["decision"] = _decision_log(decision)
     if decision.model_prob is not None:
@@ -108,7 +268,7 @@ async def handle_open_position_tick(
                 "exit_reason": decision.reason,
             },
         ))
-    result = await gateway.sell(
+    order_coro = gateway.sell(
         state.open_position.token_id,
         state.open_position.filled_shares,
         min_price=decision.limit_price,
@@ -127,6 +287,25 @@ async def handle_open_position_tick(
             exit_reason=decision.reason,
         ),
     )
+    if options.mode == "live" and logger is not None:
+        task = asyncio.create_task(_finish_pending_exit_order(
+            decision=decision,
+            snap=snap,
+            window=window,
+            cfg=cfg,
+            options=options,
+            state=state,
+            logger=logger,
+            order_coro=order_coro,
+            price_analysis=price_analysis,
+            exiting_position=exiting_position,
+        ))
+        state.mark_pending_execution("exit", task)
+        row["event"] = "order_reconcile_pending"
+        row["exit_intent"] = "exit"
+        return decision
+
+    result = await order_coro
     row["order"] = result.__dict__
     if options.analysis_logs:
         row["analysis"] = {"price_sources": price_analysis, **_exit_analysis(decision, result)}
@@ -181,6 +360,10 @@ async def handle_flat_tick(
     price_analysis: dict[str, Any],
     logger=None,
 ) -> Any:
+    if state.has_pending_execution:
+        decision = StrategyDecision(action="skip", reason="pending_order_reconciliation")
+        row["decision"] = _decision_log(decision)
+        return decision
     decision = evaluate_entry(snap, state, cfg.edge)
     row["decision"] = _decision_log(decision)
     if decision.action != "enter":
@@ -197,7 +380,7 @@ async def handle_flat_tick(
             options=options,
             extra={"amount_usd": _compact(cfg.amount_usd)},
         ))
-    result = await gateway.buy(
+    order_coro = gateway.buy(
         token_id,
         cfg.amount_usd,
         max_price=decision.limit_price,
@@ -210,6 +393,25 @@ async def handle_flat_tick(
             cfg=cfg,
         ),
     )
+    if options.mode == "live" and logger is not None:
+        task = asyncio.create_task(_finish_pending_entry_order(
+            token_id=token_id,
+            decision=decision,
+            snap=snap,
+            window=window,
+            cfg=cfg,
+            options=options,
+            state=state,
+            logger=logger,
+            order_coro=order_coro,
+            price_analysis=price_analysis,
+        ))
+        state.mark_pending_execution("entry", task)
+        row["event"] = "order_reconcile_pending"
+        row["order_intent"] = "entry"
+        return decision
+
+    result = await order_coro
     row["order"] = result.__dict__
     if options.analysis_logs:
         row["analysis"] = {"price_sources": price_analysis, **_entry_analysis(decision, result)}

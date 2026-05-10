@@ -15,6 +15,8 @@ from .fak_quotes import buffer_buy_price_hint, get_tick_size
 
 BUY = "BUY"
 SELL = "SELL"
+RECONCILE_BALANCE_POLL_TIMEOUT_SEC = 1.5
+RECONCILE_BALANCE_POLL_INTERVAL_SEC = 0.25
 
 
 @dataclass(frozen=True)
@@ -120,6 +122,45 @@ def _retry_skipped(result: ExecutionResult, *, attempt: int, total_latency_ms: i
 
 def _ms_since(start: float) -> int:
     return round((time.monotonic() - start) * 1000)
+
+
+def _timed_token_balance(token_id: str) -> tuple[float | None, int]:
+    start = time.monotonic()
+    balance = get_token_balance(token_id, safe=True)
+    return balance, _ms_since(start)
+
+
+def _poll_token_balance(
+    token_id: str,
+    is_ready: Callable[[float], bool],
+    *,
+    timeout_sec: float | None = None,
+    interval_sec: float | None = None,
+) -> tuple[float | None, dict[str, Any]]:
+    if timeout_sec is None:
+        timeout_sec = RECONCILE_BALANCE_POLL_TIMEOUT_SEC
+    if interval_sec is None:
+        interval_sec = RECONCILE_BALANCE_POLL_INTERVAL_SEC
+    start = time.monotonic()
+    checks = 0
+    query_ms = 0
+    last_balance: float | None = None
+    while True:
+        balance, balance_ms = _timed_token_balance(token_id)
+        checks += 1
+        query_ms += balance_ms
+        if balance is not None:
+            last_balance = balance
+            if is_ready(balance):
+                break
+        if time.monotonic() - start >= max(0.0, timeout_sec):
+            break
+        time.sleep(max(0.0, interval_sec))
+    return last_balance, {
+        "reconcile_balance_ms": query_ms,
+        "reconcile_balance_poll_ms": _ms_since(start),
+        "reconcile_balance_checks": checks,
+    }
 
 
 def _dynamic_buy_price_hint(
@@ -849,7 +890,7 @@ class LiveFakExecutionGateway:
         retry_refresh: BuyRetryRefresh | None = None,
     ) -> ExecutionResult:
         base_price = price_hint_base if price_hint_base is not None else best_ask
-        starting_balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
+        starting_balance, starting_balance_ms = await asyncio.to_thread(_timed_token_balance, token_id)
         if starting_balance is not None and starting_balance >= _min_adopt_buy_shares(amount_usd):
             fallback_price = max_price or base_price
             return ExecutionResult(
@@ -862,6 +903,7 @@ class LiveFakExecutionGateway:
                 total_latency_ms=0,
                 timing={
                     "reconciliation": "existing_balance_before_post",
+                    "pre_balance_ms": starting_balance_ms,
                     "balance": round(starting_balance, 6),
                     "min_adopt_buy_shares": round(_min_adopt_buy_shares(amount_usd), 6),
                     "fallback_price": round(_buy_balance_price(amount_usd, starting_balance, fallback_price), 6),
@@ -882,7 +924,11 @@ class LiveFakExecutionGateway:
                 price_hint_base = refreshed.price_hint_base
                 max_price = refreshed.max_price
                 base_price = price_hint_base if price_hint_base is not None else best_ask
-            before_balance = starting_balance if starting_balance is not None else await asyncio.to_thread(get_token_balance, token_id, safe=True)
+            if starting_balance is not None:
+                before_balance = starting_balance
+                before_balance_ms = starting_balance_ms
+            else:
+                before_balance, before_balance_ms = await asyncio.to_thread(_timed_token_balance, token_id)
             buffer_ticks = self.buy_price_buffer_ticks if attempt == 0 else self.buy_retry_price_buffer_ticks
             price_hint = _dynamic_buy_price_hint(
                 token_id,
@@ -895,6 +941,7 @@ class LiveFakExecutionGateway:
                 attempt2_max_ticks=self.buy_dynamic_buffer_attempt2_max_ticks,
             )
             last = await asyncio.to_thread(self._post, token_id, amount_usd, BUY, price_hint or max_price)
+            last = replace(last, timing={**last.timing, "pre_balance_ms": before_balance_ms})
             if last.success:
                 last = await asyncio.to_thread(
                     self._reconcile_successful_buy,
@@ -938,11 +985,11 @@ class LiveFakExecutionGateway:
         price_hint: float | None,
         last: ExecutionResult,
     ) -> ExecutionResult:
-        after_balance = get_token_balance(token_id, safe=True)
+        after_balance, balance_ms = _timed_token_balance(token_id)
         if before_balance is None or after_balance is None:
             return replace(
                 last,
-                timing={**last.timing, "success_reconciliation": "balance_unavailable"},
+                timing={**last.timing, "success_reconciliation": "balance_unavailable", "reconcile_balance_ms": balance_ms},
             )
         bought_by_balance = max(0.0, after_balance - before_balance)
         min_size = _min_adopt_buy_shares(amount_usd)
@@ -952,6 +999,7 @@ class LiveFakExecutionGateway:
                 timing={
                     **last.timing,
                     "success_reconciliation": "no_balance_increase",
+                    "reconcile_balance_ms": balance_ms,
                     "balance_before": round(before_balance, 6),
                     "balance_after": round(after_balance, 6),
                     "min_adopt_buy_shares": round(min_size, 6),
@@ -961,6 +1009,7 @@ class LiveFakExecutionGateway:
         timing = {
             **last.timing,
             "reconciliation": "balance_increase_after_success",
+            "reconcile_balance_ms": balance_ms,
             "balance_before": round(before_balance, 6),
             "balance_after": round(after_balance, 6),
             "bought_by_balance": round(bought_by_balance, 6),
@@ -986,15 +1035,22 @@ class LiveFakExecutionGateway:
         price_hint: float | None,
         last: ExecutionResult,
     ) -> ExecutionResult:
-        after_balance = get_token_balance(token_id, safe=True)
+        min_size = _min_adopt_buy_shares(amount_usd)
+
+        def ready(balance: float) -> bool:
+            if before_balance is None:
+                return balance >= min_size
+            bought = max(0.0, balance - before_balance)
+            return bought >= min_size or balance >= min_size
+
+        after_balance, balance_timing = _poll_token_balance(token_id, ready)
         if before_balance is None or after_balance is None:
             return replace(
                 last,
                 message=f"{last.message}; reconciliation balance unavailable",
-                timing={**last.timing, "reconciliation": "balance_unavailable"},
+                timing={**last.timing, "reconciliation": "balance_unavailable", **balance_timing},
             )
         bought_by_balance = max(0.0, after_balance - before_balance)
-        min_size = _min_adopt_buy_shares(amount_usd)
         if bought_by_balance < max(1e-9, min_size) and after_balance < min_size:
             return replace(
                 last,
@@ -1002,6 +1058,7 @@ class LiveFakExecutionGateway:
                 timing={
                     **last.timing,
                     "reconciliation": "no_balance_increase",
+                    **balance_timing,
                     "balance_before": round(before_balance, 6),
                     "balance_after": round(after_balance, 6),
                     "min_adopt_buy_shares": round(min_size, 6),
@@ -1010,7 +1067,9 @@ class LiveFakExecutionGateway:
         sent_at = last.timing.get("sent_at_epoch_ms") if isinstance(last.timing, dict) else None
         reconciled_by = "balance_increase" if bought_by_balance >= min_size else "existing_balance"
         size_from_balance = bought_by_balance if bought_by_balance >= min_size else after_balance
+        trade_start = time.monotonic()
         trade_size, trade_price, trade_count = _recent_trade_fill(token_id, side=BUY, sent_at_epoch_ms=int(sent_at) if sent_at else None, max_size=size_from_balance)
+        trade_lookup_ms = _ms_since(trade_start)
         bought = trade_size if trade_size > 0 else size_from_balance
         price = trade_price if trade_price > 0 else _buy_balance_price(amount_usd, bought, max_price or price_hint)
         return replace(
@@ -1022,6 +1081,8 @@ class LiveFakExecutionGateway:
             timing={
                 **last.timing,
                 "reconciliation": reconciled_by,
+                **balance_timing,
+                "reconcile_trade_lookup_ms": trade_lookup_ms,
                 "balance_before": round(before_balance, 6),
                 "balance_after": round(after_balance, 6),
                 "bought_by_balance": round(bought_by_balance, 6),
@@ -1128,7 +1189,8 @@ class LiveFakExecutionGateway:
                     )
                 min_price = refreshed.min_price
                 exit_reason = refreshed.exit_reason
-            balance = await asyncio.to_thread(get_token_balance, token_id, safe=True)
+            balance, retry_balance_ms = await asyncio.to_thread(_timed_token_balance, token_id)
+            last = replace(last, timing={**last.timing, "retry_balance_ms": retry_balance_ms})
             amount = min(shares, balance or 0.0)
             if amount <= 0:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
@@ -1151,11 +1213,11 @@ class LiveFakExecutionGateway:
         price_hint: float | None,
         last: ExecutionResult,
     ) -> ExecutionResult:
-        after_balance = get_token_balance(token_id, safe=True)
+        after_balance, balance_ms = _timed_token_balance(token_id)
         if after_balance is None:
             return replace(
                 last,
-                timing={**last.timing, "success_reconciliation": "balance_unavailable"},
+                timing={**last.timing, "success_reconciliation": "balance_unavailable", "reconcile_balance_ms": balance_ms},
             )
         sold_by_balance = max(0.0, before_balance - after_balance)
         min_reconcile_size = max(
@@ -1168,6 +1230,7 @@ class LiveFakExecutionGateway:
                 timing={
                     **last.timing,
                     "success_reconciliation": "balance_lagged_response_trusted",
+                    "reconcile_balance_ms": balance_ms,
                     "balance_before": round(before_balance, 6),
                     "balance_after": round(after_balance, 6),
                     "balance_decrease": round(sold_by_balance, 6),
@@ -1181,6 +1244,7 @@ class LiveFakExecutionGateway:
                 timing={
                     **last.timing,
                     "success_reconciliation": "no_balance_decrease",
+                    "reconcile_balance_ms": balance_ms,
                     "balance_before": round(before_balance, 6),
                     "balance_after": round(after_balance, 6),
                 },
@@ -1190,6 +1254,7 @@ class LiveFakExecutionGateway:
         timing = {
             **last.timing,
             "reconciliation": "balance_decrease_after_success",
+            "reconcile_balance_ms": balance_ms,
             "balance_before": round(before_balance, 6),
             "balance_after": round(after_balance, 6),
             "sold_by_balance": round(sold_by_balance, 6),
@@ -1215,27 +1280,38 @@ class LiveFakExecutionGateway:
         price_hint: float | None,
         last: ExecutionResult,
     ) -> ExecutionResult:
-        after_balance = get_token_balance(token_id, safe=True)
+        min_reconcile_size = max(
+            1e-9,
+            min(self.live_min_sell_shares, attempted_amount) if self.live_min_sell_shares > 0 else 1e-9,
+        )
+
+        def ready(balance: float) -> bool:
+            return max(0.0, before_balance - balance) >= min_reconcile_size
+
+        after_balance, balance_timing = _poll_token_balance(token_id, ready)
         if after_balance is None:
             return replace(
                 last,
                 message=f"{last.message}; reconciliation balance unavailable",
-                timing={**last.timing, "reconciliation": "balance_unavailable"},
+                timing={**last.timing, "reconciliation": "balance_unavailable", **balance_timing},
             )
         sold_by_balance = max(0.0, before_balance - after_balance)
-        if sold_by_balance < max(1e-9, min(self.live_min_sell_shares, attempted_amount) if self.live_min_sell_shares > 0 else 1e-9):
+        if sold_by_balance < min_reconcile_size:
             return replace(
                 last,
                 message=f"{last.message}; reconciliation no balance decrease",
                 timing={
                     **last.timing,
                     "reconciliation": "no_balance_decrease",
+                    **balance_timing,
                     "balance_before": round(before_balance, 6),
                     "balance_after": round(after_balance, 6),
                 },
             )
         sent_at = last.timing.get("sent_at_epoch_ms") if isinstance(last.timing, dict) else None
+        trade_start = time.monotonic()
         trade_size, trade_price, trade_count = _recent_trade_fill(token_id, side=SELL, sent_at_epoch_ms=int(sent_at) if sent_at else None, max_size=sold_by_balance)
+        trade_lookup_ms = _ms_since(trade_start)
         sold = trade_size if trade_size > 0 else sold_by_balance
         price = trade_price if trade_price > 0 else max(0.0, price_hint or min_price or 0.0)
         return replace(
@@ -1247,6 +1323,8 @@ class LiveFakExecutionGateway:
             timing={
                 **last.timing,
                 "reconciliation": "balance_decrease",
+                **balance_timing,
+                "reconcile_trade_lookup_ms": trade_lookup_ms,
                 "balance_before": round(before_balance, 6),
                 "balance_after": round(after_balance, 6),
                 "sold_by_balance": round(sold_by_balance, 6),
@@ -1262,7 +1340,9 @@ class LiveFakExecutionGateway:
         from py_clob_client_v2.order_builder.constants import SELL as SDK_SELL
 
         start = time.monotonic()
+        client_start = time.monotonic()
         client = get_client()
+        get_client_ms = _ms_since(client_start)
         post_orders = getattr(client, "post_orders", None) or getattr(client, "postOrders", None)
         if post_orders is None:
             return self._post(token_id, shares, SELL, _sell_price_hint(
@@ -1283,6 +1363,8 @@ class LiveFakExecutionGateway:
         parts = _batch_exit_parts(shares, self.batch_config.batch_exit_slices)
         extra_ticks = self.batch_config.batch_exit_extra_buffer_ticks
         batch = []
+        create_orders_ms = 0
+        order_options_ms = 0
         for index, part in enumerate(parts[:15]):
             extra = extra_ticks[index] if index < len(extra_ticks) else extra_ticks[-1] if extra_ticks else 0.0
             price_hint = _sell_price_hint_with_extra(
@@ -1302,24 +1384,46 @@ class LiveFakExecutionGateway:
                 sell_force_exit_retry_buffer_ticks=self.sell_force_exit_retry_buffer_ticks,
             )
             args = MarketOrderArgs(token_id=token_id, amount=part, side=SDK_SELL, order_type=OrderType.FAK, price=price_hint or min_price or 0)
-            signed = client.create_market_order(args, options=get_order_options(token_id))
+            options_start = time.monotonic()
+            order_options = get_order_options(token_id)
+            order_options_ms += _ms_since(options_start)
+            create_start = time.monotonic()
+            signed = client.create_market_order(args, options=order_options)
+            create_orders_ms += _ms_since(create_start)
             batch.append({"order": signed, "orderType": OrderType.FAK})
+        wall_start = time.time()
+        post_start = time.monotonic()
+        sent_at_epoch_ms = round(time.time() * 1000)
         try:
             responses = post_orders(batch)
+            batch_post_orders_ms = _ms_since(post_start)
         except Exception as exc:
+            response_at_epoch_ms = round(time.time() * 1000)
+            batch_post_orders_ms = _ms_since(post_start)
             latency_ms = round((time.monotonic() - start) * 1000)
+            timing = {
+                "get_client_ms": get_client_ms,
+                "batch_create_orders_ms": create_orders_ms,
+                "batch_order_options_ms": order_options_ms,
+                "batch_post_orders_ms": batch_post_orders_ms,
+                "batch_orders": len(batch),
+                "sent_at_epoch_ms": sent_at_epoch_ms,
+                "response_at_epoch_ms": response_at_epoch_ms,
+                "wall_latency_ms": response_at_epoch_ms - round(wall_start * 1000),
+            }
             if _is_fak_no_match_error(exc):
-                return ExecutionResult(False, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+                return ExecutionResult(False, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing=timing)
             if _is_execution_rejected_error(exc):
-                return ExecutionResult(False, message="live no fill: batch execution rejected", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+                return ExecutionResult(False, message="live no fill: batch execution rejected", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing=timing)
             if _is_invalid_amount_error(exc):
-                return ExecutionResult(False, message="live invalid amount", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+                return ExecutionResult(False, message="live invalid amount", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing=timing)
             if _is_insufficient_balance_error(exc):
-                return ExecutionResult(False, message="live sell balance unavailable", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+                return ExecutionResult(False, message="live sell balance unavailable", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing=timing)
             if _is_live_request_exception(exc):
                 reset_clob_http_client()
-                return ExecutionResult(False, message="live order request exception", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms)
+                return ExecutionResult(False, message="live order request exception", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing=timing)
             raise
+        response_at_epoch_ms = round(time.time() * 1000)
         latency_ms = round((time.monotonic() - start) * 1000)
         if not isinstance(responses, list):
             responses = [responses]
@@ -1342,9 +1446,20 @@ class LiveFakExecutionGateway:
                 matched_count += 1
                 filled_total += filled
                 received_total += filled * avg_price
+        timing = {
+            "get_client_ms": get_client_ms,
+            "batch_create_orders_ms": create_orders_ms,
+            "batch_order_options_ms": order_options_ms,
+            "batch_post_orders_ms": batch_post_orders_ms,
+            "batch_orders": len(batch),
+            "matched_orders": matched_count,
+            "sent_at_epoch_ms": sent_at_epoch_ms,
+            "response_at_epoch_ms": response_at_epoch_ms,
+            "wall_latency_ms": response_at_epoch_ms - round(wall_start * 1000),
+        }
         if filled_total <= 1e-9:
-            return ExecutionResult(False, order_id=",".join(order_ids) or None, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing={"batch_orders": len(batch), "matched_orders": matched_count})
-        return ExecutionResult(True, order_id=",".join(order_ids) or None, filled_size=filled_total, avg_price=received_total / filled_total, message="batch matched", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing={"batch_orders": len(batch), "matched_orders": matched_count})
+            return ExecutionResult(False, order_id=",".join(order_ids) or None, message="live no fill: batch FAK no match", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing=timing)
+        return ExecutionResult(True, order_id=",".join(order_ids) or None, filled_size=filled_total, avg_price=received_total / filled_total, message="batch matched", mode="live", latency_ms=latency_ms, total_latency_ms=latency_ms, timing=timing)
 
     def _post(self, token_id: str, amount: float, side: str, price_hint: float | None) -> ExecutionResult:
         from py_clob_client_v2 import MarketOrderArgs, OrderType
@@ -1352,11 +1467,18 @@ class LiveFakExecutionGateway:
 
         start = time.monotonic()
         wall_start = time.time()
+        client_start = time.monotonic()
         client = get_client()
+        get_client_ms = _ms_since(client_start)
         sdk_side = SDK_BUY if side == BUY else SDK_SELL
+        args_start = time.monotonic()
         args = MarketOrderArgs(token_id=token_id, amount=amount, side=sdk_side, order_type=OrderType.FAK, price=price_hint or 0)
+        build_args_ms = _ms_since(args_start)
+        options_start = time.monotonic()
+        order_options = get_order_options(token_id)
+        order_options_ms = _ms_since(options_start)
         create_start = time.monotonic()
-        signed = client.create_market_order(args, options=get_order_options(token_id))
+        signed = client.create_market_order(args, options=order_options)
         create_order_ms = _ms_since(create_start)
         post_start = time.monotonic()
         sent_at_epoch_ms = round(time.time() * 1000)
@@ -1367,6 +1489,9 @@ class LiveFakExecutionGateway:
             post_order_ms = _ms_since(post_start)
             latency_ms = round((time.monotonic() - start) * 1000)
             timing = {
+                "get_client_ms": get_client_ms,
+                "build_order_args_ms": build_args_ms,
+                "order_options_ms": order_options_ms,
                 "create_order_ms": create_order_ms,
                 "post_order_ms": post_order_ms,
                 "sent_at_epoch_ms": sent_at_epoch_ms,
@@ -1447,6 +1572,9 @@ class LiveFakExecutionGateway:
             latency_ms=latency_ms,
             total_latency_ms=latency_ms,
             timing={
+                "get_client_ms": get_client_ms,
+                "build_order_args_ms": build_args_ms,
+                "order_options_ms": order_options_ms,
                 "create_order_ms": create_order_ms,
                 "post_order_ms": post_order_ms,
                 "sent_at_epoch_ms": sent_at_epoch_ms,

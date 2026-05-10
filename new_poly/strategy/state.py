@@ -35,10 +35,17 @@ class StrategyState:
     loss_pause_remaining_windows: int = 0
     loss_pause_started_market_slug: str | None = None
     fatal_stop_reason: str | None = None
+    pending_execution: str | None = None
+    pending_execution_market_slug: str | None = None
+    pending_execution_task: object | None = None
 
     @property
     def has_position(self) -> bool:
         return self.open_position is not None and self.open_position.exit_status == "open"
+
+    @property
+    def has_pending_execution(self) -> bool:
+        return self.pending_execution is not None
 
     @property
     def drawdown(self) -> float:
@@ -52,11 +59,24 @@ class StrategyState:
         self.last_exit_side = None
         self.last_exit_age_sec = None
         self.prob_history = []
+        self.pending_execution = None
+        self.pending_execution_market_slug = None
+        self.pending_execution_task = None
 
     def record_entry(self, position: PositionSnapshot) -> None:
         self.open_position = position
         self.entry_count += 1
         self.prob_history = []
+
+    def mark_pending_execution(self, kind: str, task: object | None = None) -> None:
+        self.pending_execution = kind
+        self.pending_execution_market_slug = self.current_market_slug
+        self.pending_execution_task = task
+
+    def clear_pending_execution(self) -> None:
+        self.pending_execution = None
+        self.pending_execution_market_slug = None
+        self.pending_execution_task = None
 
     def record_partial_exit(self, exit_price: float, shares: float, reason: str, exit_age_sec: float | None = None) -> tuple[float, bool]:
         if self.open_position is None:
