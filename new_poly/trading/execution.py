@@ -704,6 +704,8 @@ def _is_live_request_exception(exc: Exception) -> bool:
     text = str(exc).lower()
     if "request exception" in text:
         return True
+    if "status_code=425" in text or "service not ready" in text:
+        return True
     if "readtimeout" in text or "read operation timed out" in text or "timed out" in text:
         return True
     context = getattr(exc, "__context__", None) or getattr(exc, "__cause__", None)

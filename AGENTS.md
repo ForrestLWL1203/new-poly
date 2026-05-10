@@ -332,6 +332,12 @@ Current tuned strategy shape:
   quality. It currently uses `min_entry_model_prob=0.40`,
   `max_entries_per_market=2`, `low_price_extra_edge_threshold=0.30`, and
   `low_price_extra_edge=0.04`.
+- Recent live analysis showed many large losses came from low-certainty
+  "cheap ticket" entries where `model_prob` was near `0.50` but edge looked
+  large because the ask was low. Backtests on recent live/paper/collector logs
+  suggest raising `min_entry_model_prob` toward `0.55-0.60` improves win rate
+  and drawdown at the cost of fewer trades. Treat this as the next parameter
+  family to validate before widening entry windows or lowering edge thresholds.
 - The aggressive config also enables price/probability BUY cap relaxation after
   a normal edge signal passes: low-priced tickets (`ask<=0.25`, `prob>=0.40`)
   can use up to `+8` ticks, mid-priced tickets (`ask<=0.65`, `prob>=0.60/0.75`)
@@ -380,6 +386,16 @@ Execution behavior:
   risk/force exits.
 - Unknown or timed-out FAK responses must be reconciled by balance before
   retrying or declaring failure. A timeout does not prove the order failed.
+- CLOB `POST /order` can return transient `425 service not ready`; treat it as
+  a recoverable order no-fill / request exception, not as a fatal bot crash.
+- Important live accounting caveat: a successful SELL POST response may contain
+  a usable fill size while the immediate token balance query still shows only a
+  tiny decrease. When response status is matched and a nonzero fill can be
+  derived from response fields, prefer the response fill for state accounting
+  and use balance/trades as diagnostics. Use balance reconciliation as the
+  primary source only for unknown/timeout responses. This avoids creating fake
+  residual positions that later produce noisy
+  `live sell balance unavailable; reconciliation no balance decrease` rows.
 - Safe balance reductions with a residual position are logged as
   `position_reduce`; tiny residuals below live minimum sell size can finish via
   `dust_position`.
