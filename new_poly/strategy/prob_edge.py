@@ -311,10 +311,10 @@ def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, m
         return None
     if cfg.market_disagrees_exit_min_model_drop > 0.0 and position.entry_model_prob - model_prob < cfg.market_disagrees_exit_min_model_drop:
         return None
-    entry_ratio = position.entry_avg_price / position.entry_model_prob
-    current_ratio = bid / model_prob
-    disagreement = entry_ratio - current_ratio
-    return disagreement if disagreement >= threshold else None
+    if position.entry_avg_price <= 0.0:
+        return None
+    price_ratio = bid / position.entry_avg_price
+    return price_ratio if price_ratio <= threshold else None
 
 
 def _adverse_polymarket_divergence(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: EdgeConfig) -> float | None:

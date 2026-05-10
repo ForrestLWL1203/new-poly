@@ -31,10 +31,10 @@ strategy:
   weak_sk_entry_min_abs_sk_bps: 2.0
   buy_cap_relax_enabled: true
   cross_source_max_bps: 5.0
-  market_disagrees_exit_threshold: 0.20
-  low_price_market_disagrees_entry_threshold: 0.30
-  low_price_market_disagrees_exit_threshold: 0.06
-  market_disagrees_exit_max_remaining_sec: 90.0
+  market_disagrees_exit_threshold: 0.48
+  low_price_market_disagrees_entry_threshold: 0.0
+  low_price_market_disagrees_exit_threshold: 0.0
+  market_disagrees_exit_max_remaining_sec: 0.0
   market_disagrees_exit_min_loss: 0.03
   market_disagrees_exit_min_age_sec: 3.0
   market_disagrees_exit_max_profit: 0.01

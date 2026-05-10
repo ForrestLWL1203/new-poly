@@ -1613,34 +1613,35 @@ def test_prob_drop_exit_has_priority_over_logic_decay() -> None:
     assert decision.reason == "prob_drop_exit"
 
 
-def test_market_disagrees_exit_triggers_when_bid_ratio_breaks_late() -> None:
+def test_market_disagrees_exit_triggers_when_bid_collapses_vs_entry() -> None:
     cfg = EdgeConfig(
-        market_disagrees_exit_threshold=0.20,
-        market_disagrees_exit_max_remaining_sec=60.0,
+        market_disagrees_exit_threshold=0.48,
+        market_disagrees_exit_max_remaining_sec=0.0,
         market_disagrees_exit_min_loss=0.03,
         market_disagrees_exit_min_age_sec=3.0,
         market_disagrees_exit_max_profit=0.01,
+        market_disagrees_exit_min_model_drop=0.06,
     )
     pos = PositionSnapshot(
         market_slug="m1",
         token_side="up",
         token_id="up-token",
         entry_time=100.0,
-        entry_avg_price=0.35,
+        entry_avg_price=0.42,
         filled_shares=10.0,
-        entry_model_prob=0.60,
+        entry_model_prob=0.68,
         entry_edge=0.25,
     )
 
     decision = evaluate_exit(MarketSnapshot(
         market_slug="m1",
-        age_sec=145.0,
-        remaining_sec=45.0,
-        s_price=100.0,
+        age_sec=187.0,
+        remaining_sec=113.0,
+        s_price=99.98,
         k_price=100.0,
         sigma_eff=0.6,
-        up_bid_avg=0.10,
-        up_bid_limit=0.10,
+        up_bid_avg=0.20,
+        up_bid_limit=0.20,
         up_bid_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
@@ -1649,14 +1650,89 @@ def test_market_disagrees_exit_triggers_when_bid_ratio_breaks_late() -> None:
     assert decision.action == "exit"
     assert decision.reason == "market_disagrees_exit"
     assert decision.market_disagreement is not None
-    assert decision.market_disagreement >= 0.20
+    assert decision.market_disagreement <= 0.48
+
+
+def test_market_disagrees_exit_triggers_mid_window_when_bid_collapses() -> None:
+    cfg = EdgeConfig(
+        market_disagrees_exit_threshold=0.48,
+        market_disagrees_exit_max_remaining_sec=0.0,
+        market_disagrees_exit_min_loss=0.03,
+        market_disagrees_exit_min_age_sec=3.0,
+        market_disagrees_exit_max_profit=0.01,
+        market_disagrees_exit_min_model_drop=0.06,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.42,
+        filled_shares=2.38,
+        entry_model_prob=0.677,
+        entry_edge=0.25,
+    )
+
+    decision = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=187.0,
+        remaining_sec=113.0,
+        s_price=80793.89,
+        k_price=80804.89,
+        sigma_eff=0.6,
+        up_bid_avg=0.07,
+        up_bid_limit=0.07,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg)
+
+    assert decision.action == "exit"
+    assert decision.reason == "market_disagrees_exit"
+
+
+def test_market_disagrees_exit_waits_when_bid_has_not_crossed_entry_ratio() -> None:
+    cfg = EdgeConfig(
+        market_disagrees_exit_threshold=0.48,
+        market_disagrees_exit_max_remaining_sec=0.0,
+        market_disagrees_exit_min_loss=0.03,
+        market_disagrees_exit_min_age_sec=3.0,
+        market_disagrees_exit_max_profit=0.01,
+        market_disagrees_exit_min_model_drop=0.06,
+    )
+    pos = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.42,
+        filled_shares=2.38,
+        entry_model_prob=0.677,
+        entry_edge=0.25,
+    )
+
+    decision = evaluate_exit(MarketSnapshot(
+        market_slug="m1",
+        age_sec=187.0,
+        remaining_sec=113.0,
+        s_price=80793.89,
+        k_price=80804.89,
+        sigma_eff=0.6,
+        up_bid_avg=0.21,
+        up_bid_limit=0.21,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    ), pos, cfg)
+
+    assert decision.reason != "market_disagrees_exit"
 
 
 def test_market_disagrees_exit_uses_tighter_threshold_for_low_price_entries() -> None:
     cfg = EdgeConfig(
-        market_disagrees_exit_threshold=0.25,
+        market_disagrees_exit_threshold=0.48,
         low_price_market_disagrees_entry_threshold=0.20,
-        low_price_market_disagrees_exit_threshold=0.10,
+        low_price_market_disagrees_exit_threshold=0.60,
         market_disagrees_exit_max_remaining_sec=90.0,
         market_disagrees_exit_min_loss=0.03,
         market_disagrees_exit_min_age_sec=3.0,
@@ -1690,14 +1766,14 @@ def test_market_disagrees_exit_uses_tighter_threshold_for_low_price_entries() ->
     assert decision.action == "exit"
     assert decision.reason == "market_disagrees_exit"
     assert decision.market_disagreement is not None
-    assert 0.10 <= decision.market_disagreement < 0.25
+    assert decision.market_disagreement <= 0.60
 
 
 def test_market_disagrees_exit_keeps_default_threshold_for_higher_price_entries() -> None:
     cfg = EdgeConfig(
-        market_disagrees_exit_threshold=0.25,
+        market_disagrees_exit_threshold=0.48,
         low_price_market_disagrees_entry_threshold=0.20,
-        low_price_market_disagrees_exit_threshold=0.10,
+        low_price_market_disagrees_exit_threshold=0.60,
         market_disagrees_exit_max_remaining_sec=90.0,
         market_disagrees_exit_min_loss=0.03,
         market_disagrees_exit_min_age_sec=3.0,
@@ -1733,7 +1809,7 @@ def test_market_disagrees_exit_keeps_default_threshold_for_higher_price_entries(
 
 def test_market_disagrees_exit_does_not_fire_while_profitable() -> None:
     cfg = EdgeConfig(
-        market_disagrees_exit_threshold=0.20,
+        market_disagrees_exit_threshold=0.48,
         market_disagrees_exit_max_remaining_sec=60.0,
         market_disagrees_exit_min_loss=0.03,
         market_disagrees_exit_min_age_sec=3.0,
@@ -1769,7 +1845,7 @@ def test_market_disagrees_exit_does_not_fire_while_profitable() -> None:
 
 def test_market_disagrees_exit_does_not_fire_when_model_prob_improves() -> None:
     cfg = EdgeConfig(
-        market_disagrees_exit_threshold=0.20,
+        market_disagrees_exit_threshold=0.48,
         market_disagrees_exit_max_remaining_sec=60.0,
         market_disagrees_exit_min_loss=0.03,
         market_disagrees_exit_min_age_sec=3.0,
@@ -1805,7 +1881,7 @@ def test_market_disagrees_exit_does_not_fire_when_model_prob_improves() -> None:
 
 def test_market_disagrees_exit_requires_minimum_model_drop() -> None:
     cfg = EdgeConfig(
-        market_disagrees_exit_threshold=0.10,
+        market_disagrees_exit_threshold=0.48,
         market_disagrees_exit_min_model_drop=0.06,
         market_disagrees_exit_max_remaining_sec=90.0,
         market_disagrees_exit_min_loss=0.03,

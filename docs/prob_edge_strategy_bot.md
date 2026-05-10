@@ -252,18 +252,20 @@ adverse to the held side and the position has been open for at least
 `polymarket_divergence_exit_min_age_sec=3.0`. UP exits when
 `Binance - Polymarket > 3 bps`; DOWN exits when `Binance - Polymarket < -3 bps`.
 Set the threshold to `0` to disable this guard. This is separate from
-`market_disagrees_exit`, which measures CLOB bid/model disagreement rather than
-Polymarket reference divergence.
+`market_disagrees_exit`, which measures CLOB bid collapse versus entry price
+rather than Polymarket reference divergence.
 
 The probability helper clamps the pre-expiry `d2` time input to a minimum
 `0.1s` only as a numerical guard against unstable `sqrt(T)` behavior. The bot
 does not rely on sub-second model probabilities for live risk because new entry
 is already closed and `final_force_exit` handles the final seconds.
 
-The current `market_disagrees_exit_threshold` default is `0.25`, active for
-positions with `remaining_sec <= 90`. A 12-window dry-run replay favored this
-over the older `0.30 / 60s` guard, but it remains a candidate parameter that
-needs larger-sample validation.
+The current `market_disagrees_exit_threshold` default is `0.48`. It means
+`bid / entry_price <= 0.48`: for a `0.42` entry, the guard can exit near `0.20`
+if the position is already losing and model probability has also deteriorated.
+The guard is not limited to the final minute, which avoids holding a position
+whose market price has already collapsed while waiting for the slower
+`logic_decay_exit`.
 
 ## FAK Price Logic
 
@@ -547,16 +549,19 @@ late-window profit protection:
   and final-force exits. Because probability history is cleared at entry, this
   guard cannot fire until the position has been open for at least
   `prob_drop_exit_window_sec` when re-enabled.
-- `market_disagrees_exit`: when enabled, the Polymarket executable bid becomes
-  materially cheaper relative to the model than it was at entry. It is
-  intentionally constrained to late, already-losing positions:
-  `remaining_sec <= market_disagrees_exit_max_remaining_sec`, loss at least
+- `market_disagrees_exit`: when enabled, the Polymarket executable bid falls
+  below a configured fraction of entry price. It is intentionally constrained to
+  already-losing positions: loss at least
   `market_disagrees_exit_min_loss`, position age at least
   `market_disagrees_exit_min_age_sec`, model probability deterioration of at
   least `market_disagrees_exit_min_model_drop`, and no meaningful current
-  profit. This catches cases where both the model and the market are moving
-  against the held side. It intentionally avoids selling solely because the
-  CLOB bid is temporarily cheap while the model thesis is still mostly intact.
+  profit. This catches cases where the market price has collapsed and the model
+  is no longer supporting the entry thesis. It intentionally avoids selling
+  solely because the CLOB bid is temporarily cheap while the model thesis is
+  still mostly intact.
+  Set `market_disagrees_exit_max_remaining_sec > 0` only when you explicitly
+  want this guard limited to the end of the window; current live configs keep it
+  at `0` so a mid-window bid collapse can exit before `logic_decay_exit`.
 - `profit_protection_exit`: configurable late profit guard active when
   `profit_protection_start_remaining_sec < remaining_sec <= profit_protection_end_remaining_sec`;
   the current 30-second final-force boundary normally supersedes most of this

@@ -363,11 +363,13 @@ Risk exits:
 
 - `logic_decay_exit`: model probability falls below entry price minus
   `model_decay_buffer`.
-- `market_disagrees_exit`: CLOB bid/model ratio deteriorates versus entry and
-  model probability has dropped by at least
-  `market_disagrees_exit_min_model_drop`. Low priced entries can use a tighter
-  ratio threshold, but CLOB disagreement alone should not force an exit while
-  the model thesis is still mostly intact.
+- `market_disagrees_exit`: CLOB executable bid falls below a configured
+  fraction of the entry price while model probability has dropped by at least
+  `market_disagrees_exit_min_model_drop`. Current live configs use
+  `market_disagrees_exit_threshold=0.48`, so a `0.42` entry can exit near
+  `0.20` instead of waiting for the slower `logic_decay_exit`. CLOB price
+  collapse alone still should not force an exit while the model thesis is
+  mostly intact.
 - `polymarket_divergence_exit`: Binance-vs-Polymarket reference divergence is
   adverse for the held side.
 - `final_force_exit`: last-stage risk reduction before settlement.
