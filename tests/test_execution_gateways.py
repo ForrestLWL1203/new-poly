@@ -117,6 +117,19 @@ class TradeLookupClient:
         return self.trades
 
 
+def confirm_buy_balance(monkeypatch, shares: float = 10.0) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: shares)
+
+
+def confirm_buy_balance_after_retry(monkeypatch, shares: float = 10.0) -> None:
+    balances = [0.0, shares]
+
+    def fake_balance(token_id, safe=True):
+        return balances.pop(0) if balances else shares
+
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fake_balance)
+
+
 def test_paper_buy_and_sell_use_depth_after_delay() -> None:
     async def scenario() -> None:
         stream = FakeStream()
@@ -215,6 +228,7 @@ def test_buy_hint_uses_clob_tick_size(monkeypatch) -> None:
 
 def test_live_buy_hint_buffers_best_ask_but_caps_at_depth_limit(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance(monkeypatch)
     captured = {}
 
     class Gateway(LiveFakExecutionGateway):
@@ -231,6 +245,7 @@ def test_live_buy_hint_buffers_best_ask_but_caps_at_depth_limit(monkeypatch) -> 
 
 def test_live_buy_hint_buffers_depth_limit_when_provided(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance(monkeypatch)
     captured = {}
 
     class Gateway(LiveFakExecutionGateway):
@@ -249,6 +264,7 @@ def test_live_buy_hint_buffers_depth_limit_when_provided(monkeypatch) -> None:
 
 def test_live_buy_hint_never_exceeds_depth_limit(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance(monkeypatch)
     captured = {}
 
     class Gateway(LiveFakExecutionGateway):
@@ -265,6 +281,7 @@ def test_live_buy_hint_never_exceeds_depth_limit(monkeypatch) -> None:
 
 def test_live_buy_dynamic_buffer_uses_tick_ladder_capped_by_fair_cap(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance_after_retry(monkeypatch)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
         ExecutionResult(True, filled_size=10.0, avg_price=0.248, message="MATCHED", mode="live"),
@@ -279,6 +296,7 @@ def test_live_buy_dynamic_buffer_uses_tick_ladder_capped_by_fair_cap(monkeypatch
 
 def test_live_buy_dynamic_buffer_clamps_when_fair_room_is_tight(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance(monkeypatch)
     gateway = SequencedLiveGateway([
         ExecutionResult(True, filled_size=10.0, avg_price=0.485355, message="MATCHED", mode="live"),
     ])
@@ -291,6 +309,7 @@ def test_live_buy_dynamic_buffer_clamps_when_fair_room_is_tight(monkeypatch) -> 
 
 def test_live_buy_retry_reuses_same_signal_without_refresh(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance_after_retry(monkeypatch)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
         ExecutionResult(True, filled_size=10.0, avg_price=0.55, message="MATCHED", mode="live"),
@@ -316,6 +335,7 @@ def test_live_buy_retry_reuses_same_signal_without_refresh(monkeypatch) -> None:
 
 def test_live_buy_retry_ignores_signal_refresh_failure(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance_after_retry(monkeypatch)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
         ExecutionResult(True, filled_size=10.0, avg_price=0.54, message="MATCHED", mode="live"),
@@ -338,6 +358,7 @@ def test_live_buy_retry_ignores_signal_refresh_failure(monkeypatch) -> None:
 
 def test_live_buy_retry_can_use_configured_four_tick_buffer(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance_after_retry(monkeypatch)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
         ExecutionResult(True, filled_size=10.0, avg_price=0.58, message="MATCHED", mode="live"),
@@ -356,6 +377,7 @@ def test_live_buy_retry_can_use_configured_four_tick_buffer(monkeypatch) -> None
 
 def test_live_buy_retry_refreshes_book_but_keeps_original_fair_cap(monkeypatch) -> None:
     monkeypatch.setattr(fak_quotes, "get_tick_size", lambda token_id: 0.01)
+    confirm_buy_balance_after_retry(monkeypatch)
     gateway = SequencedLiveGateway([
         ExecutionResult(False, message="UNMATCHED", mode="live"),
         ExecutionResult(True, filled_size=10.0, avg_price=0.58, message="MATCHED", mode="live"),
@@ -793,7 +815,7 @@ def test_live_buy_request_exception_reconciles_from_balance_and_trades(monkeypat
     assert result.message == "live buy reconciled after unknown POST result"
     assert result.filled_size == pytest.approx(5.0)
     assert result.avg_price == pytest.approx(0.20)
-    assert result.timing["reconciliation"] == "balance_increase"
+    assert result.timing["reconciliation"] == "existing_balance"
     assert result.timing["trade_count"] == 1
     assert len(gateway.calls) == 1
 
@@ -830,12 +852,12 @@ def test_live_buy_unknown_result_polls_until_balance_increases(monkeypatch) -> N
     assert result.success is True
     assert result.message == "live buy reconciled after unknown POST result"
     assert result.filled_size == pytest.approx(5.0)
-    assert result.timing["reconciliation"] == "balance_increase"
-    assert result.timing["reconcile_balance_checks"] == 2
+    assert result.timing["reconciliation"] == "existing_balance"
+    assert result.timing["reconcile_balance_checks"] == 3
 
 
 def test_live_buy_success_reconciles_real_position_balance(monkeypatch) -> None:
-    balances = iter([0.0, 5.0])
+    balances = iter([5.0])
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
     gateway = SequencedLiveGateway([
@@ -862,32 +884,81 @@ def test_live_buy_success_reconciles_real_position_balance(monkeypatch) -> None:
     assert result.filled_size == pytest.approx(5.0)
     assert result.avg_price == pytest.approx(0.20)
     assert result.message == "live buy reconciled after successful POST response"
-    assert result.timing["reconciliation"] == "balance_increase_after_success"
+    assert result.timing["reconciliation"] == "balance_after_success"
     assert result.timing["response_fill_size"] == pytest.approx(1.0)
     assert len(gateway.calls) == 1
 
 
-def test_live_buy_adopts_existing_balance_before_reposting(monkeypatch) -> None:
-    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 1.6566)
-    gateway = SequencedLiveGateway([])
+def test_live_buy_first_attempt_does_not_query_balance_before_post(monkeypatch) -> None:
+    balance_calls = 0
+
+    def fake_balance(token_id, safe=True):
+        nonlocal balance_calls
+        balance_calls += 1
+        return 5.0
+
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fake_balance)
+
+    class Gateway(SequencedLiveGateway):
+        def _post(self, token_id, amount, side, price_hint):
+            assert balance_calls == 0
+            return super()._post(token_id, amount, side, price_hint)
+
+    gateway = Gateway([
+        ExecutionResult(
+            True,
+            filled_size=1.0,
+            avg_price=0.20,
+            message="matched",
+            mode="live",
+        ),
+    ])
 
     result = asyncio.run(
         gateway.buy(
             "up",
             amount_usd=1.0,
-            max_price=0.65,
-            best_ask=0.57,
-            price_hint_base=0.57,
+            max_price=0.24,
+            best_ask=0.20,
+            price_hint_base=0.20,
         )
     )
 
     assert result.success is True
-    assert result.message == "live buy adopted existing token balance"
-    assert result.filled_size == pytest.approx(1.6566)
-    assert result.avg_price == pytest.approx(1.0 / 1.6566)
-    assert result.attempt == 0
-    assert result.timing["reconciliation"] == "existing_balance_before_post"
-    assert gateway.calls == []
+    assert balance_calls == 1
+    assert result.timing["reconciliation"] == "balance_after_success"
+    assert "pre_balance_ms" not in result.timing
+
+
+def test_live_buy_success_without_confirming_balance_is_not_entry(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_INTERVAL_SEC", 0.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            True,
+            filled_size=5.0,
+            avg_price=0.20,
+            message="matched",
+            mode="live",
+        ),
+    ])
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.24,
+            best_ask=0.20,
+            price_hint_base=0.20,
+        )
+    )
+
+    assert result.success is False
+    assert result.filled_size == 0.0
+    assert result.message == "live buy matched but balance did not confirm fill"
+    assert result.timing["reconciliation"] == "no_balance_after_success"
+    assert result.timing["response_fill_size"] == pytest.approx(5.0)
 
 
 def test_live_buy_unknown_result_adopts_existing_balance_without_increase(monkeypatch) -> None:
