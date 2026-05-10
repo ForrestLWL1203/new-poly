@@ -735,6 +735,7 @@ def test_switch_to_next_window_resets_state_and_stream(monkeypatch) -> None:
 
         monkeypatch.setattr("new_poly.bot_loop.find_following_window", lambda window, series: next_window)
 
+        logger = DummyLogger()
         window, prices = await _switch_to_next_window(
             window=first,
             series=object(),
@@ -742,7 +743,7 @@ def test_switch_to_next_window_resets_state_and_stream(monkeypatch) -> None:
             state=state,
             loop=loop,
             options=options,
-            logger=DummyLogger(),
+            logger=logger,
         )
 
         assert window is next_window
@@ -751,5 +752,14 @@ def test_switch_to_next_window_resets_state_and_stream(monkeypatch) -> None:
         assert state.entry_count == 0
         assert loop.seen_repetitive_skips == set()
         assert stream.switched == [[next_window.up_token, next_window.down_token]]
+        assert len(logger.rows) == 1
+        row = logger.rows[0]
+        assert row["event"] == "window_selected"
+        assert row["mode"] == "paper"
+        assert row["market_slug"] == next_window.slug
+        assert row["window_start"] == next_window.start_time.isoformat()
+        assert row["window_end"] == next_window.end_time.isoformat()
+        assert row["completed_windows"] == 0
+        assert row["ts"]
 
     asyncio.run(scenario())

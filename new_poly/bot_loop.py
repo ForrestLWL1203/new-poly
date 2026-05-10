@@ -329,6 +329,15 @@ async def _switch_to_next_window(
     state.reset_for_market(next_window.slug)
     loop.seen_repetitive_skips.clear()
     await asyncio.wait_for(feeds.stream.switch_tokens([next_window.up_token, next_window.down_token]), timeout=8.0)
+    logger.write({
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "event": "window_selected",
+        "mode": options.mode,
+        "market_slug": next_window.slug,
+        "window_start": next_window.start_time.isoformat(),
+        "window_end": next_window.end_time.isoformat(),
+        "completed_windows": loop.completed_windows,
+    })
     if options.mode == "live":
         await _prefetch_live_order_params(
             token_side="up",
