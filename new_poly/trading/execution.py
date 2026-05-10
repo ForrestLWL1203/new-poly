@@ -976,9 +976,26 @@ class LiveFakExecutionGateway:
                 return balance >= min_size
             return max(0.0, balance - before_balance) >= min_size
 
-        after_balance, balance_timing = _poll_token_balance(token_id, ready)
         response_fill_size = last.filled_size
         response_avg_price = last.avg_price
+        response_fill_is_usable = response_fill_size >= max(1e-9, min_size) and response_avg_price > 0
+        if response_fill_is_usable:
+            return replace(
+                last,
+                success=True,
+                filled_size=response_fill_size,
+                avg_price=response_avg_price,
+                message="live buy response fill trusted",
+                timing={
+                    **last.timing,
+                    "success_reconciliation": "response_fill_trusted",
+                    "response_fill_size": round(response_fill_size, 6),
+                    "response_avg_price": round(response_avg_price, 6),
+                    "min_adopt_buy_shares": round(min_size, 6),
+                },
+            )
+
+        after_balance, balance_timing = _poll_token_balance(token_id, ready)
         if after_balance is None:
             return replace(
                 last,

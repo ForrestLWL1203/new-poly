@@ -151,6 +151,8 @@ class StrategyDecision:
     down_prob: float | None = None
     phase: str | None = None
     required_edge: float | None = None
+    up_required_edge: float | None = None
+    down_required_edge: float | None = None
     profit_now: float | None = None
     prob_stagnant: bool | None = None
     prob_delta_3s: float | None = None
@@ -449,13 +451,15 @@ def evaluate_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: EdgeConf
                     candidates.append(StrategyDecision("enter", "edge", "down", model_prob=probs.down, price=snapshot.down_best_ask, limit_price=down_fair_cap, depth_limit_price=snapshot.down_best_ask, best_ask=snapshot.down_best_ask, edge=down_edge, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=down_required_edge, reference_model_prob=ref_probs.down if ref_probs is not None else None))
     if not candidates:
         effective_required_edge = max(attempted_required_edges) if attempted_required_edges else phase.required_edge
+        up_req = _entry_required_edge(phase.required_edge, snapshot.up_best_ask, cfg) if snapshot.up_best_ask is not None else None
+        down_req = _entry_required_edge(phase.required_edge, snapshot.down_best_ask, cfg) if snapshot.down_best_ask is not None else None
         if rejected_cooldown_reason is not None:
-            return StrategyDecision(action="skip", reason=rejected_cooldown_reason, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
+            return StrategyDecision(action="skip", reason=rejected_cooldown_reason, up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge, up_required_edge=up_req, down_required_edge=down_req)
         if rejected_low_model_prob:
-            return StrategyDecision(action="skip", reason="model_prob_too_low", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
+            return StrategyDecision(action="skip", reason="model_prob_too_low", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge, up_required_edge=up_req, down_required_edge=down_req)
         if rejected_weak_sk_distance:
-            return StrategyDecision(action="skip", reason="weak_sk_distance", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
-        return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge)
+            return StrategyDecision(action="skip", reason="weak_sk_distance", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge, up_required_edge=up_req, down_required_edge=down_req)
+        return StrategyDecision(action="skip", reason="edge_too_small", up_prob=probs.up, down_prob=probs.down, phase=phase.phase, required_edge=effective_required_edge, up_required_edge=up_req, down_required_edge=down_req)
     return max(candidates, key=lambda item: item.edge or 0.0)
 
 

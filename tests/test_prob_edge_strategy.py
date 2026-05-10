@@ -566,6 +566,33 @@ def test_low_price_entry_requires_extra_edge_when_configured() -> None:
     assert math.isclose(strict_decision.required_edge or 0.0, 0.22)
 
 
+def test_skip_logs_side_specific_required_edges_for_low_price_side() -> None:
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=120.0,
+        remaining_sec=180.0,
+        s_price=80723.0,
+        k_price=80703.22,
+        sigma_eff=0.2,
+        up_best_ask=0.81,
+        down_best_ask=0.25,
+        up_ask_avg=0.81,
+        down_ask_avg=0.25,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+    cfg = EdgeConfig(core_required_edge=0.14, low_price_extra_edge_threshold=0.30, low_price_extra_edge=0.04)
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "edge_too_small"
+    assert math.isclose(decision.up_required_edge or 0.0, 0.14)
+    assert math.isclose(decision.down_required_edge or 0.0, 0.18)
+    assert math.isclose(decision.required_edge or 0.0, 0.18)
+
+
 def test_logic_decay_exit_blocks_same_side_reentry_during_cooldown() -> None:
     cfg = EdgeConfig(core_required_edge=0.05, logic_decay_reentry_cooldown_sec=30.0)
     state = StrategyState(current_market_slug="m1")

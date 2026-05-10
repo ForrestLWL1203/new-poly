@@ -856,9 +856,11 @@ def test_live_buy_unknown_result_polls_until_balance_increases(monkeypatch) -> N
     assert result.timing["reconcile_balance_checks"] == 3
 
 
-def test_live_buy_success_reconciles_real_position_balance(monkeypatch) -> None:
-    balances = iter([5.0])
-    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+def test_live_buy_success_trusts_response_fill_before_balance(monkeypatch) -> None:
+    def fail_balance_lookup(token_id, safe=True):
+        raise AssertionError("balance lookup should not run when BUY response has fill details")
+
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fail_balance_lookup)
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
     gateway = SequencedLiveGateway([
         ExecutionResult(
@@ -881,15 +883,15 @@ def test_live_buy_success_reconciles_real_position_balance(monkeypatch) -> None:
     )
 
     assert result.success is True
-    assert result.filled_size == pytest.approx(5.0)
+    assert result.filled_size == pytest.approx(1.0)
     assert result.avg_price == pytest.approx(0.20)
-    assert result.message == "live buy reconciled after successful POST response"
-    assert result.timing["reconciliation"] == "balance_after_success"
+    assert result.message == "live buy response fill trusted"
+    assert result.timing["success_reconciliation"] == "response_fill_trusted"
     assert result.timing["response_fill_size"] == pytest.approx(1.0)
     assert len(gateway.calls) == 1
 
 
-def test_live_buy_first_attempt_does_not_query_balance_before_post(monkeypatch) -> None:
+def test_live_buy_success_with_fill_details_does_not_query_balance(monkeypatch) -> None:
     balance_calls = 0
 
     def fake_balance(token_id, safe=True):
@@ -925,15 +927,19 @@ def test_live_buy_first_attempt_does_not_query_balance_before_post(monkeypatch) 
     )
 
     assert result.success is True
-    assert balance_calls == 1
-    assert result.timing["reconciliation"] == "balance_after_success"
+    assert balance_calls == 0
+    assert result.timing["success_reconciliation"] == "response_fill_trusted"
     assert "pre_balance_ms" not in result.timing
 
 
-def test_live_buy_success_without_confirming_balance_is_not_entry(monkeypatch) -> None:
+def test_live_buy_success_trusts_response_fill_without_balance_lookup(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_TIMEOUT_SEC", 0.01)
     monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_INTERVAL_SEC", 0.0)
-    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
+
+    def fail_balance_lookup(token_id, safe=True):
+        raise AssertionError("balance lookup should not run when BUY response has fill details")
+
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fail_balance_lookup)
     gateway = SequencedLiveGateway([
         ExecutionResult(
             True,
@@ -954,11 +960,42 @@ def test_live_buy_success_without_confirming_balance_is_not_entry(monkeypatch) -
         )
     )
 
+    assert result.success is True
+    assert result.filled_size == pytest.approx(5.0)
+    assert result.avg_price == pytest.approx(0.20)
+    assert result.message == "live buy response fill trusted"
+    assert result.timing["success_reconciliation"] == "response_fill_trusted"
+    assert result.timing["response_fill_size"] == pytest.approx(5.0)
+
+
+def test_live_buy_success_without_fill_details_still_requires_balance_confirmation(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_INTERVAL_SEC", 0.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            True,
+            filled_size=0.0,
+            avg_price=0.0,
+            message="matched",
+            mode="live",
+        ),
+    ])
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.24,
+            best_ask=0.20,
+            price_hint_base=0.20,
+        )
+    )
+
     assert result.success is False
     assert result.filled_size == 0.0
     assert result.message == "live buy matched but balance did not confirm fill"
     assert result.timing["reconciliation"] == "no_balance_after_success"
-    assert result.timing["response_fill_size"] == pytest.approx(5.0)
 
 
 def test_live_buy_unknown_result_adopts_existing_balance_without_increase(monkeypatch) -> None:
