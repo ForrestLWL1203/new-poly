@@ -560,7 +560,49 @@ def test_start_first_window_logs_live_prefetch_failures(monkeypatch) -> None:
 
         failures = [row for row in runner.logger.rows if row.get("event") == "clob_prefetch_failed"]
         assert [row["token_side"] for row in failures] == ["up", "down"]
+        assert [row for row in runner.logger.rows if row.get("event") == "clob_prefetch_ready"] == []
         assert runner.active.window is window
+
+    asyncio.run(scenario())
+
+
+def test_start_first_window_writes_operational_lifecycle_rows_without_analysis_logs(monkeypatch) -> None:
+    async def scenario() -> None:
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+            "--no-analysis-logs",
+        ]))
+        runner = BotRunner(options)
+        runner.logger = DummyLogger()
+        feeds = FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream())
+        runner.startup_context = StartupContext(feeds=feeds, gateway=object())
+        window = _window("m1")
+        monkeypatch.setattr("new_poly.bot_runner.find_initial_window", lambda _series: window)
+
+        async def fake_start_market_feeds(**_kwargs):
+            return None
+
+        async def fake_warmup_binance(**_kwargs):
+            return None
+
+        async def fake_prefetch_live_order_params(**kwargs):
+            return {"ok": True, "token_id": kwargs["token_id"], "cached": False}
+
+        monkeypatch.setattr("new_poly.bot_runner.start_market_feeds", fake_start_market_feeds)
+        monkeypatch.setattr("new_poly.bot_runner.warmup_binance", fake_warmup_binance)
+        monkeypatch.setattr("new_poly.bot_runner._prefetch_live_order_params", fake_prefetch_live_order_params)
+
+        await runner.start_first_window()
+
+        events = [row["event"] for row in runner.logger.rows]
+        assert "window_selected" in events
+        assert "market_feeds_started" in events
+        assert events.count("clob_prefetch_started") == 2
+        assert events.count("clob_prefetch_ready") == 2
+        assert "binance_warmup_started" in events
+        assert "binance_warmup_ready" in events
 
     asyncio.run(scenario())
 

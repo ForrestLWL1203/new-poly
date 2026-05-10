@@ -913,3 +913,19 @@ def test_live_non_analysis_skips_do_not_write_tick_noise() -> None:
     assert _should_write_row({**row, "event": "order_no_fill"}, seen, analysis_logs=False) is True
     assert _should_write_row({**row, "mode": "paper"}, seen, analysis_logs=False) is True
     assert _should_write_row(row, seen, analysis_logs=True) is True
+
+
+def test_live_non_analysis_keeps_operational_lifecycle_rows() -> None:
+    seen: set[tuple[str, str]] = set()
+    for event in (
+        "config",
+        "window_selected",
+        "market_feeds_started",
+        "clob_prefetch_started",
+        "clob_prefetch_ready",
+        "binance_warmup_started",
+        "binance_warmup_ready",
+        "order_intent",
+        "exit_intent",
+    ):
+        assert _should_write_row({"event": event, "mode": "live", "market_slug": "m1"}, seen, analysis_logs=False) is True

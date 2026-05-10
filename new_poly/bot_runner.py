@@ -122,8 +122,7 @@ class BotRunner:
             await self.close()
 
     async def start(self) -> bool:
-        if self.options.analysis_logs:
-            self.logger.write(_config_log_row(self.options))
+        self.logger.write(_config_log_row(self.options))
         self.dynamic.write_startup_error(logger=self.logger, options=self.options)
         self.dvol = await startup_dvol_runtime(cfg=self.cfg, options=self.options, logger=self.logger)
         if self.dvol is None:
@@ -133,6 +132,14 @@ class BotRunner:
 
     async def start_first_window(self) -> None:
         self.set_window_context(WindowContext(window=find_initial_window(self.series), prices=WindowPrices()))
+        self.logger.write({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "event": "window_selected",
+            "mode": self.options.mode,
+            "market_slug": self.active.window.slug,
+            "window_start": self.active.window.start_time.isoformat(),
+            "window_end": self.active.window.end_time.isoformat(),
+        })
         await start_market_feeds(
             feeds=self.active.feeds,
             cfg=self.cfg,
@@ -140,19 +147,45 @@ class BotRunner:
             logger=self.logger,
             window=self.active.window,
         )
+        self.logger.write({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "event": "market_feeds_started",
+            "mode": self.options.mode,
+            "market_slug": self.active.window.slug,
+            "binance": self.active.feeds.binance is not None,
+            "polymarket_reference": self.active.feeds.polymarket is not None,
+            "coinbase": self.active.feeds.coinbase is not None,
+            "clob_stream": True,
+        })
         if self.options.mode == "live":
-            await _prefetch_live_order_params(
-                token_side="up",
-                token_id=self.active.window.up_token,
-                market_slug=self.active.window.slug,
-                logger=self.logger,
-            )
-            await _prefetch_live_order_params(
-                token_side="down",
-                token_id=self.active.window.down_token,
-                market_slug=self.active.window.slug,
-                logger=self.logger,
-            )
+            for token_side, token_id in (("up", self.active.window.up_token), ("down", self.active.window.down_token)):
+                self.logger.write({
+                    "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "event": "clob_prefetch_started",
+                    "mode": self.options.mode,
+                    "market_slug": self.active.window.slug,
+                    "token_side": token_side,
+                })
+                prefetch_result = await _prefetch_live_order_params(
+                    token_side=token_side,
+                    token_id=token_id,
+                    market_slug=self.active.window.slug,
+                    logger=self.logger,
+                )
+                if prefetch_result.get("ok"):
+                    self.logger.write({
+                        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "event": "clob_prefetch_ready",
+                        "mode": self.options.mode,
+                        "market_slug": self.active.window.slug,
+                        "token_side": token_side,
+                    })
+        self.logger.write({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "event": "binance_warmup_started",
+            "mode": self.options.mode,
+            "market_slug": self.active.window.slug,
+        })
         await warmup_binance(
             feeds=self.active.feeds,
             cfg=self.cfg,
@@ -160,6 +193,13 @@ class BotRunner:
             logger=self.logger,
             market_slug=self.active.window.slug,
         )
+        self.logger.write({
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "event": "binance_warmup_ready",
+            "mode": self.options.mode,
+            "market_slug": self.active.window.slug,
+            "has_price": self.active.feeds.binance is not None and self.active.feeds.binance.latest_price is not None,
+        })
 
     def set_window_context(self, active: WindowContext) -> None:
         if self.context is None:
