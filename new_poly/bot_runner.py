@@ -79,7 +79,11 @@ class BotRunner:
     def __init__(self, options: RuntimeOptions) -> None:
         self.options = options
         self.cfg = options.config
-        self.logger = JsonlLogger(options.jsonl, retention_hours=options.log_retention_hours)
+        self.logger = JsonlLogger(
+            options.jsonl,
+            retention_hours=options.log_retention_hours,
+            tee_stdout=options.tee_jsonl_stdout,
+        )
         self.dynamic = DynamicParamController()
         self.series = MarketSeries.from_known("btc-updown-5m")
         self.startup_context: StartupContext | None = None

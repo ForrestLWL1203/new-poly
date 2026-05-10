@@ -227,6 +227,11 @@ Paper strategy runs print analysis logs by default. Live mode defaults analysis
 logs off; add `--analysis-logs` during live debugging or `--no-analysis-logs`
 for compact long-running paper logs.
 
+When `--jsonl` is provided, rows are written to that file without echoing every
+row to stdout. Use `--tee-jsonl-stdout` only for short interactive debugging.
+Trade-level PnL is still available from entry/exit/reduce/dust/settlement rows;
+quiet tick rows do not repeat `realized_pnl` unless analysis logs are enabled.
+
 Current parameter files:
 
 - `configs/prob_edge_mvp.yaml`: conservative baseline/default config.

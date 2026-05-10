@@ -625,10 +625,13 @@ Normal long-running logs intentionally keep price diagnostics minimal: only the
 effective `price_source`, `s_price`, `k_price`, and `basis_bps` stay in the
 runtime row. The full DVOL snapshot is also omitted from normal tick rows; keep
 `sigma_eff`, `sigma_source`, and `volatility_stale` for replay compatibility.
-Tick rows include a compact `reference` object only when analysis logs are on,
-while a position is open, or when an exit decision needs that reference context.
-Idle long-running live ticks omit it to keep logs small. Full price-source
-diagnostics are reserved for analysis/order rows.
+Compact tick rows keep top-level Polymarket reference fields needed by replay:
+`polymarket_price`, `polymarket_price_age_sec`,
+`polymarket_reference_prob_up/down`, and `polymarket_divergence_bps` when those
+values are available. The nested `reference` object is only attached when
+analysis logs are on, or when an exit decision needs that extra context. Idle
+long-running live ticks omit it to keep logs small. Full price-source diagnostics
+are reserved for analysis/order rows.
 
 Live runs can also emit `clob_prefetch_failed` during startup or window
 switching. This means the latency-only CLOB metadata warmup failed on either
@@ -731,6 +734,11 @@ mode, and can be explicitly toggled with `--analysis-logs` or
 `--no-analysis-logs`. Use `--analysis-logs` for short live diagnostics only; it
 is intentionally not the quiet long-running live default.
 
+When `--jsonl <path>` is set, JSONL rows are written to the file only by
+default. This keeps companion `.out` files small when runs are launched through
+remote shells or process managers. Add `--tee-jsonl-stdout` only for temporary
+interactive debugging where duplicated stdout JSONL is useful.
+
 Entry/exit/order-no-fill rows also include strategy execution diagnostics in
 the same `analysis` object:
 
@@ -752,6 +760,12 @@ order total latency
 
 This makes paper runs directly usable for parameter analysis while allowing
 long-running live mode to keep debug-style fields disabled.
+
+PnL analysis should aggregate `entry`, `exit`, `position_reduce`,
+`dust_position`, and `settlement` rows. Quiet tick rows no longer repeat
+`realized_pnl` on every line unless `--analysis-logs` is enabled; this removes
+log bloat without removing the trade-level information needed to compute
+returns.
 
 The bot does not log private keys, API secrets, signed order payloads, or full
 order books.

@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs, snapshot_from_row
+from scripts.backtest_prob_edge import build_arg_parser, build_backtest_config
 
 
 def _row(slug: str, age: int, s_price: float | None, k_price: float | None = 100.0) -> dict:
@@ -294,6 +295,33 @@ def test_backtest_marks_boundary_uncertain_settlement() -> None:
     assert result.trades[0]["settlement_uncertain"] is True
 
 
+def test_backtest_settlement_prefers_fresh_polymarket_reference_price() -> None:
+    entry = _row("m1", 90, 101.00)
+    entry.update({
+        "event": "entry",
+        "analysis": {
+            "entry_side": "down",
+            "entry_price": 0.40,
+            "entry_model_prob": 0.70,
+            "entry_edge_signal": 0.30,
+        },
+        "order": {"success": True, "filled_size": 25.0, "avg_price": 0.40},
+    })
+    final = _row("m1", 299, 101.00)
+    final["polymarket_price"] = 99.00
+    final["polymarket_price_age_sec"] = 1.0
+    _disable_exit_depth(final)
+
+    result = run_backtest(
+        [entry, final],
+        BacktestConfig(amount_usd=10.0, honor_order_events=True, max_polymarket_price_age_sec=4.0),
+    )
+
+    assert result.summary["settlements"] == 1
+    assert result.trades[0]["settlement_source"] == "polymarket_reference"
+    assert result.trades[0]["pnl"] > 0
+
+
 def test_backtest_treats_stale_volatility_as_missing_model_input() -> None:
     rows = [_row("m1", 90, 100.10)]
     rows[0]["volatility_stale"] = True
@@ -452,3 +480,40 @@ def test_backtest_config_passes_weak_sk_entry_filter_to_strategy() -> None:
     assert edge_cfg.weak_sk_entry_filter_enabled is True
     assert edge_cfg.weak_sk_entry_min_ask == 0.36
     assert edge_cfg.weak_sk_entry_min_abs_sk_bps == 2.5
+
+
+def test_backtest_cli_config_loads_aggressive_yaml_defaults() -> None:
+    args = build_arg_parser().parse_args([
+        "--jsonl",
+        "dummy.jsonl",
+        "--config",
+        "configs/prob_edge_aggressive.yaml",
+    ])
+
+    cfg = build_backtest_config(args)
+
+    assert cfg.amount_usd == 1.0
+    assert cfg.entry_start_age_sec == 100
+    assert cfg.entry_end_age_sec == 240
+    assert cfg.min_entry_model_prob == 0.55
+    assert cfg.settlement_hold_enabled is True
+    assert cfg.max_polymarket_price_age_sec == 4.0
+
+
+def test_backtest_cli_config_allows_explicit_overrides() -> None:
+    args = build_arg_parser().parse_args([
+        "--jsonl",
+        "dummy.jsonl",
+        "--config",
+        "configs/prob_edge_aggressive.yaml",
+        "--entry-start-age-sec",
+        "120",
+        "--no-settlement-hold",
+    ])
+
+    cfg = build_backtest_config(args)
+
+    assert cfg.entry_start_age_sec == 120
+    assert cfg.entry_end_age_sec == 240
+    assert cfg.settlement_hold_enabled is False
+    assert cfg.min_entry_model_prob == 0.55

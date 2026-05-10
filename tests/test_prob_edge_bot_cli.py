@@ -14,9 +14,10 @@ from new_poly.bot_log_schema import (
     _entry_analysis,
     _exit_analysis,
 )
-from new_poly.bot_logging import _clob_diag_should_attach
+from new_poly.bot_logging import _clob_diag_should_attach, build_tick_row
 from new_poly.bot_runtime import (
     DvolRefreshState,
+    JsonlLogger,
     WindowPrices,
     _config_log_row,
     _polymarket_reference_unhealthy_row,
@@ -36,7 +37,7 @@ from new_poly.bot_runtime import (
     load_bot_config,
     prune_jsonl_by_retention,
 )
-from new_poly.bot_loop import LoopRuntime
+from new_poly.bot_loop import DvolRuntime, LoopRuntime
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.strategy.prob_edge import MarketSnapshot, PositionSnapshot, StrategyDecision
 from new_poly.strategy.state import StrategyState
@@ -146,6 +147,20 @@ def test_log_prune_every_windows_has_minimum_one() -> None:
     opts = build_runtime_options(args)
 
     assert opts.log_prune_every_windows == 1
+
+
+def test_tee_jsonl_stdout_defaults_off_when_file_is_set() -> None:
+    args = build_arg_parser().parse_args(["--once", "--jsonl", "data/run.jsonl"])
+    opts = build_runtime_options(args)
+
+    assert opts.tee_jsonl_stdout is False
+
+
+def test_tee_jsonl_stdout_can_be_enabled() -> None:
+    args = build_arg_parser().parse_args(["--once", "--jsonl", "data/run.jsonl", "--tee-jsonl-stdout"])
+    opts = build_runtime_options(args)
+
+    assert opts.tee_jsonl_stdout is True
 
 
 def test_aggressive_config_has_live_fak_safety_guards() -> None:
@@ -278,8 +293,6 @@ def test_prune_jsonl_by_retention_keeps_recent_and_unparseable_rows(tmp_path: Pa
 
 
 def test_logger_prune_does_not_reopen_when_retention_disabled(tmp_path: Path) -> None:
-    from new_poly.bot_runtime import JsonlLogger
-
     path = tmp_path / "run.jsonl"
     logger = JsonlLogger(path, retention_hours=None)
     handle = logger.handle
@@ -287,6 +300,130 @@ def test_logger_prune_does_not_reopen_when_retention_disabled(tmp_path: Path) ->
     assert logger.prune() == 0
     assert logger.handle is handle
     logger.close()
+
+
+def test_jsonl_logger_does_not_echo_to_stdout_when_path_is_set(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "run.jsonl"
+    logger = JsonlLogger(path, retention_hours=None)
+
+    logger.write({"event": "tick"})
+    logger.close()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert path.read_text(encoding="utf-8").strip() == '{"event":"tick"}'
+
+
+def test_jsonl_logger_can_tee_to_stdout_when_requested(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = tmp_path / "run.jsonl"
+    logger = JsonlLogger(path, retention_hours=None, tee_stdout=True)
+
+    logger.write({"event": "tick"})
+    logger.close()
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == '{"event":"tick"}'
+    assert path.read_text(encoding="utf-8").strip() == '{"event":"tick"}'
+
+
+def _dvol_runtime() -> DvolRuntime:
+    return DvolRuntime(
+        state=DvolRefreshState(current=_dvol(0.42)),
+        refresh_task=None,
+        refresh_market_slug=None,
+        next_refresh=0.0,
+    )
+
+
+def test_build_tick_row_is_compact_without_analysis_logs() -> None:
+    args = build_arg_parser().parse_args(["--mode", "live", "--i-understand-live-risk", "--once"])
+    opts = build_runtime_options(args)
+    meta = {
+        "ts": "2026-05-10T00:00:00+00:00",
+        "market_slug": "btc-updown-5m-1",
+        "window_start": "unused",
+        "window_end": "unused",
+        "age_sec": 120.0,
+        "remaining_sec": 180.0,
+        "price_source": "proxy_binance",
+        "s_price": 100100.0,
+        "k_price": 100000.0,
+        "basis_bps": 0.0,
+        "source_spread_bps": 1.2,
+        "polymarket_price": 100090.0,
+        "polymarket_price_age_sec": 0.8,
+        "polymarket_reference_prob_up": 0.61,
+        "polymarket_reference_prob_down": 0.39,
+        "polymarket_divergence_bps": 1.0,
+        "up": {
+            "bid": 0.51,
+            "ask": 0.52,
+            "ask_avg": 0.52,
+            "ask_limit": 0.52,
+            "bid_avg": 0.51,
+            "bid_limit": 0.51,
+            "bid_depth_ok": True,
+            "ask_age_ms": 20.0,
+            "bid_age_ms": 25.0,
+            "book_age_ms": 40.0,
+            "stable_depth_usd": 999.0,
+            "ask_safety_limit": 0.54,
+        },
+        "down": {"bid": 0.47, "ask": 0.48, "ask_avg": 0.48, "bid_avg": 0.47},
+    }
+    state = StrategyState()
+    state.realized_pnl = 12.34
+
+    row = build_tick_row(
+        meta,
+        options=opts,
+        dvol=_dvol_runtime(),
+        state=state,
+        sigma_eff=0.42,
+        dvol_stale=False,
+    )
+
+    assert row["event"] == "tick"
+    assert row["up"]["ask"] == 0.52
+    assert row["up"]["ask_limit"] == 0.52
+    assert row["up"]["bid_depth_ok"] is True
+    assert row["polymarket_price"] == 100090.0
+    assert row["polymarket_reference_prob_up"] == 0.61
+    assert row["polymarket_divergence_bps"] == 1.0
+    assert "window_start" not in row
+    assert "position" not in row
+    assert "realized_pnl" not in row
+    assert "stable_depth_usd" not in row["up"]
+    assert "ask_safety_limit" not in row["up"]
+
+
+def test_build_tick_row_keeps_position_pnl_for_analysis_logs() -> None:
+    args = build_arg_parser().parse_args(["--once", "--analysis-logs"])
+    opts = build_runtime_options(args)
+    state = StrategyState()
+    state.realized_pnl = 1.23
+    state.open_position = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=100.0,
+        entry_avg_price=0.4,
+        filled_shares=2.0,
+        entry_model_prob=0.6,
+        entry_edge=0.2,
+    )
+
+    row = build_tick_row(
+        {"ts": "now", "market_slug": "m1", "up": {}, "down": {}},
+        options=opts,
+        dvol=_dvol_runtime(),
+        state=state,
+        sigma_eff=0.42,
+        dvol_stale=False,
+    )
+
+    assert row["position"]["token_side"] == "up"
+    assert row["realized_pnl"] == 1.23
 
 
 def test_dynamic_payload_helpers_return_explicit_shapes() -> None:
@@ -666,7 +803,7 @@ def test_reference_meta_only_attaches_for_analysis_or_active_risk_context() -> N
     hold_decision = StrategyDecision(action="hold", reason="edge_intact")
 
     assert _should_attach_reference_meta(reference, analysis_logs=True, has_position=False, decision=None) is True
-    assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=True, decision=hold_decision) is True
+    assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=True, decision=hold_decision) is False
     assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=False, decision=exit_decision) is True
     assert _should_attach_reference_meta(reference, analysis_logs=False, has_position=False, decision=None) is False
     assert _should_attach_reference_meta({}, analysis_logs=True, has_position=True, decision=hold_decision) is False

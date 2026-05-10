@@ -6,12 +6,30 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs
+from new_poly.bot_runtime import _backtest_base_config, load_bot_config
+
+
+class TrackingArgumentParser(argparse.ArgumentParser):
+    def parse_args(self, args=None, namespace=None):  # type: ignore[override]
+        source_args = list(sys.argv[1:] if args is None else args)
+        parsed = super().parse_args(args, namespace)
+        provided: set[str] = set()
+        for token in source_args:
+            if not token.startswith("--"):
+                continue
+            option = token.split("=", 1)[0]
+            action = self._option_string_actions.get(option)
+            if action is not None:
+                provided.add(action.dest)
+        setattr(parsed, "_provided_options", provided)
+        return parsed
 
 
 def _float_list(value: str) -> list[float]:
@@ -36,8 +54,9 @@ def _counts(items: list[dict[str, Any]], key: str) -> dict[str, int]:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Replay probability-edge strategy from collector JSONL")
+    parser = TrackingArgumentParser(description="Replay probability-edge strategy from collector JSONL")
     parser.add_argument("--jsonl", type=Path, required=True)
+    parser.add_argument("--config", type=Path, help="Load bot YAML defaults before applying explicit CLI overrides.")
     parser.add_argument("--amount-usd", type=float, default=5.0)
     parser.add_argument("--early-required-edge", type=float, default=0.16)
     parser.add_argument("--core-required-edge", type=float, default=0.14)
@@ -123,86 +142,104 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_backtest_config(args: argparse.Namespace) -> BacktestConfig:
+    provided = set(getattr(args, "_provided_options", set()))
+    has_config = args.config is not None
+    cfg = _backtest_base_config(load_bot_config(args.config)) if has_config else BacktestConfig()
+
+    def use(dest: str) -> bool:
+        return not has_config or dest in provided
+
+    buy_slippage_ticks = args.slippage_ticks if args.buy_slippage_ticks is None else args.buy_slippage_ticks
+    sell_slippage_ticks = args.slippage_ticks if args.sell_slippage_ticks is None else args.sell_slippage_ticks
+    updates: dict[str, Any] = {}
+    mappings = {
+        "amount_usd": "amount_usd",
+        "early_required_edge": "early_required_edge",
+        "core_required_edge": "core_required_edge",
+        "model_decay_buffer": "model_decay_buffer",
+        "entry_start_age_sec": "entry_start_age_sec",
+        "entry_end_age_sec": "entry_end_age_sec",
+        "dynamic_entry": "dynamic_entry_enabled",
+        "fast_move_entry_start_age_sec": "fast_move_entry_start_age_sec",
+        "fast_move_min_abs_sk_usd": "fast_move_min_abs_sk_usd",
+        "fast_move_required_edge": "fast_move_required_edge",
+        "strong_move_entry_start_age_sec": "strong_move_entry_start_age_sec",
+        "strong_move_min_abs_sk_usd": "strong_move_min_abs_sk_usd",
+        "strong_move_required_edge": "strong_move_required_edge",
+        "max_entries_per_market": "max_entries_per_market",
+        "tick_size": "tick_size",
+        "sell_price_buffer_ticks": "sell_price_buffer_ticks",
+        "sell_retry_price_buffer_ticks": "sell_retry_price_buffer_ticks",
+        "sell_dynamic_buffer_enabled": "sell_dynamic_buffer_enabled",
+        "sell_profit_exit_buffer_ticks": "sell_profit_exit_buffer_ticks",
+        "sell_profit_exit_retry_buffer_ticks": "sell_profit_exit_retry_buffer_ticks",
+        "sell_risk_exit_buffer_ticks": "sell_risk_exit_buffer_ticks",
+        "sell_risk_exit_retry_buffer_ticks": "sell_risk_exit_retry_buffer_ticks",
+        "sell_force_exit_buffer_ticks": "sell_force_exit_buffer_ticks",
+        "sell_force_exit_retry_buffer_ticks": "sell_force_exit_retry_buffer_ticks",
+        "prob_drop_exit_window_sec": "prob_drop_exit_window_sec",
+        "prob_drop_exit_threshold": "prob_drop_exit_threshold",
+        "final_force_exit_remaining_sec": "final_force_exit_remaining_sec",
+        "defensive_take_profit_enabled": "defensive_take_profit_enabled",
+        "cross_source_max_bps": "cross_source_max_bps",
+        "market_disagrees_exit_threshold": "market_disagrees_exit_threshold",
+        "low_price_market_disagrees_entry_threshold": "low_price_market_disagrees_entry_threshold",
+        "low_price_market_disagrees_exit_threshold": "low_price_market_disagrees_exit_threshold",
+        "market_disagrees_exit_max_remaining_sec": "market_disagrees_exit_max_remaining_sec",
+        "market_disagrees_exit_min_loss": "market_disagrees_exit_min_loss",
+        "market_disagrees_exit_min_age_sec": "market_disagrees_exit_min_age_sec",
+        "market_disagrees_exit_max_profit": "market_disagrees_exit_max_profit",
+        "market_disagrees_exit_min_model_drop": "market_disagrees_exit_min_model_drop",
+        "polymarket_divergence_exit_bps": "polymarket_divergence_exit_bps",
+        "polymarket_divergence_exit_min_age_sec": "polymarket_divergence_exit_min_age_sec",
+        "max_polymarket_price_age_sec": "max_polymarket_price_age_sec",
+        "settlement_hold_enabled": "settlement_hold_enabled",
+        "settlement_hold_min_reference_prob": "settlement_hold_min_reference_prob",
+        "settlement_hold_high_bid_min": "settlement_hold_high_bid_min",
+        "settlement_hold_profit_ratio": "settlement_hold_profit_ratio",
+        "settlement_hold_profit_abs": "settlement_hold_profit_abs",
+        "honor_order_events": "honor_order_events",
+        "settlement_boundary_usd": "settlement_boundary_usd",
+        "min_fair_cap_margin_ticks": "min_fair_cap_margin_ticks",
+        "entry_tick_size": "entry_tick_size",
+        "min_entry_model_prob": "min_entry_model_prob",
+        "low_price_extra_edge_threshold": "low_price_extra_edge_threshold",
+        "low_price_extra_edge": "low_price_extra_edge",
+        "weak_sk_entry_filter_enabled": "weak_sk_entry_filter_enabled",
+        "weak_sk_entry_min_ask": "weak_sk_entry_min_ask",
+        "weak_sk_entry_min_abs_sk_bps": "weak_sk_entry_min_abs_sk_bps",
+        "buy_cap_relax_enabled": "buy_cap_relax_enabled",
+        "buy_low_price_relax_max_ask": "buy_low_price_relax_max_ask",
+        "buy_low_price_relax_min_prob": "buy_low_price_relax_min_prob",
+        "buy_low_price_relax_retained_edge": "buy_low_price_relax_retained_edge",
+        "buy_low_price_relax_max_extra_ticks": "buy_low_price_relax_max_extra_ticks",
+        "buy_mid_price_relax_max_ask": "buy_mid_price_relax_max_ask",
+        "buy_mid_price_relax_min_prob": "buy_mid_price_relax_min_prob",
+        "buy_mid_price_relax_retained_edge": "buy_mid_price_relax_retained_edge",
+        "buy_mid_price_relax_max_extra_ticks": "buy_mid_price_relax_max_extra_ticks",
+        "buy_mid_strong_relax_min_prob": "buy_mid_strong_relax_min_prob",
+        "buy_mid_strong_relax_retained_edge": "buy_mid_strong_relax_retained_edge",
+        "buy_mid_strong_relax_max_extra_ticks": "buy_mid_strong_relax_max_extra_ticks",
+        "buy_high_price_relax_min_ask": "buy_high_price_relax_min_ask",
+        "buy_high_price_relax_min_prob": "buy_high_price_relax_min_prob",
+        "buy_high_price_relax_retained_edge": "buy_high_price_relax_retained_edge",
+        "buy_high_price_relax_max_extra_ticks": "buy_high_price_relax_max_extra_ticks",
+    }
+    for dest, field in mappings.items():
+        if use(dest):
+            updates[field] = getattr(args, dest)
+    if use("slippage_ticks") or use("buy_slippage_ticks"):
+        updates["buy_slippage_ticks"] = buy_slippage_ticks
+    if use("slippage_ticks") or use("sell_slippage_ticks"):
+        updates["sell_slippage_ticks"] = sell_slippage_ticks
+    return replace(cfg, **updates)
+
+
 def main() -> int:
     args = build_arg_parser().parse_args()
     rows = load_rows(args.jsonl)
-    buy_slippage_ticks = args.slippage_ticks if args.buy_slippage_ticks is None else args.buy_slippage_ticks
-    sell_slippage_ticks = args.slippage_ticks if args.sell_slippage_ticks is None else args.sell_slippage_ticks
-    cfg = BacktestConfig(
-        amount_usd=args.amount_usd,
-        early_required_edge=args.early_required_edge,
-        core_required_edge=args.core_required_edge,
-        model_decay_buffer=args.model_decay_buffer,
-        entry_start_age_sec=args.entry_start_age_sec,
-        entry_end_age_sec=args.entry_end_age_sec,
-        dynamic_entry_enabled=args.dynamic_entry,
-        fast_move_entry_start_age_sec=args.fast_move_entry_start_age_sec,
-        fast_move_min_abs_sk_usd=args.fast_move_min_abs_sk_usd,
-        fast_move_required_edge=args.fast_move_required_edge,
-        strong_move_entry_start_age_sec=args.strong_move_entry_start_age_sec,
-        strong_move_min_abs_sk_usd=args.strong_move_min_abs_sk_usd,
-        strong_move_required_edge=args.strong_move_required_edge,
-        max_entries_per_market=args.max_entries_per_market,
-        tick_size=args.tick_size,
-        buy_slippage_ticks=buy_slippage_ticks,
-        sell_slippage_ticks=sell_slippage_ticks,
-        sell_price_buffer_ticks=args.sell_price_buffer_ticks,
-        sell_retry_price_buffer_ticks=args.sell_retry_price_buffer_ticks,
-        sell_dynamic_buffer_enabled=args.sell_dynamic_buffer_enabled,
-        sell_profit_exit_buffer_ticks=args.sell_profit_exit_buffer_ticks,
-        sell_profit_exit_retry_buffer_ticks=args.sell_profit_exit_retry_buffer_ticks,
-        sell_risk_exit_buffer_ticks=args.sell_risk_exit_buffer_ticks,
-        sell_risk_exit_retry_buffer_ticks=args.sell_risk_exit_retry_buffer_ticks,
-        sell_force_exit_buffer_ticks=args.sell_force_exit_buffer_ticks,
-        sell_force_exit_retry_buffer_ticks=args.sell_force_exit_retry_buffer_ticks,
-        prob_drop_exit_window_sec=args.prob_drop_exit_window_sec,
-        prob_drop_exit_threshold=args.prob_drop_exit_threshold,
-        final_force_exit_remaining_sec=args.final_force_exit_remaining_sec,
-        defensive_take_profit_enabled=args.defensive_take_profit_enabled,
-        cross_source_max_bps=args.cross_source_max_bps,
-        market_disagrees_exit_threshold=args.market_disagrees_exit_threshold,
-        low_price_market_disagrees_entry_threshold=args.low_price_market_disagrees_entry_threshold,
-        low_price_market_disagrees_exit_threshold=args.low_price_market_disagrees_exit_threshold,
-        market_disagrees_exit_max_remaining_sec=args.market_disagrees_exit_max_remaining_sec,
-        market_disagrees_exit_min_loss=args.market_disagrees_exit_min_loss,
-        market_disagrees_exit_min_age_sec=args.market_disagrees_exit_min_age_sec,
-        market_disagrees_exit_max_profit=args.market_disagrees_exit_max_profit,
-        market_disagrees_exit_min_model_drop=args.market_disagrees_exit_min_model_drop,
-        polymarket_divergence_exit_bps=args.polymarket_divergence_exit_bps,
-        polymarket_divergence_exit_min_age_sec=args.polymarket_divergence_exit_min_age_sec,
-        max_polymarket_price_age_sec=args.max_polymarket_price_age_sec,
-        settlement_hold_enabled=args.settlement_hold_enabled,
-        settlement_hold_min_reference_prob=args.settlement_hold_min_reference_prob,
-        settlement_hold_high_bid_min=args.settlement_hold_high_bid_min,
-        settlement_hold_profit_ratio=args.settlement_hold_profit_ratio,
-        settlement_hold_profit_abs=args.settlement_hold_profit_abs,
-        honor_order_events=args.honor_order_events,
-        settlement_boundary_usd=args.settlement_boundary_usd,
-        min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,
-        entry_tick_size=args.entry_tick_size,
-        min_entry_model_prob=args.min_entry_model_prob,
-        low_price_extra_edge_threshold=args.low_price_extra_edge_threshold,
-        low_price_extra_edge=args.low_price_extra_edge,
-        weak_sk_entry_filter_enabled=args.weak_sk_entry_filter_enabled,
-        weak_sk_entry_min_ask=args.weak_sk_entry_min_ask,
-        weak_sk_entry_min_abs_sk_bps=args.weak_sk_entry_min_abs_sk_bps,
-        buy_cap_relax_enabled=args.buy_cap_relax_enabled,
-        buy_low_price_relax_max_ask=args.buy_low_price_relax_max_ask,
-        buy_low_price_relax_min_prob=args.buy_low_price_relax_min_prob,
-        buy_low_price_relax_retained_edge=args.buy_low_price_relax_retained_edge,
-        buy_low_price_relax_max_extra_ticks=args.buy_low_price_relax_max_extra_ticks,
-        buy_mid_price_relax_max_ask=args.buy_mid_price_relax_max_ask,
-        buy_mid_price_relax_min_prob=args.buy_mid_price_relax_min_prob,
-        buy_mid_price_relax_retained_edge=args.buy_mid_price_relax_retained_edge,
-        buy_mid_price_relax_max_extra_ticks=args.buy_mid_price_relax_max_extra_ticks,
-        buy_mid_strong_relax_min_prob=args.buy_mid_strong_relax_min_prob,
-        buy_mid_strong_relax_retained_edge=args.buy_mid_strong_relax_retained_edge,
-        buy_mid_strong_relax_max_extra_ticks=args.buy_mid_strong_relax_max_extra_ticks,
-        buy_high_price_relax_min_ask=args.buy_high_price_relax_min_ask,
-        buy_high_price_relax_min_prob=args.buy_high_price_relax_min_prob,
-        buy_high_price_relax_retained_edge=args.buy_high_price_relax_retained_edge,
-        buy_high_price_relax_max_extra_ticks=args.buy_high_price_relax_max_extra_ticks,
-    )
+    cfg = build_backtest_config(args)
     result = run_backtest(rows, cfg)
     payload: dict[str, Any] = {
         "source": str(args.jsonl),

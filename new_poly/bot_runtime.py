@@ -120,6 +120,7 @@ class RuntimeOptions:
     dynamic_state: Path = DEFAULT_DYNAMIC_STATE
     log_retention_hours: float | None = 24.0
     log_prune_every_windows: int = 5
+    tee_jsonl_stdout: bool = False
 
 
 @dataclass
@@ -140,10 +141,11 @@ class DvolRefreshState:
 
 
 class JsonlLogger:
-    def __init__(self, path: Path | None, *, retention_hours: float | None = 24.0) -> None:
+    def __init__(self, path: Path | None, *, retention_hours: float | None = 24.0, tee_stdout: bool = False) -> None:
         self.handle = None
         self.path = path
         self.retention_hours = retention_hours
+        self.tee_stdout = tee_stdout
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
             prune_jsonl_by_retention(path, retention_hours=retention_hours)
@@ -151,7 +153,8 @@ class JsonlLogger:
 
     def write(self, row: dict[str, Any]) -> None:
         line = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
-        print(line, flush=True)
+        if self.path is None or self.tee_stdout:
+            print(line, flush=True)
         if self.handle is not None:
             self.handle.write(line + "\n")
             self.handle.flush()
@@ -446,6 +449,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dynamic-state", type=Path, default=DEFAULT_DYNAMIC_STATE)
     parser.add_argument("--log-retention-hours", type=float, default=24.0, help="Prune JSONL rows older than this many hours; <=0 disables pruning")
     parser.add_argument("--log-prune-every-windows", type=int, default=5, help="Run JSONL retention pruning every N completed windows")
+    parser.add_argument("--tee-jsonl-stdout", action="store_true", help="Also print JSONL rows to stdout when --jsonl is set.")
     parser.add_argument("--coinbase", dest="coinbase_enabled", action="store_true", default=None)
     parser.add_argument("--no-coinbase", dest="coinbase_enabled", action="store_false")
     parser.add_argument("--polymarket-price", dest="polymarket_price_enabled", action="store_true", default=None)
@@ -509,6 +513,7 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         dynamic_state=args.dynamic_state,
         log_retention_hours=(float(args.log_retention_hours) if args.log_retention_hours and args.log_retention_hours > 0 else None),
         log_prune_every_windows=max(1, int(args.log_prune_every_windows)),
+        tee_jsonl_stdout=bool(args.tee_jsonl_stdout),
     )
 
 
@@ -672,7 +677,7 @@ def _should_attach_reference_meta(
 ) -> bool:
     if not reference_meta:
         return False
-    if analysis_logs or has_position:
+    if analysis_logs:
         return True
     return decision is not None and decision.action == "exit"
 
@@ -852,8 +857,18 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         amount_usd=cfg.amount_usd,
         early_required_edge=cfg.edge.early_required_edge,
         core_required_edge=cfg.edge.core_required_edge,
+        early_to_core_age_sec=cfg.edge.early_to_core_age_sec,
+        core_to_late_age_sec=cfg.edge.core_to_late_age_sec,
+        model_decay_buffer=cfg.edge.model_decay_buffer,
         entry_start_age_sec=cfg.edge.entry_start_age_sec,
         entry_end_age_sec=cfg.edge.entry_end_age_sec,
+        dynamic_entry_enabled=cfg.edge.dynamic_entry_enabled,
+        fast_move_entry_start_age_sec=cfg.edge.fast_move_entry_start_age_sec,
+        fast_move_min_abs_sk_usd=cfg.edge.fast_move_min_abs_sk_usd,
+        fast_move_required_edge=cfg.edge.fast_move_required_edge,
+        strong_move_entry_start_age_sec=cfg.edge.strong_move_entry_start_age_sec,
+        strong_move_min_abs_sk_usd=cfg.edge.strong_move_min_abs_sk_usd,
+        strong_move_required_edge=cfg.edge.strong_move_required_edge,
         max_book_age_ms=cfg.edge.max_book_age_ms,
         max_entries_per_market=cfg.edge.max_entries_per_market,
         late_entry_enabled=cfg.edge.late_entry_enabled,
@@ -861,6 +876,13 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         sell_slippage_ticks=0.0,
         sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
         sell_retry_price_buffer_ticks=cfg.execution.sell_retry_price_buffer_ticks,
+        sell_dynamic_buffer_enabled=cfg.execution.sell_dynamic_buffer_enabled,
+        sell_profit_exit_buffer_ticks=cfg.execution.sell_profit_exit_buffer_ticks,
+        sell_profit_exit_retry_buffer_ticks=cfg.execution.sell_profit_exit_retry_buffer_ticks,
+        sell_risk_exit_buffer_ticks=cfg.execution.sell_risk_exit_buffer_ticks,
+        sell_risk_exit_retry_buffer_ticks=cfg.execution.sell_risk_exit_retry_buffer_ticks,
+        sell_force_exit_buffer_ticks=cfg.execution.sell_force_exit_buffer_ticks,
+        sell_force_exit_retry_buffer_ticks=cfg.execution.sell_force_exit_retry_buffer_ticks,
         prob_drop_exit_window_sec=cfg.edge.prob_drop_exit_window_sec,
         prob_drop_exit_threshold=cfg.edge.prob_drop_exit_threshold,
         final_force_exit_remaining_sec=cfg.edge.final_force_exit_remaining_sec,
@@ -878,6 +900,22 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         weak_sk_entry_filter_enabled=cfg.edge.weak_sk_entry_filter_enabled,
         weak_sk_entry_min_ask=cfg.edge.weak_sk_entry_min_ask,
         weak_sk_entry_min_abs_sk_bps=cfg.edge.weak_sk_entry_min_abs_sk_bps,
+        buy_cap_relax_enabled=cfg.edge.buy_cap_relax_enabled,
+        buy_low_price_relax_max_ask=cfg.edge.buy_low_price_relax_max_ask,
+        buy_low_price_relax_min_prob=cfg.edge.buy_low_price_relax_min_prob,
+        buy_low_price_relax_retained_edge=cfg.edge.buy_low_price_relax_retained_edge,
+        buy_low_price_relax_max_extra_ticks=cfg.edge.buy_low_price_relax_max_extra_ticks,
+        buy_mid_price_relax_max_ask=cfg.edge.buy_mid_price_relax_max_ask,
+        buy_mid_price_relax_min_prob=cfg.edge.buy_mid_price_relax_min_prob,
+        buy_mid_price_relax_retained_edge=cfg.edge.buy_mid_price_relax_retained_edge,
+        buy_mid_price_relax_max_extra_ticks=cfg.edge.buy_mid_price_relax_max_extra_ticks,
+        buy_mid_strong_relax_min_prob=cfg.edge.buy_mid_strong_relax_min_prob,
+        buy_mid_strong_relax_retained_edge=cfg.edge.buy_mid_strong_relax_retained_edge,
+        buy_mid_strong_relax_max_extra_ticks=cfg.edge.buy_mid_strong_relax_max_extra_ticks,
+        buy_high_price_relax_min_ask=cfg.edge.buy_high_price_relax_min_ask,
+        buy_high_price_relax_min_prob=cfg.edge.buy_high_price_relax_min_prob,
+        buy_high_price_relax_retained_edge=cfg.edge.buy_high_price_relax_retained_edge,
+        buy_high_price_relax_max_extra_ticks=cfg.edge.buy_high_price_relax_max_extra_ticks,
         cross_source_max_bps=cfg.edge.cross_source_max_bps,
         market_disagrees_exit_threshold=cfg.edge.market_disagrees_exit_threshold,
         low_price_market_disagrees_entry_threshold=cfg.edge.low_price_market_disagrees_entry_threshold,

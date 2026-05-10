@@ -266,18 +266,31 @@ def snapshot_from_row(row: dict[str, Any], *, max_polymarket_price_age_sec: floa
     )
 
 
-def _settlement(rows: list[dict[str, Any]], *, boundary_usd: float) -> dict[str, Any]:
+def _settlement(rows: list[dict[str, Any]], *, boundary_usd: float, max_polymarket_price_age_sec: float = 4.0) -> dict[str, Any]:
     if not rows:
         return {"winning_side": None, "settlement_uncertain": True}
     last = rows[-1]
-    s_price = _float(last.get("s_price"))
     k_price = _float(last.get("k_price"))
-    if s_price is None or k_price is None:
+    analysis_sources = (last.get("analysis") or {}).get("price_sources", {})
+    polymarket_price = _first_float(last.get("polymarket_price"), analysis_sources.get("polymarket_price"))
+    polymarket_price_age_sec = _first_float(last.get("polymarket_price_age_sec"), analysis_sources.get("polymarket_price_age_sec"))
+    if (
+        polymarket_price is not None
+        and polymarket_price_age_sec is not None
+        and polymarket_price_age_sec <= max_polymarket_price_age_sec
+    ):
+        settlement_price = polymarket_price
+        settlement_source = "polymarket_reference"
+    else:
+        settlement_price = _float(last.get("s_price"))
+        settlement_source = "s_price"
+    if settlement_price is None or k_price is None:
         return {"winning_side": None, "settlement_uncertain": True}
     return {
-        "winning_side": "up" if s_price > k_price else "down",
-        "settlement_uncertain": abs(s_price - k_price) < boundary_usd,
-        "settlement_price": s_price,
+        "winning_side": "up" if settlement_price > k_price else "down",
+        "settlement_source": settlement_source,
+        "settlement_uncertain": abs(settlement_price - k_price) < boundary_usd,
+        "settlement_price": settlement_price,
         "settlement_k_price": k_price,
     }
 
@@ -589,7 +602,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     entries += 1
 
         if state.has_position and state.open_position is not None and active_trade is not None:
-            settlement = _settlement(group, boundary_usd=cfg.settlement_boundary_usd)
+            settlement = _settlement(group, boundary_usd=cfg.settlement_boundary_usd, max_polymarket_price_age_sec=cfg.max_polymarket_price_age_sec)
             winning_side = settlement.get("winning_side")
             if winning_side is not None:
                 pnl = state.record_settlement(winning_side)
@@ -603,6 +616,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     "hold_sec": 300.0 - active_trade["entry_age_sec"],
                     "winning_side": winning_side,
                     "settlement_uncertain": is_uncertain,
+                    "settlement_source": settlement.get("settlement_source"),
                     "settlement_price": settlement.get("settlement_price"),
                     "settlement_k_price": settlement.get("settlement_k_price"),
                 })

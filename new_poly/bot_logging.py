@@ -9,12 +9,33 @@ from new_poly.bot_loop import DvolRuntime, LoopRuntime
 from new_poly.bot_runtime import (
     JsonlLogger,
     RuntimeOptions,
-    _runtime_log_meta,
     _should_attach_reference_meta,
     _should_write_row,
 )
 from new_poly.strategy.prob_edge import StrategyDecision
 from new_poly.strategy.state import StrategyState
+
+
+def _compact_token_state(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    fields = (
+        "bid",
+        "ask",
+        "ask_avg",
+        "ask_limit",
+        "bid_avg",
+        "bid_limit",
+        "bid_depth_ok",
+        "ask_age_ms",
+        "bid_age_ms",
+        "book_age_ms",
+    )
+    return {
+        key: value.get(key)
+        for key in fields
+        if key in value and value.get(key) is not None
+    }
 
 
 def build_tick_row(
@@ -27,15 +48,35 @@ def build_tick_row(
     dvol_stale: bool,
 ) -> dict[str, Any]:
     row = {
-        **_runtime_log_meta(meta),
+        "ts": meta.get("ts"),
+        "market_slug": meta.get("market_slug"),
+        "age_sec": meta.get("age_sec"),
+        "remaining_sec": meta.get("remaining_sec"),
+        "price_source": meta.get("price_source"),
+        "s_price": meta.get("s_price"),
+        "k_price": meta.get("k_price"),
+        "basis_bps": meta.get("basis_bps"),
         "mode": options.mode,
         "event": "tick",
         "sigma_source": dvol.state.current.source if dvol.state.current is not None else "missing",
         "sigma_eff": _compact(sigma_eff),
         "volatility_stale": dvol_stale,
-        "position": _position_log(state.open_position, compact=True),
-        "realized_pnl": _compact(state.realized_pnl, 4),
+        "up": _compact_token_state(meta.get("up")),
+        "down": _compact_token_state(meta.get("down")),
     }
+    for key in (
+        "source_spread_bps",
+        "polymarket_price",
+        "polymarket_price_age_sec",
+        "polymarket_reference_prob_up",
+        "polymarket_reference_prob_down",
+        "polymarket_divergence_bps",
+    ):
+        if meta.get(key) is not None:
+            row[key] = meta.get(key)
+    if options.analysis_logs:
+        row["position"] = _position_log(state.open_position, compact=True)
+        row["realized_pnl"] = _compact(state.realized_pnl, 4)
     if isinstance(meta.get("clob_ws"), dict):
         row["_clob_ws"] = meta["clob_ws"]
     return row

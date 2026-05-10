@@ -425,6 +425,12 @@ Logging:
 
 - Analysis-heavy fields should be emitted for paper/dry-run and short live
   diagnostics, not as permanent noisy live logs.
+- When `--jsonl` is set, the bot writes JSONL rows to that file without echoing
+  every row to stdout. Use `--tee-jsonl-stdout` only for short interactive
+  debugging.
+- Compact tick rows should keep only replay-critical top-level fields. Keep
+  realized PnL and position details on trade/settlement rows or analysis logs,
+  not every quiet live tick.
 - Log entry lifecycle as `order_intent` before BUY POST and then the resulting
   `entry` or entry `order_no_fill` event. Log SELL attempts as `exit_intent`
   before POST so buy-intent/fill-rate statistics do not mix with normal
