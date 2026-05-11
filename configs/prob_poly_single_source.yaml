@@ -32,11 +32,11 @@ poly_source:
   late_depth_min_bid_avg: 0.20
   late_depth_min_bid_limit: 0.15
   hold_to_settlement_enabled: true
-  hold_to_settlement_min_profit_ratio: 0.50
-  hold_to_settlement_min_bid_avg: 0.80
-  hold_to_settlement_min_bid_limit: 0.75
+  hold_to_settlement_min_profit_ratio: 0.0
+  hold_to_settlement_min_bid_avg: 0.78
+  hold_to_settlement_min_bid_limit: 0.72
   hold_to_settlement_min_reference_distance_bps: 1.0
-  hold_to_settlement_min_poly_return_bps: 0.0
+  hold_to_settlement_min_poly_return_bps: -0.3
 
 execution:
   amount_usd: 1.0
