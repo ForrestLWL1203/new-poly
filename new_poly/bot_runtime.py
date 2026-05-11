@@ -360,6 +360,8 @@ def load_bot_config(path: Path) -> BotConfig:
         market_disagrees_exit_min_model_drop=float(_deep_get(raw, ("strategy", "market_disagrees_exit_min_model_drop"), 0.0)),
         polymarket_divergence_exit_bps=float(_deep_get(raw, ("strategy", "polymarket_divergence_exit_bps"), 3.0)),
         polymarket_divergence_exit_min_age_sec=float(_deep_get(raw, ("strategy", "polymarket_divergence_exit_min_age_sec"), 3.0)),
+        entry_reference_confirm_bps=float(_deep_get(raw, ("strategy", "entry_reference_confirm_bps"), 0.0)),
+        exit_reference_adverse_bps=float(_deep_get(raw, ("strategy", "exit_reference_adverse_bps"), 0.0)),
         logic_decay_reentry_cooldown_sec=float(_deep_get(raw, ("strategy", "logic_decay_reentry_cooldown_sec"), 30.0)),
     )
     execution_raw = ExecutionConfig(
@@ -890,6 +892,8 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         defensive_take_profit_enabled=cfg.edge.defensive_take_profit_enabled,
         polymarket_divergence_exit_bps=cfg.edge.polymarket_divergence_exit_bps,
         polymarket_divergence_exit_min_age_sec=cfg.edge.polymarket_divergence_exit_min_age_sec,
+        entry_reference_confirm_bps=cfg.edge.entry_reference_confirm_bps,
+        exit_reference_adverse_bps=cfg.edge.exit_reference_adverse_bps,
         logic_decay_reentry_cooldown_sec=cfg.edge.logic_decay_reentry_cooldown_sec,
     )
 
@@ -995,6 +999,8 @@ def _snapshot(
         down_bid_age_ms=down.get("bid_age_ms"),
         source_spread_bps=price.spread_bps,
         polymarket_divergence_bps=lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps,
+        polymarket_price=price.polymarket,
+        polymarket_price_age_sec=price.polymarket_age_sec,
     )
     meta = {
         "ts": now.astimezone().isoformat(),

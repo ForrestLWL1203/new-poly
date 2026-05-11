@@ -96,6 +96,8 @@ class BacktestConfig:
     market_disagrees_exit_min_model_drop: float = 0.0
     polymarket_divergence_exit_bps: float = 3.0
     polymarket_divergence_exit_min_age_sec: float = 3.0
+    entry_reference_confirm_bps: float = 0.0
+    exit_reference_adverse_bps: float = 0.0
     logic_decay_reentry_cooldown_sec: float = 30.0
     honor_order_events: bool = False
 
@@ -168,6 +170,8 @@ class BacktestConfig:
             market_disagrees_exit_min_model_drop=self.market_disagrees_exit_min_model_drop,
             polymarket_divergence_exit_bps=self.polymarket_divergence_exit_bps,
             polymarket_divergence_exit_min_age_sec=self.polymarket_divergence_exit_min_age_sec,
+            entry_reference_confirm_bps=self.entry_reference_confirm_bps,
+            exit_reference_adverse_bps=self.exit_reference_adverse_bps,
             logic_decay_reentry_cooldown_sec=self.logic_decay_reentry_cooldown_sec,
         )
 
@@ -218,6 +222,7 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
     warnings = _warnings(row)
     s_price = None if "polymarket_ws_open_disagrees_with_api" in warnings else _float(row.get("s_price"))
     analysis_sources = (row.get("analysis") or {}).get("price_sources", {})
+    reference = row.get("reference") if isinstance(row.get("reference"), dict) else {}
     return MarketSnapshot(
         market_slug=str(row.get("market_slug") or ""),
         age_sec=float(row.get("age_sec") or 0.0),
@@ -245,9 +250,13 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
         polymarket_divergence_bps=_first_float(
             row.get("polymarket_divergence_bps"),
             row.get("lead_binance_vs_polymarket_bps"),
+            reference.get("polymarket_divergence_bps"),
+            reference.get("lead_binance_vs_polymarket_bps"),
             analysis_sources.get("polymarket_divergence_bps"),
             analysis_sources.get("lead_binance_vs_polymarket_bps"),
         ),
+        polymarket_price=_first_float(row.get("polymarket_price"), reference.get("polymarket_price"), analysis_sources.get("polymarket_price")),
+        polymarket_price_age_sec=_first_float(row.get("polymarket_price_age_sec"), reference.get("polymarket_price_age_sec"), analysis_sources.get("polymarket_price_age_sec")),
     )
 
 
@@ -387,6 +396,9 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
     entry_price = _float(analysis.get("entry_price")) or _float(order.get("avg_price"))
     model_prob = _float(analysis.get("entry_model_prob")) or _float((row.get("decision") or {}).get("model_prob"))
     edge = _float(analysis.get("entry_edge_signal")) or _float((row.get("decision") or {}).get("edge")) or 0.0
+    entry_polymarket_divergence_bps = _float(analysis.get("entry_polymarket_divergence_bps"))
+    entry_favorable_gap_bps = _float(analysis.get("entry_favorable_gap_bps"))
+    entry_reference_distance_bps = _float(analysis.get("entry_reference_distance_bps"))
     if side not in {"up", "down"} or entry_price is None or model_prob is None:
         return None
     shares = _float(order.get("filled_size")) or cfg.amount_usd / entry_price
@@ -400,6 +412,9 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
         filled_shares=shares,
         entry_model_prob=model_prob,
         entry_edge=edge,
+        entry_polymarket_divergence_bps=entry_polymarket_divergence_bps,
+        entry_favorable_gap_bps=entry_favorable_gap_bps,
+        entry_reference_distance_bps=entry_reference_distance_bps,
     )
     trade = {
         "market_slug": slug,
@@ -526,6 +541,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     active_trade = None
                     exits += 1
             else:
+                state.record_reference_baseline(snap)
                 decision = evaluate_entry(snap, state, edge_cfg)
                 if decision.action == "skip":
                     skip_reasons[decision.reason] += 1
@@ -553,6 +569,9 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         filled_shares=shares,
                         entry_model_prob=decision.model_prob,
                         entry_edge=decision.edge,
+                        entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
+                        entry_favorable_gap_bps=decision.favorable_gap_bps,
+                        entry_reference_distance_bps=decision.entry_reference_distance_bps,
                     ))
                     entry_phase = decision.phase or required_edge_for_entry(fill_snap, edge_cfg).phase
                     active_trade = {

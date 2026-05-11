@@ -505,6 +505,11 @@ def candidate_results_from_rows(rows: Iterable[dict[str, Any]], cfg: DynamicConf
                 market_disagrees_exit_min_loss=base.market_disagrees_exit_min_loss,
                 market_disagrees_exit_min_age_sec=base.market_disagrees_exit_min_age_sec,
                 market_disagrees_exit_max_profit=base.market_disagrees_exit_max_profit,
+                polymarket_divergence_exit_bps=base.polymarket_divergence_exit_bps,
+                polymarket_divergence_exit_min_age_sec=base.polymarket_divergence_exit_min_age_sec,
+                entry_reference_confirm_bps=base.entry_reference_confirm_bps,
+                exit_reference_adverse_bps=base.exit_reference_adverse_bps,
+                logic_decay_reentry_cooldown_sec=base.logic_decay_reentry_cooldown_sec,
             ),
         )
         summary = result.summary

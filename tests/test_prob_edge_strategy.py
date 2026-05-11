@@ -56,6 +56,47 @@ def test_binary_probability_uses_minimum_pre_expiry_time_guard() -> None:
     assert binary_probability(100.1, 100.0, 0.6, 0.0) == 1.0
 
 
+def test_adjusted_probability_shadow_logs_lead_follow_without_driving_entry(monkeypatch) -> None:
+    monkeypatch.setattr(prob_edge_module, "_probs", lambda snapshot: BinaryProbabilities(up=0.60, down=0.40, d2=None))
+    cfg = EdgeConfig(core_required_edge=0.14, min_entry_model_prob=0.0)
+    state = StrategyState(current_market_slug="m1")
+    state.record_reference_baseline(
+        MarketSnapshot(
+            market_slug="m1",
+            age_sec=100.0,
+            remaining_sec=200.0,
+            s_price=100.50,
+            k_price=100.0,
+            sigma_eff=0.55,
+            polymarket_price=100.30,
+            polymarket_divergence_bps=20.0,
+        )
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=130.0,
+        remaining_sec=170.0,
+        s_price=100.60,
+        k_price=100.0,
+        sigma_eff=0.55,
+        up_best_ask=0.50,
+        up_ask_avg=0.50,
+        down_best_ask=0.50,
+        down_ask_avg=0.50,
+        polymarket_price=100.40,
+        polymarket_divergence_bps=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "edge_too_small"
+    assert decision.up_prob == 0.60
+    assert decision.adjusted_up_prob_shadow is not None
+    assert decision.adjusted_up_prob_shadow > decision.up_prob
+    assert decision.lead_follow_state == "both_confirming"
+
+
 def test_strategy_state_tracks_peak_pnl_and_drawdown() -> None:
     state = StrategyState()
     state.record_entry(PositionSnapshot("m1", "up", "up-token", 1.0, 0.20, 10.0, 0.5, 0.3))
@@ -526,6 +567,107 @@ def test_low_price_entry_requires_extra_edge_when_configured() -> None:
     assert strict_decision.action == "skip"
     assert strict_decision.reason == "edge_too_small"
     assert math.isclose(strict_decision.required_edge or 0.0, 0.22)
+
+
+def test_entry_requires_polymarket_reference_confirmation_when_configured() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, entry_reference_confirm_bps=2.0)
+    state = StrategyState(current_market_slug="m1")
+    near_k = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.20,
+        k_price=100.0,
+        sigma_eff=0.55,
+        polymarket_price=100.01,
+        up_ask_avg=0.40,
+        up_ask_limit=0.40,
+        up_best_ask=0.40,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+    confirmed = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.20,
+        k_price=100.0,
+        sigma_eff=0.55,
+        polymarket_price=100.03,
+        up_ask_avg=0.40,
+        up_ask_limit=0.40,
+        up_best_ask=0.40,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    rejected = evaluate_entry(near_k, state, cfg)
+    accepted = evaluate_entry(confirmed, state, cfg)
+
+    assert rejected.action == "skip"
+    assert rejected.reason == "reference_not_confirmed"
+    assert accepted.action == "enter"
+    assert accepted.side == "up"
+
+
+def test_entry_allows_large_gap_when_it_supports_candidate_direction() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, entry_reference_confirm_bps=2.0, cross_source_max_bps=0.0)
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.40,
+        k_price=100.0,
+        sigma_eff=0.55,
+        polymarket_price=100.03,
+        polymarket_divergence_bps=36.988,
+        source_spread_bps=20.0,
+        up_ask_avg=0.40,
+        up_ask_limit=0.40,
+        up_best_ask=0.40,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "enter"
+    assert decision.side == "up"
+    assert decision.favorable_gap_bps is not None and decision.favorable_gap_bps > 0
+
+
+def test_entry_rejects_gap_that_conflicts_with_candidate_direction() -> None:
+    cfg = EdgeConfig(core_required_edge=0.05, entry_reference_confirm_bps=2.0)
+    state = StrategyState(current_market_slug="m1")
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=180.0,
+        remaining_sec=120.0,
+        s_price=100.40,
+        k_price=100.0,
+        sigma_eff=0.55,
+        polymarket_price=100.03,
+        polymarket_divergence_bps=-1.0,
+        up_ask_avg=0.40,
+        up_ask_limit=0.40,
+        up_best_ask=0.40,
+        down_ask_avg=0.90,
+        down_ask_limit=0.90,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    decision = evaluate_entry(snap, state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "gap_direction_conflict"
 
 
 def test_logic_decay_exit_blocks_same_side_reentry_during_cooldown() -> None:
@@ -1010,7 +1152,7 @@ def _divergence_snapshot(side: str, divergence_bps: float, age_sec: float = 130.
     )
 
 
-def test_polymarket_divergence_exit_triggers_only_when_adverse() -> None:
+def test_polymarket_divergence_gap_alone_does_not_trigger_exit() -> None:
     cfg = EdgeConfig(polymarket_divergence_exit_bps=3.0, polymarket_divergence_exit_min_age_sec=3.0)
 
     up_adverse = evaluate_exit(_divergence_snapshot("up", 3.2), _divergence_position("up"), cfg)
@@ -1018,12 +1160,8 @@ def test_polymarket_divergence_exit_triggers_only_when_adverse() -> None:
     up_favorable = evaluate_exit(_divergence_snapshot("up", -8.0), _divergence_position("up"), cfg)
     down_favorable = evaluate_exit(_divergence_snapshot("down", 8.0), _divergence_position("down"), cfg)
 
-    assert up_adverse.action == "exit"
-    assert up_adverse.reason == "polymarket_divergence_exit"
-    assert up_adverse.polymarket_divergence_bps == 3.2
-    assert down_adverse.action == "exit"
-    assert down_adverse.reason == "polymarket_divergence_exit"
-    assert down_adverse.polymarket_divergence_bps == -3.2
+    assert up_adverse.reason != "polymarket_divergence_exit"
+    assert down_adverse.reason != "polymarket_divergence_exit"
     assert up_favorable.reason != "polymarket_divergence_exit"
     assert down_favorable.reason != "polymarket_divergence_exit"
 
@@ -1047,6 +1185,91 @@ def test_polymarket_divergence_exit_respects_age_and_disable_switch() -> None:
 
     assert too_young.reason != "polymarket_divergence_exit"
     assert disabled.reason != "polymarket_divergence_exit"
+
+
+def test_reference_adverse_exit_requires_reference_to_cross_k_buffer() -> None:
+    cfg = EdgeConfig(
+        polymarket_divergence_exit_bps=3.0,
+        polymarket_divergence_exit_min_age_sec=3.0,
+        exit_reference_adverse_bps=2.0,
+    )
+    supported = MarketSnapshot(
+        market_slug="m1",
+        age_sec=130.0,
+        remaining_sec=170.0,
+        s_price=100.08,
+        k_price=100.0,
+        sigma_eff=2.0,
+        polymarket_price=100.03,
+        polymarket_divergence_bps=5.0,
+        up_bid_avg=0.42,
+        up_bid_limit=0.41,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+    adverse = MarketSnapshot(
+        market_slug="m1",
+        age_sec=130.0,
+        remaining_sec=170.0,
+        s_price=100.08,
+        k_price=100.0,
+        sigma_eff=2.0,
+        polymarket_price=99.97,
+        polymarket_divergence_bps=5.0,
+        up_bid_avg=0.42,
+        up_bid_limit=0.41,
+        up_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    hold = evaluate_exit(supported, _divergence_position("up"), cfg)
+    exit_decision = evaluate_exit(adverse, _divergence_position("up"), cfg)
+
+    assert hold.reason != "polymarket_divergence_exit"
+    assert exit_decision.reason == "reference_adverse_exit"
+
+
+def test_reference_adverse_exit_is_symmetric_for_down_positions() -> None:
+    cfg = EdgeConfig(exit_reference_adverse_bps=2.0)
+    pos = _divergence_position("down")
+    supported = MarketSnapshot(
+        market_slug="m1",
+        age_sec=130.0,
+        remaining_sec=170.0,
+        s_price=99.92,
+        k_price=100.0,
+        sigma_eff=2.0,
+        polymarket_price=99.97,
+        polymarket_divergence_bps=-5.0,
+        down_bid_avg=0.42,
+        down_bid_limit=0.41,
+        down_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+    adverse = MarketSnapshot(
+        market_slug="m1",
+        age_sec=130.0,
+        remaining_sec=170.0,
+        s_price=99.92,
+        k_price=100.0,
+        sigma_eff=2.0,
+        polymarket_price=100.03,
+        polymarket_divergence_bps=-5.0,
+        down_bid_avg=0.42,
+        down_bid_limit=0.41,
+        down_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+    )
+
+    hold = evaluate_exit(supported, pos, cfg)
+    exit_decision = evaluate_exit(adverse, pos, cfg)
+
+    assert hold.reason != "reference_adverse_exit"
+    assert exit_decision.reason == "reference_adverse_exit"
 
 
 def test_defensive_take_profit_requires_three_second_stagnation_history() -> None:
@@ -1275,11 +1498,12 @@ def test_final_model_hold_skips_force_exit_when_high_confidence_and_reference_no
     assert decision.model_prob is not None and decision.model_prob >= 0.80
 
 
-def test_final_model_hold_does_not_mask_adverse_polymarket_divergence() -> None:
+def test_final_model_hold_does_not_mask_reference_adverse_exit() -> None:
     cfg = EdgeConfig(
         final_force_exit_remaining_sec=30.0,
         final_model_hold_min_prob=0.80,
         polymarket_divergence_exit_bps=3.0,
+        exit_reference_adverse_bps=2.0,
     )
     pos = PositionSnapshot(
         market_slug="m1",
@@ -1302,13 +1526,14 @@ def test_final_model_hold_does_not_mask_adverse_polymarket_divergence() -> None:
         down_bid_limit=0.50,
         down_bid_depth_ok=True,
         down_bid_age_ms=10.0,
+        polymarket_price=100.03,
         polymarket_divergence_bps=-3.5,
     )
 
     decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
 
     assert decision.action == "exit"
-    assert decision.reason == "polymarket_divergence_exit"
+    assert decision.reason == "reference_adverse_exit"
 
 
 def test_hold_to_settlement_skips_take_profit_and_final_force_for_high_confidence_winner() -> None:
@@ -1366,7 +1591,7 @@ def test_hold_to_settlement_skips_take_profit_and_final_force_for_high_confidenc
     assert force_window.reason == "hold_to_settlement"
 
 
-def test_hold_to_settlement_does_not_mask_risk_exit() -> None:
+def test_hold_to_settlement_does_not_mask_reference_adverse_exit() -> None:
     cfg = EdgeConfig(
         hold_to_settlement_enabled=True,
         hold_to_settlement_min_profit_ratio=2.0,
@@ -1375,6 +1600,7 @@ def test_hold_to_settlement_does_not_mask_risk_exit() -> None:
         hold_to_settlement_min_bid_limit=0.75,
         polymarket_divergence_exit_bps=3.0,
         polymarket_divergence_exit_min_age_sec=3.0,
+        exit_reference_adverse_bps=2.0,
     )
     pos = PositionSnapshot(
         market_slug="m1",
@@ -1398,13 +1624,14 @@ def test_hold_to_settlement_does_not_mask_risk_exit() -> None:
         up_bid_depth_ok=True,
         up_book_age_ms=20.0,
         down_book_age_ms=20.0,
+        polymarket_price=99.97,
         polymarket_divergence_bps=5.0,
     )
 
     decision = evaluate_exit(snap, pos, cfg, StrategyState(current_market_slug="m1"))
 
     assert decision.action == "exit"
-    assert decision.reason == "polymarket_divergence_exit"
+    assert decision.reason == "reference_adverse_exit"
 
 
 def test_profit_exit_bands_are_configurable() -> None:

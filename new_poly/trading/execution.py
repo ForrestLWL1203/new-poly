@@ -17,6 +17,7 @@ BUY = "BUY"
 SELL = "SELL"
 RECONCILE_BALANCE_POLL_TIMEOUT_SEC = 1.5
 RECONCILE_BALANCE_POLL_INTERVAL_SEC = 0.25
+UNKNOWN_BUY_RECONCILE_DELAYS_SEC = (3.0, 6.0, 9.0)
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,44 @@ def _poll_token_balance(
     }
 
 
+def _delayed_token_balance_checks(
+    token_id: str,
+    is_ready: Callable[[float], bool],
+    *,
+    delays_sec: tuple[float, ...],
+    sent_at_epoch_ms: int | None,
+) -> tuple[float | None, dict[str, Any]]:
+    start = time.monotonic()
+    now_epoch_ms = int(time.time() * 1000)
+    if sent_at_epoch_ms is not None and abs(now_epoch_ms - sent_at_epoch_ms) <= 60_000:
+        elapsed_from_send = max(0.0, (now_epoch_ms - sent_at_epoch_ms) / 1000.0)
+    else:
+        elapsed_from_send = 0.0
+    checks = 0
+    query_ms = 0
+    last_balance: float | None = None
+    balances: list[float | None] = []
+    delays: list[float] = []
+    for delay in delays_sec:
+        wait_sec = max(0.0, float(delay) - elapsed_from_send - (time.monotonic() - start))
+        time.sleep(wait_sec)
+        balance, balance_ms = _timed_token_balance(token_id)
+        checks += 1
+        query_ms += balance_ms
+        last_balance = balance if balance is not None else last_balance
+        balances.append(round(balance, 6) if balance is not None else None)
+        delays.append(float(delay))
+        if balance is not None and is_ready(balance):
+            break
+    return last_balance, {
+        "reconcile_balance_ms": query_ms,
+        "reconcile_balance_poll_ms": _ms_since(start),
+        "reconcile_balance_checks": checks,
+        "reconcile_balance_delays_sec": delays,
+        "reconcile_balance_values": balances,
+    }
+
+
 def _dynamic_buy_price_hint(
     token_id: str,
     best_ask: float | None,
@@ -252,6 +291,7 @@ RISK_SELL_EXIT_REASONS = frozenset({
     "risk_exit",
     "market_disagrees_exit",
     "polymarket_divergence_exit",
+    "reference_adverse_exit",
     "prob_drop_exit",
 })
 
@@ -968,8 +1008,11 @@ class LiveFakExecutionGateway:
                         attempt=attempt + 1,
                         total_latency_ms=round((time.monotonic() - start) * 1000),
                     )
-                last = reconciled
-                starting_balance = before_balance
+                return _with_attempt(
+                    reconciled,
+                    attempt=attempt + 1,
+                    total_latency_ms=round((time.monotonic() - start) * 1000),
+                )
             if last.success or attempt >= self.retry_count:
                 return _with_attempt(last, attempt=attempt + 1, total_latency_ms=round((time.monotonic() - start) * 1000))
             if self.retry_interval_sec > 0:
@@ -1043,28 +1086,40 @@ class LiveFakExecutionGateway:
             bought = max(0.0, balance - before_balance)
             return bought >= min_size or balance >= min_size
 
-        after_balance, balance_timing = _poll_token_balance(token_id, ready)
-        if before_balance is None or after_balance is None:
+        sent_at = last.timing.get("sent_at_epoch_ms") if isinstance(last.timing, dict) else None
+        after_balance, balance_timing = _delayed_token_balance_checks(
+            token_id,
+            ready,
+            delays_sec=UNKNOWN_BUY_RECONCILE_DELAYS_SEC,
+            sent_at_epoch_ms=int(sent_at) if sent_at else None,
+        )
+        if after_balance is None:
             return replace(
                 last,
-                message=f"{last.message}; reconciliation balance unavailable",
-                timing={**last.timing, "reconciliation": "balance_unavailable", **balance_timing},
+                message=f"{last.message}; reconciliation no balance after delayed checks",
+                timing={
+                    **last.timing,
+                    "reconciliation": "unknown_buy_no_balance_after_delayed_checks",
+                    **balance_timing,
+                    "balance_before": round(before_balance, 6) if before_balance is not None else None,
+                    "balance_after": None,
+                    "min_adopt_buy_shares": round(min_size, 6),
+                },
             )
-        bought_by_balance = max(0.0, after_balance - before_balance)
+        bought_by_balance = max(0.0, after_balance - before_balance) if before_balance is not None else 0.0
         if bought_by_balance < max(1e-9, min_size) and after_balance < min_size:
             return replace(
                 last,
-                message=f"{last.message}; reconciliation no balance increase",
+                message=f"{last.message}; reconciliation no balance after delayed checks",
                 timing={
                     **last.timing,
-                    "reconciliation": "no_balance_increase",
+                    "reconciliation": "unknown_buy_no_balance_after_delayed_checks",
                     **balance_timing,
-                    "balance_before": round(before_balance, 6),
+                    "balance_before": round(before_balance, 6) if before_balance is not None else None,
                     "balance_after": round(after_balance, 6),
                     "min_adopt_buy_shares": round(min_size, 6),
                 },
             )
-        sent_at = last.timing.get("sent_at_epoch_ms") if isinstance(last.timing, dict) else None
         reconciled_by = "balance_increase" if bought_by_balance >= min_size else "existing_balance"
         size_from_balance = bought_by_balance if bought_by_balance >= min_size else after_balance
         trade_start = time.monotonic()
@@ -1083,7 +1138,7 @@ class LiveFakExecutionGateway:
                 "reconciliation": reconciled_by,
                 **balance_timing,
                 "reconcile_trade_lookup_ms": trade_lookup_ms,
-                "balance_before": round(before_balance, 6),
+                "balance_before": round(before_balance, 6) if before_balance is not None else None,
                 "balance_after": round(after_balance, 6),
                 "bought_by_balance": round(bought_by_balance, 6),
                 "adopted_balance": round(size_from_balance, 6),

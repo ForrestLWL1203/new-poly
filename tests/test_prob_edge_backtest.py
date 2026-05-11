@@ -372,7 +372,7 @@ def test_backtest_config_passes_polymarket_divergence_exit_to_strategy() -> None
     assert edge_cfg.polymarket_divergence_exit_min_age_sec == 3.0
 
 
-def test_backtest_replays_polymarket_divergence_exit_from_lead_field() -> None:
+def test_backtest_replays_reference_adverse_exit_from_polymarket_price() -> None:
     rows = [
         _row("m1", 90, 100.10),
         _row("m1", 130, 100.10),
@@ -382,14 +382,15 @@ def test_backtest_replays_polymarket_divergence_exit_from_lead_field() -> None:
     rows[1]["up"]["bid_avg"] = 0.36
     rows[1]["up"]["bid_limit"] = 0.35
     rows[1]["lead_binance_vs_polymarket_bps"] = 3.4
+    rows[1]["polymarket_price"] = 99.97
 
     result = run_backtest(rows, BacktestConfig(
         amount_usd=10.0,
-        polymarket_divergence_exit_bps=3.0,
         polymarket_divergence_exit_min_age_sec=3.0,
+        exit_reference_adverse_bps=2.0,
     ))
 
-    assert result.trades[0]["exit_reason"] == "polymarket_divergence_exit"
+    assert result.trades[0]["exit_reason"] == "reference_adverse_exit"
 
 
 def test_backtest_ignores_entry_safety_depth_when_best_ask_is_inside_formula_cap() -> None:

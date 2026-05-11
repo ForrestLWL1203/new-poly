@@ -766,6 +766,8 @@ def test_live_sell_success_trusts_response_when_balance_has_not_moved_yet(monkey
 
 def test_live_buy_request_exception_reconciles_from_balance_and_trades(monkeypatch) -> None:
     balances = iter([0.0, 5.0])
+    monkeypatch.setattr("new_poly.trading.execution.UNKNOWN_BUY_RECONCILE_DELAYS_SEC", (0.0, 0.0, 0.0))
+    monkeypatch.setattr("new_poly.trading.execution.time.sleep", lambda seconds: None)
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
     monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([
         {"asset_id": "up", "side": "BUY", "size": "5.0", "price": "0.20", "timestamp": "1778213316"},
@@ -806,6 +808,8 @@ def test_live_buy_unknown_result_polls_until_balance_increases(monkeypatch) -> N
 
     monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_TIMEOUT_SEC", 0.2)
     monkeypatch.setattr("new_poly.trading.execution.RECONCILE_BALANCE_POLL_INTERVAL_SEC", 0.0)
+    monkeypatch.setattr("new_poly.trading.execution.UNKNOWN_BUY_RECONCILE_DELAYS_SEC", (0.0, 0.0, 0.0))
+    monkeypatch.setattr("new_poly.trading.execution.time.sleep", lambda seconds: None)
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fake_balance)
     monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([]))
     gateway = SequencedLiveGateway([
@@ -832,6 +836,108 @@ def test_live_buy_unknown_result_polls_until_balance_increases(monkeypatch) -> N
     assert result.filled_size == pytest.approx(5.0)
     assert result.timing["reconciliation"] == "balance_increase"
     assert result.timing["reconcile_balance_checks"] == 2
+
+
+def test_live_buy_success_trusts_response_when_balance_has_not_moved_yet(monkeypatch) -> None:
+    balances = iter([0.0, 0.0])
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
+    monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            True,
+            filled_size=3.448274,
+            avg_price=0.29,
+            message="matched",
+            mode="live",
+        ),
+    ])
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.30,
+            best_ask=0.29,
+            price_hint_base=0.29,
+        )
+    )
+
+    assert result.success is True
+    assert result.filled_size == pytest.approx(3.448274)
+    assert result.avg_price == pytest.approx(0.29)
+    assert result.message == "matched"
+    assert result.timing["success_reconciliation"] == "no_balance_increase"
+    assert len(gateway.calls) == 1
+
+
+def test_live_buy_unknown_result_uses_delayed_balance_checks(monkeypatch) -> None:
+    balances = [0.0, 0.0, 0.0, 5.0]
+    sleeps = []
+
+    def fake_balance(token_id, safe=True):
+        return balances.pop(0) if balances else 5.0
+
+    monkeypatch.setattr("new_poly.trading.execution.UNKNOWN_BUY_RECONCILE_DELAYS_SEC", (0.0, 0.0, 0.0))
+    monkeypatch.setattr("new_poly.trading.execution.time.sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", fake_balance)
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([]))
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            False,
+            message="live order request exception",
+            mode="live",
+            timing={"sent_at_epoch_ms": 1778213315537},
+        ),
+    ], retry_count=1)
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.24,
+            best_ask=0.20,
+            price_hint_base=0.20,
+        )
+    )
+
+    assert result.success is True
+    assert result.message == "live buy reconciled after unknown POST result"
+    assert result.filled_size == pytest.approx(5.0)
+    assert result.timing["reconciliation"] == "balance_increase"
+    assert result.timing["reconcile_balance_checks"] == 3
+    assert sleeps == [0.0, 0.0, 0.0]
+    assert len(gateway.calls) == 1
+
+
+def test_live_buy_unknown_result_delayed_checks_fail_without_retry(monkeypatch) -> None:
+    monkeypatch.setattr("new_poly.trading.execution.UNKNOWN_BUY_RECONCILE_DELAYS_SEC", (0.0, 0.0, 0.0))
+    monkeypatch.setattr("new_poly.trading.execution.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.0)
+    monkeypatch.setattr("new_poly.trading.execution.get_client", lambda: TradeLookupClient([]))
+    gateway = SequencedLiveGateway([
+        ExecutionResult(
+            False,
+            message="live order request exception",
+            mode="live",
+            timing={"sent_at_epoch_ms": 1778213315537},
+        ),
+        ExecutionResult(True, filled_size=5.0, avg_price=0.20, message="matched", mode="live"),
+    ], retry_count=1)
+
+    result = asyncio.run(
+        gateway.buy(
+            "up",
+            amount_usd=1.0,
+            max_price=0.24,
+            best_ask=0.20,
+            price_hint_base=0.20,
+        )
+    )
+
+    assert result.success is False
+    assert result.timing["reconciliation"] == "unknown_buy_no_balance_after_delayed_checks"
+    assert result.timing["reconcile_balance_checks"] == 3
+    assert len(gateway.calls) == 1
 
 
 def test_live_buy_success_reconciles_real_position_balance(monkeypatch) -> None:
@@ -892,6 +998,8 @@ def test_live_buy_adopts_existing_balance_before_reposting(monkeypatch) -> None:
 
 def test_live_buy_unknown_result_adopts_existing_balance_without_increase(monkeypatch) -> None:
     balances = iter([None, 1.6566, 1.6566])
+    monkeypatch.setattr("new_poly.trading.execution.UNKNOWN_BUY_RECONCILE_DELAYS_SEC", (0.0, 0.0, 0.0))
+    monkeypatch.setattr("new_poly.trading.execution.time.sleep", lambda seconds: None)
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: next(balances))
     gateway = SequencedLiveGateway([
         ExecutionResult(

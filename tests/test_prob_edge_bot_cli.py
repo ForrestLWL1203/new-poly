@@ -188,7 +188,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.core_required_edge == 0.14
     assert opts.config.edge.early_to_core_age_sec == 120.0
     assert opts.config.edge.core_to_late_age_sec == 240.0
-    assert opts.config.edge.min_entry_model_prob == 0.55
+    assert opts.config.edge.max_entries_per_market == 1
+    assert opts.config.edge.min_entry_model_prob == 0.65
     assert opts.config.edge.low_price_extra_edge_threshold == 0.30
     assert opts.config.edge.low_price_extra_edge == 0.04
     assert opts.config.edge.weak_sk_entry_filter_enabled is True
@@ -210,7 +211,7 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.edge.buy_high_price_relax_min_prob == 0.95
     assert opts.config.edge.buy_high_price_relax_retained_edge == 0.08
     assert opts.config.edge.buy_high_price_relax_max_extra_ticks == 4.0
-    assert opts.config.edge.cross_source_max_bps == 5.0
+    assert opts.config.edge.cross_source_max_bps == 0.0
     assert opts.config.edge.market_disagrees_exit_threshold == 0.48
     assert opts.config.edge.low_price_market_disagrees_entry_threshold == 0.0
     assert opts.config.edge.low_price_market_disagrees_exit_threshold == 0.0
@@ -227,6 +228,8 @@ def test_aggressive_config_has_live_fak_safety_guards() -> None:
     assert opts.config.polymarket_unhealthy_log_after_sec == 10.0
     assert opts.config.edge.polymarket_divergence_exit_bps == 3.0
     assert opts.config.edge.polymarket_divergence_exit_min_age_sec == 3.0
+    assert opts.config.edge.entry_reference_confirm_bps == 2.0
+    assert opts.config.edge.exit_reference_adverse_bps == 2.0
     assert opts.config.coinbase_enabled is False
 
 
@@ -813,6 +816,9 @@ def test_entry_analysis_records_signal_and_fill_edges() -> None:
         edge=0.30,
         phase="core",
         required_edge=0.08,
+        adjusted_model_prob_shadow=0.76,
+        prob_shadow_adjustment=0.06,
+        lead_follow_state="both_confirming",
     )
     result = ExecutionResult(True, filled_size=10.0, avg_price=0.56, attempt=2, total_latency_ms=620, timing={"paper_actual_sleep_ms": 400})
 
@@ -822,6 +828,9 @@ def test_entry_analysis_records_signal_and_fill_edges() -> None:
     assert analysis["entry_edge_signal"] == 0.30
     assert analysis["entry_edge_at_fill"] == 0.14
     assert analysis["entry_depth_limit_price"] == 0.55
+    assert analysis["entry_adjusted_model_prob_shadow"] == 0.76
+    assert analysis["entry_prob_shadow_adjustment"] == 0.06
+    assert analysis["entry_lead_follow_state"] == "both_confirming"
     assert analysis["order_attempt"] == 2
     assert analysis["order_timing"]["paper_actual_sleep_ms"] == 400
 

@@ -104,6 +104,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-disagrees-exit-min-model-drop", type=float, default=0.0)
     parser.add_argument("--polymarket-divergence-exit-bps", type=float, default=3.0)
     parser.add_argument("--polymarket-divergence-exit-min-age-sec", type=float, default=3.0)
+    parser.add_argument("--entry-reference-confirm-bps", type=float, default=0.0)
+    parser.add_argument("--exit-reference-adverse-bps", type=float, default=0.0)
     parser.add_argument("--honor-order-events", action="store_true", help="For paper/live strategy JSONL, replay actual entry/exit/no-fill events instead of idealized fills.")
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
@@ -164,6 +166,8 @@ def main() -> int:
         market_disagrees_exit_min_model_drop=args.market_disagrees_exit_min_model_drop,
         polymarket_divergence_exit_bps=args.polymarket_divergence_exit_bps,
         polymarket_divergence_exit_min_age_sec=args.polymarket_divergence_exit_min_age_sec,
+        entry_reference_confirm_bps=args.entry_reference_confirm_bps,
+        exit_reference_adverse_bps=args.exit_reference_adverse_bps,
         honor_order_events=args.honor_order_events,
         settlement_boundary_usd=args.settlement_boundary_usd,
         min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,

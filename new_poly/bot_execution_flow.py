@@ -16,7 +16,8 @@ from new_poly.bot_runtime import (
     _refresh_exit_retry_params,
 )
 from new_poly.strategy.prob_edge import StrategyDecision, evaluate_entry, evaluate_exit
-from new_poly.strategy.state import PositionSnapshot, StrategyState
+from new_poly.strategy.state import PositionSnapshot, StrategyState, UnknownEntryOrder
+from new_poly.trading.clob_client import get_token_balance
 
 
 def _order_intent_row(
@@ -69,6 +70,84 @@ def _apply_closed_trade_risk(row: dict[str, Any], *, state: StrategyState, cfg: 
         row["risk_event"] = event
 
 
+def _unknown_buy_needs_safety_check(*, state: StrategyState, snap, window: Any, cfg: BotConfig, options: RuntimeOptions) -> bool:
+    pending = state.unresolved_unknown_entry
+    if options.mode != "live" or pending is None:
+        return False
+    if pending.safety_checked or pending.market_slug != window.slug:
+        return False
+    return snap.remaining_sec <= 60.0 or snap.age_sec >= cfg.edge.entry_end_age_sec
+
+
+def _is_unconfirmed_unknown_buy(result) -> bool:
+    timing = result.timing if isinstance(result.timing, dict) else {}
+    return timing.get("reconciliation") == "unknown_buy_no_balance_after_delayed_checks"
+
+
+def _record_unknown_entry_candidate(
+    *,
+    state: StrategyState,
+    decision,
+    token_id: str,
+    window: Any,
+    snap,
+    cfg: BotConfig,
+    result,
+) -> None:
+    if decision.side is None or decision.model_prob is None or decision.edge is None:
+        return
+    timing = result.timing if isinstance(result.timing, dict) else {}
+    created_at = timing.get("sent_at_epoch_ms")
+    state.record_unresolved_unknown_entry(UnknownEntryOrder(
+        market_slug=window.slug,
+        token_side=decision.side,
+        token_id=token_id,
+        amount_usd=cfg.amount_usd,
+        entry_time=snap.age_sec,
+        entry_avg_price=decision.best_ask or decision.price or decision.limit_price or 0.0,
+        entry_model_prob=decision.model_prob,
+        entry_edge=decision.edge,
+        entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
+        entry_favorable_gap_bps=decision.favorable_gap_bps,
+        entry_reference_distance_bps=decision.entry_reference_distance_bps,
+        created_at_epoch_ms=int(created_at) if created_at is not None else None,
+        signal_price=decision.price,
+        limit_price=decision.limit_price,
+        best_ask=decision.best_ask,
+        depth_limit_price=decision.depth_limit_price,
+    ))
+
+
+async def _query_unknown_entry_safety_balance(
+    *,
+    state: StrategyState,
+    snap,
+    window: Any,
+    cfg: BotConfig,
+    options: RuntimeOptions,
+    logger,
+) -> tuple[UnknownEntryOrder, float | None, dict[str, Any]] | None:
+    if not _unknown_buy_needs_safety_check(state=state, snap=snap, window=window, cfg=cfg, options=options):
+        return None
+    pending = state.unresolved_unknown_entry
+    assert pending is not None
+    pending.safety_checked = True
+    balance = await asyncio.to_thread(get_token_balance, pending.token_id, safe=True)
+    check_row = {
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "mode": options.mode,
+        "event": "unknown_entry_balance_safety_check",
+        "market_slug": window.slug,
+        "age_sec": snap.age_sec,
+        "remaining_sec": snap.remaining_sec,
+        "token_id": pending.token_id,
+        "entry_side": pending.token_side,
+        "balance": _compact(balance),
+    }
+    logger.write(check_row)
+    return pending, balance, check_row
+
+
 async def _finish_pending_entry_order(
     *,
     token_id: str,
@@ -108,6 +187,9 @@ async def _finish_pending_entry_order(
                 filled_shares=result.filled_size,
                 entry_model_prob=decision.model_prob,
                 entry_edge=decision.edge,
+                entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
+                entry_favorable_gap_bps=decision.favorable_gap_bps,
+                entry_reference_distance_bps=decision.entry_reference_distance_bps,
             ))
             row["event"] = "entry"
             row["entry_side"] = decision.side
@@ -127,6 +209,28 @@ async def _finish_pending_entry_order(
         else:
             row["event"] = "order_no_fill"
             row["order_intent"] = "entry"
+            if options.mode == "live" and _is_unconfirmed_unknown_buy(result):
+                logger.write({
+                    "ts": row["ts"],
+                    "mode": options.mode,
+                    "event": "order_unknown_reconcile_pending",
+                    "market_slug": window.slug,
+                    "age_sec": snap.age_sec,
+                    "remaining_sec": snap.remaining_sec,
+                    "order_intent": "entry",
+                    "token_id": token_id,
+                    "entry_side": decision.side,
+                    "order": result.__dict__,
+                })
+                _record_unknown_entry_candidate(
+                    state=state,
+                    decision=decision,
+                    token_id=token_id,
+                    window=window,
+                    snap=snap,
+                    cfg=cfg,
+                    result=result,
+                )
         if options.analysis_logs:
             row["analysis"] = {"price_sources": price_analysis, **_entry_analysis(decision, result)}
         logger.write(row)
@@ -223,6 +327,86 @@ async def _finish_pending_exit_order(
             state.clear_pending_execution()
 
 
+async def _maybe_recover_unknown_entry_balance(
+    *,
+    row: dict[str, Any],
+    snap,
+    window: Any,
+    prices: WindowPrices,
+    feeds,
+    cfg: BotConfig,
+    options: RuntimeOptions,
+    gateway,
+    state: StrategyState,
+    sigma_eff: float | None,
+    price_analysis: dict[str, Any],
+    logger,
+) -> Any | None:
+    safety = await _query_unknown_entry_safety_balance(
+        state=state,
+        snap=snap,
+        window=window,
+        cfg=cfg,
+        options=options,
+        logger=logger,
+    )
+    if safety is None:
+        return None
+    pending, balance, check_row = safety
+    if balance is None or balance <= 1e-9:
+        logger.write({
+            **check_row,
+            "event": "unknown_entry_balance_safety_no_balance",
+        })
+        return None
+    if state.has_position:
+        decision = StrategyDecision(action="skip", reason="unknown_balance_recovery_skipped_existing_position")
+        row["decision"] = _decision_log(decision)
+        logger.write({
+            **check_row,
+            "event": "unknown_balance_recovery_skipped_existing_position",
+            "open_position": _position_log(state.open_position, compact=True),
+        })
+        return decision
+    price = pending.entry_avg_price if pending.entry_avg_price > 0 else pending.amount_usd / balance
+    state.record_entry(PositionSnapshot(
+        market_slug=window.slug,
+        token_side=pending.token_side,
+        token_id=pending.token_id,
+        entry_time=snap.age_sec,
+        entry_avg_price=price,
+        filled_shares=balance,
+        entry_model_prob=pending.entry_model_prob,
+        entry_edge=pending.entry_edge,
+        entry_polymarket_divergence_bps=pending.entry_polymarket_divergence_bps,
+        entry_favorable_gap_bps=pending.entry_favorable_gap_bps,
+        entry_reference_distance_bps=pending.entry_reference_distance_bps,
+    ))
+    state.clear_unresolved_unknown_entry()
+    logger.write({
+        **check_row,
+        "event": "entry_recovered_from_unknown_balance",
+        "entry_side": pending.token_side,
+        "entry_price": _compact(price),
+        "entry_shares": _compact(balance),
+        "position_after_entry": _position_log(state.open_position, compact=not options.analysis_logs),
+    })
+    return await handle_open_position_tick(
+        row=row,
+        snap=snap,
+        window=window,
+        prices=prices,
+        feeds=feeds,
+        cfg=cfg,
+        options=options,
+        gateway=gateway,
+        state=state,
+        sigma_eff=sigma_eff,
+        price_analysis=price_analysis,
+        logger=logger,
+    )
+
+
 async def handle_open_position_tick(
     *,
     row: dict[str, Any],
@@ -239,6 +423,28 @@ async def handle_open_position_tick(
     logger=None,
 ) -> Any:
     assert state.open_position is not None
+    if logger is not None:
+        safety = await _query_unknown_entry_safety_balance(
+            state=state,
+            snap=snap,
+            window=window,
+            cfg=cfg,
+            options=options,
+            logger=logger,
+        )
+        if safety is not None:
+            _pending, balance, check_row = safety
+            if balance is None or balance <= 1e-9:
+                logger.write({
+                    **check_row,
+                    "event": "unknown_entry_balance_safety_no_balance",
+                })
+            else:
+                logger.write({
+                    **check_row,
+                    "event": "unknown_balance_recovery_skipped_existing_position",
+                    "open_position": _position_log(state.open_position, compact=True),
+                })
     if state.has_pending_execution:
         decision = StrategyDecision(action="hold", reason="pending_order_reconciliation", side=state.open_position.token_side)
         row["decision"] = _decision_log(decision)
@@ -360,10 +566,28 @@ async def handle_flat_tick(
     price_analysis: dict[str, Any],
     logger=None,
 ) -> Any:
+    if logger is not None:
+        recovered_decision = await _maybe_recover_unknown_entry_balance(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=prices,
+            feeds=feeds,
+            cfg=cfg,
+            options=options,
+            gateway=gateway,
+            state=state,
+            sigma_eff=sigma_eff,
+            price_analysis=price_analysis,
+            logger=logger,
+        )
+        if recovered_decision is not None:
+            return recovered_decision
     if state.has_pending_execution:
         decision = StrategyDecision(action="skip", reason="pending_order_reconciliation")
         row["decision"] = _decision_log(decision)
         return decision
+    state.record_reference_baseline(snap)
     decision = evaluate_entry(snap, state, cfg.edge)
     row["decision"] = _decision_log(decision)
     if decision.action != "enter":
@@ -425,6 +649,9 @@ async def handle_flat_tick(
             filled_shares=result.filled_size,
             entry_model_prob=decision.model_prob,
             entry_edge=decision.edge,
+            entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
+            entry_favorable_gap_bps=decision.favorable_gap_bps,
+            entry_reference_distance_bps=decision.entry_reference_distance_bps,
         ))
         row["event"] = "entry"
         row["entry_side"] = decision.side

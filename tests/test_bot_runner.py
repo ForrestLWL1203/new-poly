@@ -132,6 +132,306 @@ def test_entry_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_live_unknown_buy_no_fill_records_safety_check_candidate(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_flat_tick
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+        ]))
+        logger = DummyLogger()
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=130.0,
+            remaining_sec=170.0,
+            s_price=101.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        decision = StrategyDecision(
+            action="enter",
+            reason="edge",
+            side="up",
+            model_prob=0.70,
+            price=0.29,
+            limit_price=0.30,
+            depth_limit_price=0.29,
+            best_ask=0.29,
+            edge=0.41,
+            phase="core",
+            required_edge=0.14,
+        )
+
+        class UnknownGateway:
+            async def buy(self, *args, **kwargs):
+                return ExecutionResult(
+                    False,
+                    message="live order request exception; reconciliation no balance increase",
+                    mode="live",
+                    timing={"reconciliation": "unknown_buy_no_balance_after_delayed_checks"},
+                )
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_entry", lambda *_args, **_kwargs: decision)
+
+        await handle_flat_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=UnknownGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        )
+        task = state.pending_execution_task
+        assert task is not None
+        await task
+
+        assert state.has_pending_execution is False
+        assert state.unresolved_unknown_entry is not None
+        assert state.unresolved_unknown_entry.market_slug == "m1"
+        assert state.unresolved_unknown_entry.token_side == "up"
+        assert state.unresolved_unknown_entry.token_id == window.up_token
+        assert state.unresolved_unknown_entry.safety_checked is False
+        assert logger.rows[-1]["event"] == "order_no_fill"
+
+    asyncio.run(scenario())
+
+
+def test_live_entry_safety_check_recovers_balance_and_runs_exit(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_flat_tick
+        from new_poly.strategy.state import UnknownEntryOrder
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+        ]))
+        logger = DummyLogger()
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=241.0,
+            remaining_sec=59.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.unresolved_unknown_entry = UnknownEntryOrder(
+            market_slug="m1",
+            token_side="up",
+            token_id=window.up_token,
+            amount_usd=1.0,
+            entry_time=130.0,
+            entry_avg_price=0.29,
+            entry_model_prob=0.70,
+            entry_edge=0.41,
+            signal_price=0.29,
+            limit_price=0.30,
+            best_ask=0.29,
+            depth_limit_price=0.29,
+            created_at_epoch_ms=1778213315537,
+        )
+        exit_decision = StrategyDecision(
+            action="exit",
+            reason="logic_decay_exit",
+            side="up",
+            model_prob=0.20,
+            price=0.24,
+            limit_price=0.23,
+            profit_now=-0.05,
+        )
+
+        class ExitGateway:
+            async def sell(self, *args, **kwargs):
+                return ExecutionResult(True, filled_size=3.448274, avg_price=0.23, message="matched", mode="live")
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.get_token_balance", lambda token_id, safe=True: 3.448274)
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_exit", lambda *_args, **_kwargs: exit_decision)
+
+        await handle_flat_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=ExitGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        )
+        task = state.pending_execution_task
+        assert task is not None
+        await task
+
+        events = [item["event"] for item in logger.rows]
+        assert "unknown_entry_balance_safety_check" in events
+        assert "entry_recovered_from_unknown_balance" in events
+        assert "exit_intent" in events
+        assert "exit" in events
+        assert state.open_position is None
+        assert state.unresolved_unknown_entry is None
+
+    asyncio.run(scenario())
+
+
+def test_live_entry_safety_check_skips_when_position_already_open(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_flat_tick
+        from new_poly.strategy.state import UnknownEntryOrder
+
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+        ]))
+        logger = DummyLogger()
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=241.0,
+            remaining_sec=59.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.record_entry(PositionSnapshot(
+            market_slug="m1",
+            token_side="down",
+            token_id=window.down_token,
+            entry_time=180.0,
+            entry_avg_price=0.40,
+            filled_shares=2.5,
+            entry_model_prob=0.65,
+            entry_edge=0.25,
+        ))
+        state.unresolved_unknown_entry = UnknownEntryOrder(
+            market_slug="m1",
+            token_side="up",
+            token_id=window.up_token,
+            amount_usd=1.0,
+            entry_time=130.0,
+            entry_avg_price=0.29,
+            entry_model_prob=0.70,
+            entry_edge=0.41,
+            created_at_epoch_ms=1778213315537,
+        )
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.get_token_balance", lambda token_id, safe=True: 3.448274)
+
+        await handle_flat_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=DummyGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        )
+
+        assert state.open_position is not None
+        assert state.open_position.token_side == "down"
+        assert logger.rows[-1]["event"] == "unknown_balance_recovery_skipped_existing_position"
+
+    asyncio.run(scenario())
+
+
+def test_live_open_position_safety_check_skips_unknown_balance_and_keeps_exit_logic(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_open_position_tick
+        from new_poly.strategy.state import UnknownEntryOrder
+
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+        ]))
+        logger = DummyLogger()
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=241.0,
+            remaining_sec=59.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.record_entry(PositionSnapshot(
+            market_slug="m1",
+            token_side="down",
+            token_id=window.down_token,
+            entry_time=180.0,
+            entry_avg_price=0.40,
+            filled_shares=2.5,
+            entry_model_prob=0.65,
+            entry_edge=0.25,
+        ))
+        state.unresolved_unknown_entry = UnknownEntryOrder(
+            market_slug="m1",
+            token_side="up",
+            token_id=window.up_token,
+            amount_usd=1.0,
+            entry_time=130.0,
+            entry_avg_price=0.29,
+            entry_model_prob=0.70,
+            entry_edge=0.41,
+            created_at_epoch_ms=1778213315537,
+        )
+        hold_decision = StrategyDecision(action="hold", reason="no_exit", side="down", model_prob=0.65)
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.get_token_balance", lambda token_id, safe=True: 3.448274)
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_exit", lambda *_args, **_kwargs: hold_decision)
+
+        decision = await handle_open_position_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=DummyGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        )
+
+        assert decision is hold_decision
+        assert state.open_position is not None
+        assert state.open_position.token_side == "down"
+        assert logger.rows[0]["event"] == "unknown_entry_balance_safety_check"
+        assert logger.rows[1]["event"] == "unknown_balance_recovery_skipped_existing_position"
+
+    asyncio.run(scenario())
+
+
 def test_exit_writes_exit_intent_before_gateway_returns(monkeypatch) -> None:
     async def scenario() -> None:
         from new_poly.bot_execution_flow import handle_open_position_tick

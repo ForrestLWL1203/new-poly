@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass
+class ReferenceBaseline:
+    market_slug: str
+    age_sec: float
+    binance_distance_bps: float
+    reference_distance_bps: float
+    gap_bps: float
 
 
 @dataclass
@@ -15,9 +25,33 @@ class PositionSnapshot:
     filled_shares: float
     entry_model_prob: float
     entry_edge: float
+    entry_polymarket_divergence_bps: float | None = None
+    entry_favorable_gap_bps: float | None = None
+    entry_reference_distance_bps: float | None = None
     last_model_prob: float | None = None
     last_executable_bid: float | None = None
     exit_status: str = "open"
+
+
+@dataclass
+class UnknownEntryOrder:
+    market_slug: str
+    token_side: str
+    token_id: str
+    amount_usd: float
+    entry_time: float
+    entry_avg_price: float
+    entry_model_prob: float
+    entry_edge: float
+    entry_polymarket_divergence_bps: float | None = None
+    entry_favorable_gap_bps: float | None = None
+    entry_reference_distance_bps: float | None = None
+    created_at_epoch_ms: int | None = None
+    signal_price: float | None = None
+    limit_price: float | None = None
+    best_ask: float | None = None
+    depth_limit_price: float | None = None
+    safety_checked: bool = False
 
 
 @dataclass
@@ -38,6 +72,8 @@ class StrategyState:
     pending_execution: str | None = None
     pending_execution_market_slug: str | None = None
     pending_execution_task: object | None = None
+    unresolved_unknown_entry: UnknownEntryOrder | None = None
+    reference_baseline: ReferenceBaseline | None = None
 
     @property
     def has_position(self) -> bool:
@@ -62,6 +98,24 @@ class StrategyState:
         self.pending_execution = None
         self.pending_execution_market_slug = None
         self.pending_execution_task = None
+        self.unresolved_unknown_entry = None
+        self.reference_baseline = None
+
+    def record_reference_baseline(self, snapshot: Any) -> None:
+        if self.reference_baseline is not None:
+            return
+        s_price = getattr(snapshot, "s_price", None)
+        k_price = getattr(snapshot, "k_price", None)
+        polymarket_price = getattr(snapshot, "polymarket_price", None)
+        if s_price is None or k_price is None or polymarket_price is None or k_price <= 0:
+            return
+        self.reference_baseline = ReferenceBaseline(
+            market_slug=str(getattr(snapshot, "market_slug", self.current_market_slug or "")),
+            age_sec=float(getattr(snapshot, "age_sec", 0.0)),
+            binance_distance_bps=(float(s_price) - float(k_price)) / float(k_price) * 10000.0,
+            reference_distance_bps=(float(polymarket_price) - float(k_price)) / float(k_price) * 10000.0,
+            gap_bps=(float(s_price) - float(polymarket_price)) / float(k_price) * 10000.0,
+        )
 
     def record_entry(self, position: PositionSnapshot) -> None:
         self.open_position = position
@@ -77,6 +131,12 @@ class StrategyState:
         self.pending_execution = None
         self.pending_execution_market_slug = None
         self.pending_execution_task = None
+
+    def record_unresolved_unknown_entry(self, order: UnknownEntryOrder) -> None:
+        self.unresolved_unknown_entry = order
+
+    def clear_unresolved_unknown_entry(self) -> None:
+        self.unresolved_unknown_entry = None
 
     def record_partial_exit(self, exit_price: float, shares: float, reason: str, exit_age_sec: float | None = None) -> tuple[float, bool]:
         if self.open_position is None:
