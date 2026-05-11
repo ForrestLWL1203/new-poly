@@ -107,6 +107,7 @@ class BacktestConfig:
     poly_trend_lookback_sec: float = 3.0
     poly_return_bps: float = 0.3
     max_entry_ask: float = 0.65
+    max_entry_fill_price: float = 0.0
     min_poly_entry_score: float = 0.0
     poly_buy_price_buffer_ticks: float = 2.0
     poly_exit_reference_adverse_bps: float = 1.0
@@ -200,6 +201,7 @@ class BacktestConfig:
             poly_trend_lookback_sec=self.poly_trend_lookback_sec,
             poly_return_bps=self.poly_return_bps,
             max_entry_ask=self.max_entry_ask,
+            max_entry_fill_price=self.max_entry_fill_price,
             min_poly_entry_score=self.min_poly_entry_score,
             entry_tick_size=self.entry_tick_size,
             buy_price_buffer_ticks=self.poly_buy_price_buffer_ticks,

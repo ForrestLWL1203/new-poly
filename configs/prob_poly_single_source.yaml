@@ -13,6 +13,7 @@ poly_source:
   poly_trend_lookback_sec: 3.0
   poly_return_bps: 0.3
   max_entry_ask: 0.75
+  max_entry_fill_price: 0.75
   min_poly_entry_score: 5.0
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2

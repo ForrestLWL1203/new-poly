@@ -112,6 +112,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poly-trend-lookback-sec", type=float, default=3.0)
     parser.add_argument("--poly-return-bps", type=float, default=0.3)
     parser.add_argument("--max-entry-ask", type=float, default=0.65)
+    parser.add_argument("--max-entry-fill-price", type=float, default=0.0)
     parser.add_argument("--min-poly-entry-score", type=float, default=0.0)
     parser.add_argument("--poly-exit-reference-adverse-bps", type=float, default=1.0)
     parser.add_argument("--poly-trend-reversal-bps", type=float, default=0.3)
@@ -187,6 +188,7 @@ def main() -> int:
         poly_trend_lookback_sec=args.poly_trend_lookback_sec,
         poly_return_bps=args.poly_return_bps,
         max_entry_ask=args.max_entry_ask,
+        max_entry_fill_price=args.max_entry_fill_price,
         min_poly_entry_score=args.min_poly_entry_score,
         poly_exit_reference_adverse_bps=args.poly_exit_reference_adverse_bps,
         poly_trend_reversal_bps=args.poly_trend_reversal_bps,

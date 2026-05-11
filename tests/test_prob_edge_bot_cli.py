@@ -1079,6 +1079,7 @@ def test_poly_single_source_config_loads_and_blocks_live_mode() -> None:
     assert cfg.poly_source.poly_trend_lookback_sec == 3.0
     assert cfg.poly_source.poly_return_bps == 0.3
     assert cfg.poly_source.max_entry_ask == 0.75
+    assert cfg.poly_source.max_entry_fill_price == 0.75
     assert cfg.poly_source.min_poly_entry_score == 5.0
 
     args = build_arg_parser().parse_args([

@@ -141,6 +141,37 @@ def test_poly_source_score_threshold_can_block_entry() -> None:
     assert decision.reason == "poly_score_too_low"
 
 
+def test_poly_source_caps_entry_limit_price_at_max_fill_price() -> None:
+    cfg = PolySourceConfig(
+        poly_reference_distance_bps=0.5,
+        poly_return_bps=0.3,
+        max_entry_ask=0.75,
+        max_entry_fill_price=0.75,
+        buy_price_buffer_ticks=8,
+    )
+
+    decision = evaluate_poly_entry(_snapshot(poly_price=100.04, return_bps=0.4, up_ask=0.70), StrategyState(current_market_slug="m1"), cfg)
+
+    assert decision.action == "enter"
+    assert decision.price == 0.70
+    assert decision.limit_price == pytest.approx(0.75)
+
+
+def test_poly_source_skips_when_best_ask_exceeds_max_fill_price() -> None:
+    cfg = PolySourceConfig(
+        poly_reference_distance_bps=0.5,
+        poly_return_bps=0.3,
+        max_entry_ask=0.80,
+        max_entry_fill_price=0.75,
+        buy_price_buffer_ticks=8,
+    )
+
+    decision = evaluate_poly_entry(_snapshot(poly_price=100.04, return_bps=0.4, up_ask=0.76), StrategyState(current_market_slug="m1"), cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "poly_fill_cap_exceeded"
+
+
 def test_poly_source_reference_adverse_exit_is_market_only() -> None:
     cfg = PolySourceConfig(exit_reference_adverse_bps=1.0)
     position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.60, 10.0, 0.0, 0.0)

@@ -299,6 +299,7 @@ def load_bot_config(path: Path) -> BotConfig:
         poly_trend_lookback_sec=float(_deep_get(raw, ("poly_source", "poly_trend_lookback_sec"), 3.0)),
         poly_return_bps=float(_deep_get(raw, ("poly_source", "poly_return_bps"), 0.3)),
         max_entry_ask=float(_deep_get(raw, ("poly_source", "max_entry_ask"), 0.65)),
+        max_entry_fill_price=float(_deep_get(raw, ("poly_source", "max_entry_fill_price"), 0.0)),
         min_poly_entry_score=float(_deep_get(raw, ("poly_source", "min_poly_entry_score"), 0.0)),
         entry_tick_size=float(_deep_get(raw, ("poly_source", "entry_tick_size"), 0.01)),
         buy_price_buffer_ticks=float(_deep_get(raw, ("poly_source", "buy_price_buffer_ticks"), 2.0)),

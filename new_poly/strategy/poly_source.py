@@ -21,6 +21,7 @@ class PolySourceConfig:
     poly_trend_lookback_sec: float = 3.0
     poly_return_bps: float = 0.3
     max_entry_ask: float = 0.65
+    max_entry_fill_price: float = 0.0
     min_poly_entry_score: float = 0.0
     entry_tick_size: float = 0.01
     buy_price_buffer_ticks: float = 2.0
@@ -81,6 +82,10 @@ def _book_age(snapshot: MarketSnapshot, side: str) -> float | None:
 def _book_fresh(snapshot: MarketSnapshot, side: str, cfg: PolySourceConfig) -> bool:
     age = _book_age(snapshot, side)
     return age is not None and age <= cfg.max_book_age_ms
+
+
+def _max_entry_fill_price(cfg: PolySourceConfig) -> float | None:
+    return cfg.max_entry_fill_price if cfg.max_entry_fill_price > 0 else None
 
 
 def _raw_poly_side(snapshot: MarketSnapshot) -> str | None:
@@ -167,11 +172,15 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
         return _decision("skip", "stale_entry_book", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
     if ask > cfg.max_entry_ask:
         return _decision("skip", "poly_ask_too_high", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
+    max_fill = _max_entry_fill_price(cfg)
+    if max_fill is not None and ask > max_fill:
+        return _decision("skip", "poly_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
     score = _entry_score(distance, trend, ask, _bid(snapshot, side))
     if score < cfg.min_poly_entry_score:
         return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, score=score, snapshot=snapshot)
     tick = cfg.entry_tick_size if cfg.entry_tick_size > 0 else 0.01
-    limit = min(1.0, round(ask + cfg.buy_price_buffer_ticks * tick, 6))
+    limit_cap = max_fill if max_fill is not None else 1.0
+    limit = min(1.0, limit_cap, round(ask + cfg.buy_price_buffer_ticks * tick, 6))
     return _decision("enter", "poly_edge", side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, score=score, snapshot=snapshot)
 
 
