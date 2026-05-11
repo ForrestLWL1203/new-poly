@@ -11,7 +11,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs
+from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs, scan_poly_source_configs
 
 
 def _float_list(value: str) -> list[float]:
@@ -39,6 +39,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay probability-edge strategy from collector JSONL")
     parser.add_argument("--jsonl", type=Path, required=True)
     parser.add_argument("--amount-usd", type=float, default=5.0)
+    parser.add_argument("--strategy-mode", choices=("prob_edge", "poly_single_source"), default="prob_edge")
     parser.add_argument("--early-required-edge", type=float, default=0.16)
     parser.add_argument("--core-required-edge", type=float, default=0.14)
     parser.add_argument("--model-decay-buffer", type=float, default=0.03)
@@ -107,12 +108,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-reference-confirm-bps", type=float, default=0.0)
     parser.add_argument("--exit-reference-adverse-bps", type=float, default=0.0)
     parser.add_argument("--honor-order-events", action="store_true", help="For paper/live strategy JSONL, replay actual entry/exit/no-fill events instead of idealized fills.")
+    parser.add_argument("--poly-reference-distance-bps", type=float, default=0.5)
+    parser.add_argument("--poly-trend-lookback-sec", type=float, default=3.0)
+    parser.add_argument("--poly-return-bps", type=float, default=0.3)
+    parser.add_argument("--max-entry-ask", type=float, default=0.65)
+    parser.add_argument("--min-poly-entry-score", type=float, default=0.0)
+    parser.add_argument("--poly-exit-reference-adverse-bps", type=float, default=1.0)
+    parser.add_argument("--poly-trend-reversal-bps", type=float, default=0.3)
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
     parser.add_argument("--early-grid", default="0.14,0.16,0.18")
     parser.add_argument("--core-grid", default="0.12,0.14,0.16")
     parser.add_argument("--entry-start-grid", default="25,40,60")
     parser.add_argument("--entry-end-grid", default="210,240,270")
+    parser.add_argument("--poly-reference-distance-grid", default="0.5,1.0,1.5,2.0,3.0,4.0")
+    parser.add_argument("--poly-trend-lookback-grid", default="1,3,5,10,15")
+    parser.add_argument("--poly-return-grid", default="0.0,0.1,0.2,0.3,0.5")
+    parser.add_argument("--max-entry-ask-grid", default="0.55,0.65,0.75,0.85")
+    parser.add_argument("--min-poly-entry-score-grid", default="0.0,1.0,2.0,3.0,4.0")
     parser.add_argument("--grid-min-entries", type=int, default=0)
     parser.add_argument("--grid-sort-by", choices=("pnl", "win_rate", "avg_pnl"), default="pnl")
     parser.add_argument("--top-n", type=int, default=10)
@@ -125,6 +138,7 @@ def main() -> int:
     buy_slippage_ticks = args.slippage_ticks if args.buy_slippage_ticks is None else args.buy_slippage_ticks
     sell_slippage_ticks = args.slippage_ticks if args.sell_slippage_ticks is None else args.sell_slippage_ticks
     cfg = BacktestConfig(
+        strategy_mode=args.strategy_mode,
         amount_usd=args.amount_usd,
         early_required_edge=args.early_required_edge,
         core_required_edge=args.core_required_edge,
@@ -169,6 +183,13 @@ def main() -> int:
         entry_reference_confirm_bps=args.entry_reference_confirm_bps,
         exit_reference_adverse_bps=args.exit_reference_adverse_bps,
         honor_order_events=args.honor_order_events,
+        poly_reference_distance_bps=args.poly_reference_distance_bps,
+        poly_trend_lookback_sec=args.poly_trend_lookback_sec,
+        poly_return_bps=args.poly_return_bps,
+        max_entry_ask=args.max_entry_ask,
+        min_poly_entry_score=args.min_poly_entry_score,
+        poly_exit_reference_adverse_bps=args.poly_exit_reference_adverse_bps,
+        poly_trend_reversal_bps=args.poly_trend_reversal_bps,
         settlement_boundary_usd=args.settlement_boundary_usd,
         min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,
         entry_tick_size=args.entry_tick_size,
@@ -206,16 +227,29 @@ def main() -> int:
         "sample_trades": result.trades[:5],
     }
     if not args.no_grid:
-        payload["grid_top"] = scan_configs(
-            rows,
-            early_edges=_float_list(args.early_grid),
-            core_edges=_float_list(args.core_grid),
-            entry_starts=_float_list(args.entry_start_grid),
-            entry_ends=_float_list(args.entry_end_grid),
-            base_config=cfg,
-            min_entries=max(0, args.grid_min_entries),
-            sort_by=args.grid_sort_by,
-        )[: max(0, args.top_n)]
+        if args.strategy_mode == "poly_single_source":
+            payload["grid_top"] = scan_poly_source_configs(
+                rows,
+                reference_distances=_float_list(args.poly_reference_distance_grid),
+                trend_lookbacks=_float_list(args.poly_trend_lookback_grid),
+                return_thresholds=_float_list(args.poly_return_grid),
+                max_entry_asks=_float_list(args.max_entry_ask_grid),
+                min_scores=_float_list(args.min_poly_entry_score_grid),
+                base_config=cfg,
+                min_entries=max(0, args.grid_min_entries),
+                sort_by=args.grid_sort_by,
+            )[: max(0, args.top_n)]
+        else:
+            payload["grid_top"] = scan_configs(
+                rows,
+                early_edges=_float_list(args.early_grid),
+                core_edges=_float_list(args.core_grid),
+                entry_starts=_float_list(args.entry_start_grid),
+                entry_ends=_float_list(args.entry_end_grid),
+                base_config=cfg,
+                min_entries=max(0, args.grid_min_entries),
+                sort_by=args.grid_sort_by,
+            )[: max(0, args.top_n)]
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

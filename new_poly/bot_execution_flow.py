@@ -16,6 +16,7 @@ from new_poly.bot_runtime import (
     _refresh_exit_retry_params,
 )
 from new_poly.strategy.prob_edge import StrategyDecision, evaluate_entry, evaluate_exit
+from new_poly.strategy.poly_source import evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState, UnknownEntryOrder
 from new_poly.trading.clob_client import get_token_balance
 
@@ -94,7 +95,7 @@ def _record_unknown_entry_candidate(
     cfg: BotConfig,
     result,
 ) -> None:
-    if decision.side is None or decision.model_prob is None or decision.edge is None:
+    if decision.side is None or decision.edge is None:
         return
     timing = result.timing if isinstance(result.timing, dict) else {}
     created_at = timing.get("sent_at_epoch_ms")
@@ -105,11 +106,11 @@ def _record_unknown_entry_candidate(
         amount_usd=cfg.amount_usd,
         entry_time=snap.age_sec,
         entry_avg_price=decision.best_ask or decision.price or decision.limit_price or 0.0,
-        entry_model_prob=decision.model_prob,
+        entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
         entry_edge=decision.edge,
         entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
         entry_favorable_gap_bps=decision.favorable_gap_bps,
-        entry_reference_distance_bps=decision.entry_reference_distance_bps,
+        entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
         created_at_epoch_ms=int(created_at) if created_at is not None else None,
         signal_price=decision.price,
         limit_price=decision.limit_price,
@@ -189,7 +190,7 @@ async def _finish_pending_entry_order(
                 row["action"] = "ignore_result_after_window_switch"
             logger.write(row)
             return
-        if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
+        if result.success and decision.side is not None and decision.edge is not None:
             state.record_entry(PositionSnapshot(
                 market_slug=window.slug,
                 token_side=decision.side,
@@ -197,11 +198,11 @@ async def _finish_pending_entry_order(
                 entry_time=snap.age_sec,
                 entry_avg_price=result.avg_price,
                 filled_shares=result.filled_size,
-                entry_model_prob=decision.model_prob,
+                entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
                 entry_edge=decision.edge,
                 entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
                 entry_favorable_gap_bps=decision.favorable_gap_bps,
-                entry_reference_distance_bps=decision.entry_reference_distance_bps,
+                entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
             ))
             row["event"] = "entry"
             row["entry_side"] = decision.side
@@ -476,7 +477,10 @@ async def handle_open_position_tick(
         decision = StrategyDecision(action="hold", reason="pending_order_reconciliation", side=state.open_position.token_side)
         row["decision"] = _decision_log(decision)
         return decision
-    decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
+    if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None:
+        decision = evaluate_poly_exit(snap, state.open_position, cfg.poly_source, state)
+    else:
+        decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
     row["decision"] = _decision_log(decision)
     if decision.model_prob is not None:
         state.record_model_prob(
@@ -619,7 +623,10 @@ async def handle_flat_tick(
         row["decision"] = _decision_log(decision)
         return decision
     state.record_reference_baseline(snap)
-    decision = evaluate_entry(snap, state, cfg.edge)
+    if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None:
+        decision = evaluate_poly_entry(snap, state, cfg.poly_source)
+    else:
+        decision = evaluate_entry(snap, state, cfg.edge)
     row["decision"] = _decision_log(decision)
     if decision.action != "enter":
         return decision
@@ -670,7 +677,7 @@ async def handle_flat_tick(
     row["order"] = result.__dict__
     if options.analysis_logs:
         row["analysis"] = {"price_sources": price_analysis, **_entry_analysis(decision, result)}
-    if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
+    if result.success and decision.side is not None and decision.edge is not None:
         state.record_entry(PositionSnapshot(
             market_slug=window.slug,
             token_side=decision.side,
@@ -678,11 +685,11 @@ async def handle_flat_tick(
             entry_time=snap.age_sec,
             entry_avg_price=result.avg_price,
             filled_shares=result.filled_size,
-            entry_model_prob=decision.model_prob,
+            entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
             entry_edge=decision.edge,
             entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
             entry_favorable_gap_bps=decision.favorable_gap_bps,
-            entry_reference_distance_bps=decision.entry_reference_distance_bps,
+            entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
         ))
         row["event"] = "entry"
         row["entry_side"] = decision.side

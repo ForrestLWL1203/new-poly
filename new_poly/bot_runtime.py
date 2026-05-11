@@ -48,6 +48,7 @@ from new_poly.strategy.dynamic_params import (
     analyze_dynamic_params,
 )
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
+from new_poly.strategy.poly_source import PolySourceConfig
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import (
     BuyRetryParams,
@@ -79,7 +80,9 @@ class RiskConfig:
 
 @dataclass(frozen=True)
 class BotConfig:
+    strategy_mode: str
     edge: EdgeConfig
+    poly_source: PolySourceConfig | None
     execution: ExecutionConfig
     risk: RiskConfig
     amount_usd: float
@@ -281,6 +284,36 @@ def _float_tuple(value: Any, default: tuple[float, ...]) -> tuple[float, ...]:
 
 def load_bot_config(path: Path) -> BotConfig:
     raw = _load_yaml(path)
+    strategy_mode = str(_deep_get(raw, ("strategy", "strategy_mode"), _deep_get(raw, ("strategy_mode",), "prob_edge")))
+    if strategy_mode not in {"prob_edge", "poly_single_source"}:
+        raise ValueError(f"unsupported strategy_mode: {strategy_mode}")
+    poly = PolySourceConfig(
+        entry_start_age_sec=float(_deep_get(raw, ("poly_source", "entry_start_age_sec"), 100.0)),
+        entry_end_age_sec=float(_deep_get(raw, ("poly_source", "entry_end_age_sec"), 240.0)),
+        final_no_entry_remaining_sec=float(_deep_get(raw, ("poly_source", "final_no_entry_remaining_sec"), 30.0)),
+        early_to_core_age_sec=float(_deep_get(raw, ("poly_source", "early_to_core_age_sec"), 120.0)),
+        core_to_late_age_sec=float(_deep_get(raw, ("poly_source", "core_to_late_age_sec"), 240.0)),
+        max_entries_per_market=int(_deep_get(raw, ("poly_source", "max_entries_per_market"), 1)),
+        max_book_age_ms=float(_deep_get(raw, ("poly_source", "max_book_age_ms"), 1000.0)),
+        poly_reference_distance_bps=float(_deep_get(raw, ("poly_source", "poly_reference_distance_bps"), 0.5)),
+        poly_trend_lookback_sec=float(_deep_get(raw, ("poly_source", "poly_trend_lookback_sec"), 3.0)),
+        poly_return_bps=float(_deep_get(raw, ("poly_source", "poly_return_bps"), 0.3)),
+        max_entry_ask=float(_deep_get(raw, ("poly_source", "max_entry_ask"), 0.65)),
+        min_poly_entry_score=float(_deep_get(raw, ("poly_source", "min_poly_entry_score"), 0.0)),
+        entry_tick_size=float(_deep_get(raw, ("poly_source", "entry_tick_size"), 0.01)),
+        buy_price_buffer_ticks=float(_deep_get(raw, ("poly_source", "buy_price_buffer_ticks"), 2.0)),
+        exit_reference_adverse_bps=float(_deep_get(raw, ("poly_source", "exit_reference_adverse_bps"), 1.0)),
+        poly_trend_reversal_bps=float(_deep_get(raw, ("poly_source", "poly_trend_reversal_bps"), 0.3)),
+        market_disagrees_exit_threshold=float(_deep_get(raw, ("poly_source", "market_disagrees_exit_threshold"), 0.55)),
+        market_disagrees_exit_min_loss=float(_deep_get(raw, ("poly_source", "market_disagrees_exit_min_loss"), 0.03)),
+        market_disagrees_exit_min_age_sec=float(_deep_get(raw, ("poly_source", "market_disagrees_exit_min_age_sec"), 3.0)),
+        final_force_exit_remaining_sec=float(_deep_get(raw, ("poly_source", "final_force_exit_remaining_sec"), 30.0)),
+        final_profit_hold_min_profit_ratio=float(_deep_get(raw, ("poly_source", "final_profit_hold_min_profit_ratio"), 0.10)),
+        hold_to_settlement_enabled=bool(_deep_get(raw, ("poly_source", "hold_to_settlement_enabled"), True)),
+        hold_to_settlement_min_profit_ratio=float(_deep_get(raw, ("poly_source", "hold_to_settlement_min_profit_ratio"), 2.0)),
+        hold_to_settlement_min_bid_avg=float(_deep_get(raw, ("poly_source", "hold_to_settlement_min_bid_avg"), 0.80)),
+        hold_to_settlement_min_bid_limit=float(_deep_get(raw, ("poly_source", "hold_to_settlement_min_bid_limit"), 0.75)),
+    )
     edge = EdgeConfig(
         early_required_edge=float(_deep_get(raw, ("strategy", "early_required_edge"), 0.16)),
         core_required_edge=float(_deep_get(raw, ("strategy", "core_required_edge"), 0.14)),
@@ -396,7 +429,9 @@ def load_bot_config(path: Path) -> BotConfig:
     execution = execution_raw.normalized()
     amount_usd = float(_deep_get(raw, ("execution", "amount_usd"), 5.0))
     return BotConfig(
+        strategy_mode=strategy_mode,
         edge=edge,
+        poly_source=poly if strategy_mode == "poly_single_source" else None,
         execution=execution,
         risk=RiskConfig(
             consecutive_loss_limit=max(0, int(_deep_get(raw, ("risk", "consecutive_loss_limit"), 5))),
@@ -500,6 +535,8 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         ))
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
+    if args.mode == "live" and cfg.strategy_mode == "poly_single_source":
+        raise ValueError("poly_single_source does not support live mode")
     if args.dynamic_params and args.jsonl is None:
         raise ValueError("--dynamic-params requires --jsonl for analysis input")
     return RuntimeOptions(
@@ -525,6 +562,7 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
         "event": "config",
         "mode": options.mode,
         "analysis_logs": options.analysis_logs,
+        "strategy_mode": cfg.strategy_mode,
         "coinbase_enabled": cfg.coinbase_enabled,
         "polymarket_price_enabled": cfg.polymarket_price_enabled,
         "max_polymarket_price_age_sec": cfg.max_polymarket_price_age_sec,
@@ -533,6 +571,7 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
         "windows": options.windows,
         "once": options.once,
         "strategy": asdict(cfg.edge),
+        "poly_source": asdict(cfg.poly_source) if cfg.poly_source is not None else None,
         "execution": {
             **asdict(cfg.execution),
             "amount_usd": cfg.amount_usd,
@@ -646,6 +685,9 @@ def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
             "polymarket_divergence_bps",
             "lead_binance_return_3s_bps",
             "lead_polymarket_return_3s_bps",
+            "lead_polymarket_return_10s_bps",
+            "lead_polymarket_return_15s_bps",
+            "poly_return_since_entry_start_bps",
             "lead_binance_side",
             "lead_polymarket_side",
             "lead_binance_side_disagrees_with_polymarket",
@@ -688,6 +730,9 @@ def _reference_meta(meta: dict[str, Any]) -> dict[str, Any]:
         "polymarket_divergence_bps",
         "lead_binance_return_3s_bps",
         "lead_polymarket_return_3s_bps",
+        "lead_polymarket_return_10s_bps",
+        "lead_polymarket_return_15s_bps",
+        "poly_return_since_entry_start_bps",
         "lead_binance_side",
         "lead_polymarket_side",
         "lead_binance_side_disagrees_with_polymarket",
@@ -965,6 +1010,16 @@ def _snapshot(
     lead_coinbase_side = side_vs_k(raw_coinbase_price, prices.k_price)
     lead_proxy_side = side_vs_k(raw_proxy_price, prices.k_price)
     lead_polymarket_side = side_vs_k(price.polymarket, prices.k_price)
+    poly_entry_start_age = (
+        cfg.poly_source.entry_start_age_sec
+        if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None
+        else cfg.edge.entry_start_age_sec
+    )
+    poly_since_entry_start = (
+        price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=age_sec - poly_entry_start_age)
+        if age_sec > poly_entry_start_age
+        else None
+    )
     up = token_state(
         stream,
         window.up_token,
@@ -1007,6 +1062,12 @@ def _snapshot(
         polymarket_divergence_bps=lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps,
         polymarket_price=price.polymarket,
         polymarket_price_age_sec=price.polymarket_age_sec,
+        polymarket_return_1s_bps=price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=1.0),
+        polymarket_return_3s_bps=price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=3.0),
+        polymarket_return_5s_bps=price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=5.0),
+        polymarket_return_10s_bps=price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=10.0),
+        polymarket_return_15s_bps=price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=15.0),
+        poly_return_since_entry_start_bps=poly_since_entry_start,
     )
     meta = {
         "ts": now.astimezone().isoformat(),
@@ -1049,6 +1110,9 @@ def _snapshot(
         "lead_polymarket_return_1s_bps": _compact(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=1.0), 3),
         "lead_polymarket_return_3s_bps": _compact(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=3.0), 3),
         "lead_polymarket_return_5s_bps": _compact(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=5.0), 3),
+        "lead_polymarket_return_10s_bps": _compact(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=10.0), 3),
+        "lead_polymarket_return_15s_bps": _compact(price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=15.0), 3),
+        "poly_return_since_entry_start_bps": _compact(poly_since_entry_start, 3),
         "lead_binance_side": lead_binance_side,
         "lead_coinbase_side": lead_coinbase_side,
         "lead_proxy_side": lead_proxy_side,

@@ -9,12 +9,14 @@ from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, evaluate_entry, evaluate_exit, required_edge_for_entry
+from new_poly.strategy.poly_source import PolySourceConfig, evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.execution import sell_aggression_ticks
 
 
 @dataclass(frozen=True)
 class BacktestConfig:
+    strategy_mode: str = "prob_edge"
     amount_usd: float = 5.0
     early_required_edge: float = 0.16
     core_required_edge: float = 0.14
@@ -100,6 +102,15 @@ class BacktestConfig:
     exit_reference_adverse_bps: float = 0.0
     logic_decay_reentry_cooldown_sec: float = 30.0
     honor_order_events: bool = False
+    poly_reference_distance_bps: float = 0.5
+    poly_trend_lookback_sec: float = 3.0
+    poly_return_bps: float = 0.3
+    max_entry_ask: float = 0.65
+    min_poly_entry_score: float = 0.0
+    poly_buy_price_buffer_ticks: float = 2.0
+    poly_exit_reference_adverse_bps: float = 1.0
+    poly_trend_reversal_bps: float = 0.3
+    compute_poly_returns: bool = True
 
     def edge_config(self) -> EdgeConfig:
         return EdgeConfig(
@@ -173,6 +184,35 @@ class BacktestConfig:
             entry_reference_confirm_bps=self.entry_reference_confirm_bps,
             exit_reference_adverse_bps=self.exit_reference_adverse_bps,
             logic_decay_reentry_cooldown_sec=self.logic_decay_reentry_cooldown_sec,
+        )
+
+    def poly_source_config(self) -> PolySourceConfig:
+        return PolySourceConfig(
+            entry_start_age_sec=self.entry_start_age_sec,
+            entry_end_age_sec=self.entry_end_age_sec,
+            final_no_entry_remaining_sec=self.final_force_exit_remaining_sec,
+            early_to_core_age_sec=self.early_to_core_age_sec,
+            core_to_late_age_sec=self.core_to_late_age_sec,
+            max_entries_per_market=self.max_entries_per_market,
+            max_book_age_ms=self.max_book_age_ms,
+            poly_reference_distance_bps=self.poly_reference_distance_bps,
+            poly_trend_lookback_sec=self.poly_trend_lookback_sec,
+            poly_return_bps=self.poly_return_bps,
+            max_entry_ask=self.max_entry_ask,
+            min_poly_entry_score=self.min_poly_entry_score,
+            entry_tick_size=self.entry_tick_size,
+            buy_price_buffer_ticks=self.poly_buy_price_buffer_ticks,
+            exit_reference_adverse_bps=self.poly_exit_reference_adverse_bps,
+            poly_trend_reversal_bps=self.poly_trend_reversal_bps,
+            market_disagrees_exit_threshold=self.market_disagrees_exit_threshold or 0.55,
+            market_disagrees_exit_min_loss=self.market_disagrees_exit_min_loss,
+            market_disagrees_exit_min_age_sec=self.market_disagrees_exit_min_age_sec,
+            final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
+            final_profit_hold_min_profit_ratio=self.final_profit_hold_min_profit_ratio,
+            hold_to_settlement_enabled=self.hold_to_settlement_enabled,
+            hold_to_settlement_min_profit_ratio=self.hold_to_settlement_min_profit_ratio,
+            hold_to_settlement_min_bid_avg=self.hold_to_settlement_min_bid_avg,
+            hold_to_settlement_min_bid_limit=self.hold_to_settlement_min_bid_limit,
         )
 
 
@@ -257,6 +297,12 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
         ),
         polymarket_price=_first_float(row.get("polymarket_price"), reference.get("polymarket_price"), analysis_sources.get("polymarket_price")),
         polymarket_price_age_sec=_first_float(row.get("polymarket_price_age_sec"), reference.get("polymarket_price_age_sec"), analysis_sources.get("polymarket_price_age_sec")),
+        polymarket_return_1s_bps=_first_float(row.get("polymarket_return_1s_bps"), row.get("lead_polymarket_return_1s_bps"), reference.get("lead_polymarket_return_1s_bps"), analysis_sources.get("lead_polymarket_return_1s_bps")),
+        polymarket_return_3s_bps=_first_float(row.get("polymarket_return_3s_bps"), row.get("lead_polymarket_return_3s_bps"), reference.get("lead_polymarket_return_3s_bps"), analysis_sources.get("lead_polymarket_return_3s_bps")),
+        polymarket_return_5s_bps=_first_float(row.get("polymarket_return_5s_bps"), row.get("lead_polymarket_return_5s_bps"), reference.get("lead_polymarket_return_5s_bps"), analysis_sources.get("lead_polymarket_return_5s_bps")),
+        polymarket_return_10s_bps=_first_float(row.get("polymarket_return_10s_bps"), row.get("lead_polymarket_return_10s_bps"), reference.get("lead_polymarket_return_10s_bps"), analysis_sources.get("lead_polymarket_return_10s_bps")),
+        polymarket_return_15s_bps=_first_float(row.get("polymarket_return_15s_bps"), row.get("lead_polymarket_return_15s_bps"), reference.get("lead_polymarket_return_15s_bps"), analysis_sources.get("lead_polymarket_return_15s_bps")),
+        poly_return_since_entry_start_bps=_first_float(row.get("poly_return_since_entry_start_bps"), reference.get("poly_return_since_entry_start_bps"), analysis_sources.get("poly_return_since_entry_start_bps")),
     )
 
 
@@ -281,6 +327,52 @@ def _group_rows(rows: Iterable[dict[str, Any]]) -> Iterable[tuple[str, list[dict
     for slug, group in itertools.groupby(sorted_rows, key=lambda item: str(item.get("market_slug") or "")):
         if slug:
             yield slug, list(group)
+
+
+def _poly_price_from_row(row: dict[str, Any]) -> float | None:
+    reference = row.get("reference") if isinstance(row.get("reference"), dict) else {}
+    analysis_sources = (row.get("analysis") or {}).get("price_sources", {})
+    return _first_float(row.get("polymarket_price"), reference.get("polymarket_price"), analysis_sources.get("polymarket_price"))
+
+
+def _computed_poly_return(rows: list[dict[str, Any]], index: int, lookback_sec: float) -> float | None:
+    current_age = _float(rows[index].get("age_sec"))
+    current_price = _poly_price_from_row(rows[index])
+    if current_age is None or current_price is None or current_price <= 0:
+        return None
+    target_age = current_age - lookback_sec
+    best: tuple[float, float] | None = None
+    for row in rows[:index]:
+        age = _float(row.get("age_sec"))
+        price = _poly_price_from_row(row)
+        if age is None or price is None or price <= 0 or age > target_age:
+            continue
+        best = (age, price)
+    if best is None:
+        return None
+    previous_age, previous_price = best
+    if current_age - previous_age > lookback_sec + 2.0:
+        return None
+    return (current_price - previous_price) / previous_price * 10000.0
+
+
+def _with_computed_poly_returns(rows: list[dict[str, Any]], *, entry_start_age_sec: float) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        updated = dict(row)
+        for lookback in (1.0, 3.0, 5.0, 10.0, 15.0):
+            key = f"lead_polymarket_return_{int(lookback)}s_bps"
+            if _first_float(updated.get(key), updated.get(f"polymarket_return_{int(lookback)}s_bps")) is None:
+                value = _computed_poly_return(rows, index, lookback)
+                if value is not None:
+                    updated[key] = value
+        age = _float(updated.get("age_sec"))
+        if age is not None and age > entry_start_age_sec and _first_float(updated.get("poly_return_since_entry_start_bps")) is None:
+            value = _computed_poly_return(rows, index, age - entry_start_age_sec)
+            if value is not None:
+                updated["poly_return_since_entry_start_bps"] = value
+        enriched.append(updated)
+    return enriched
 
 
 def _max_drawdown(equity_points: list[float]) -> float:
@@ -436,9 +528,26 @@ def _event_exit_price(row: dict[str, Any]) -> float | None:
     return _float(row.get("exit_price")) or _float(_analysis(row).get("exit_price")) or _float(_order(row).get("avg_price"))
 
 
+def _annotate_trade_settlement(trade: dict[str, Any], settlement: dict[str, Any]) -> None:
+    winning_side = settlement.get("winning_side")
+    if winning_side is None:
+        return
+    shares = float(trade.get("shares") or 0.0)
+    entry_price = float(trade.get("entry_price") or 0.0)
+    entry_side = trade.get("entry_side")
+    settle_only_pnl = (1.0 - entry_price) * shares if entry_side == winning_side else -entry_price * shares
+    trade["winning_side"] = winning_side
+    trade["direction_correct"] = entry_side == winning_side
+    trade["settle_only_pnl"] = round(settle_only_pnl, 6)
+    trade["settlement_uncertain"] = bool(settlement.get("settlement_uncertain"))
+    trade["settlement_price"] = settlement.get("settlement_price")
+    trade["settlement_k_price"] = settlement.get("settlement_k_price")
+
+
 def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None = None) -> BacktestResult:
     cfg = config or BacktestConfig()
     edge_cfg = cfg.edge_config()
+    poly_cfg = cfg.poly_source_config()
     trades: list[dict[str, Any]] = []
     equity = 0.0
     equity_points: list[float] = []
@@ -452,6 +561,9 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
 
     for slug, group in _group_rows(rows):
         windows += 1
+        if cfg.compute_poly_returns:
+            group = _with_computed_poly_returns(group, entry_start_age_sec=cfg.entry_start_age_sec)
+        group_settlement = _settlement(group, boundary_usd=cfg.settlement_boundary_usd)
         state = StrategyState(current_market_slug=slug)
         state.reset_for_market(slug)
         active_trade: dict[str, Any] | None = None
@@ -501,6 +613,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                             "pnl": total_pnl,
                             "hold_sec": exit_age - active_trade["entry_age_sec"],
                         })
+                        _annotate_trade_settlement(active_trade, group_settlement)
                         equity += total_pnl
                         equity_points.append(equity)
                         trades.append(active_trade)
@@ -508,8 +621,11 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         exits += 1
                         continue
             if state.has_position and state.open_position is not None:
-                decision = evaluate_exit(snap, state.open_position, edge_cfg, state)
-                if decision.model_prob is not None:
+                if cfg.strategy_mode == "poly_single_source":
+                    decision = evaluate_poly_exit(snap, state.open_position, poly_cfg, state)
+                else:
+                    decision = evaluate_exit(snap, state.open_position, edge_cfg, state)
+                if cfg.strategy_mode != "poly_single_source" and decision.model_prob is not None:
                     state.record_model_prob(
                         snap.age_sec,
                         decision.model_prob,
@@ -535,6 +651,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "pnl": pnl,
                         "hold_sec": exit_age - active_trade["entry_age_sec"],
                     })
+                    _annotate_trade_settlement(active_trade, group_settlement)
                     equity += pnl
                     equity_points.append(equity)
                     trades.append(active_trade)
@@ -542,10 +659,13 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     exits += 1
             else:
                 state.record_reference_baseline(snap)
-                decision = evaluate_entry(snap, state, edge_cfg)
+                if cfg.strategy_mode == "poly_single_source":
+                    decision = evaluate_poly_entry(snap, state, poly_cfg)
+                else:
+                    decision = evaluate_entry(snap, state, edge_cfg)
                 if decision.action == "skip":
                     skip_reasons[decision.reason] += 1
-                if decision.action == "enter" and decision.side is not None and decision.price is not None and decision.model_prob is not None and decision.edge is not None:
+                if decision.action == "enter" and decision.side is not None and decision.price is not None and decision.edge is not None:
                     fill_price = _entry_fill_price(decision, cfg)
                     fill_snap = snap
                     if fill_price is None:
@@ -567,11 +687,11 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         entry_time=fill_snap.age_sec,
                         entry_avg_price=fill_price,
                         filled_shares=shares,
-                        entry_model_prob=decision.model_prob,
-                        entry_edge=decision.edge,
+                        entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
+                        entry_edge=decision.edge if decision.edge is not None else 0.0,
                         entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
                         entry_favorable_gap_bps=decision.favorable_gap_bps,
-                        entry_reference_distance_bps=decision.entry_reference_distance_bps,
+                        entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
                     ))
                     entry_phase = decision.phase or required_edge_for_entry(fill_snap, edge_cfg).phase
                     active_trade = {
@@ -582,13 +702,18 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "entry_price": fill_price,
                         "entry_model_prob": decision.model_prob,
                         "entry_edge": decision.edge,
-                        "entry_edge_at_fill": decision.model_prob - fill_price,
+                        "entry_edge_at_fill": (decision.model_prob - fill_price) if decision.model_prob is not None else None,
+                        "poly_entry_score": decision.poly_entry_score,
+                        "poly_reference_distance_bps": decision.poly_reference_distance_bps,
+                        "poly_return_bps": decision.poly_return_bps,
+                        "poly_trend_lookback_sec": decision.poly_trend_lookback_sec,
+                        "poly_return_since_entry_start_bps": decision.poly_return_since_entry_start_bps,
                         "shares": shares,
                     }
                     entries += 1
 
         if state.has_position and state.open_position is not None and active_trade is not None:
-            settlement = _settlement(group, boundary_usd=cfg.settlement_boundary_usd)
+            settlement = group_settlement
             winning_side = settlement.get("winning_side")
             if winning_side is not None:
                 pnl = state.record_settlement(winning_side)
@@ -605,6 +730,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     "settlement_price": settlement.get("settlement_price"),
                     "settlement_k_price": settlement.get("settlement_k_price"),
                 })
+                _annotate_trade_settlement(active_trade, settlement)
                 equity += total_pnl
                 equity_points.append(equity)
                 trades.append(active_trade)
@@ -629,7 +755,12 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
 
     wins = sum(1 for trade in trades if trade.get("pnl", 0.0) > 0)
     total_pnl = round(sum(float(trade.get("pnl") or 0.0) for trade in trades), 6)
+    settle_only_values = [float(trade["settle_only_pnl"]) for trade in trades if trade.get("settle_only_pnl") is not None]
+    direction_known = [trade for trade in trades if trade.get("direction_correct") is not None]
+    side_counts = Counter(str(trade.get("entry_side")) for trade in trades if trade.get("entry_side") in {"up", "down"})
+    exit_reason_counts = Counter(str(trade.get("exit_reason")) for trade in trades if trade.get("exit_reason"))
     summary = {
+        "strategy_mode": cfg.strategy_mode,
         "windows": windows,
         "entries": entries,
         "closed_trades": len(trades),
@@ -640,6 +771,10 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
         "win_rate": round(wins / len(trades), 4) if trades else 0.0,
         "total_pnl": total_pnl,
         "avg_pnl_per_trade": round(total_pnl / len(trades), 6) if trades else 0.0,
+        "settle_only_total_pnl": round(sum(settle_only_values), 6) if settle_only_values else 0.0,
+        "direction_accuracy": round(sum(1 for trade in direction_known if trade.get("direction_correct")) / len(direction_known), 4) if direction_known else 0.0,
+        "side_counts": dict(sorted(side_counts.items())),
+        "exit_reason_counts": dict(sorted(exit_reason_counts.items())),
         "max_drawdown": _max_drawdown(equity_points),
         "avg_hold_sec": round(sum(float(trade.get("hold_sec") or 0.0) for trade in trades) / len(trades), 2) if trades else 0.0,
         "skip_reason_counts": dict(sorted(skip_reasons.items(), key=lambda pair: (-pair[1], pair[0]))),
@@ -685,4 +820,57 @@ def scan_configs(
         key = lambda item: (item["avg_pnl_per_trade"], item["win_rate"], item["entries"])
     else:
         key = lambda item: (item["total_pnl"], item["win_rate"], item["entries"])
+    return sorted(results, key=key, reverse=True)
+
+
+def scan_poly_source_configs(
+    rows: Iterable[dict[str, Any]],
+    *,
+    reference_distances: Iterable[float],
+    trend_lookbacks: Iterable[float],
+    return_thresholds: Iterable[float],
+    max_entry_asks: Iterable[float],
+    min_scores: Iterable[float],
+    base_config: BacktestConfig | None = None,
+    min_entries: int = 0,
+    sort_by: str = "pnl",
+) -> list[dict[str, Any]]:
+    base = replace(base_config or BacktestConfig(), strategy_mode="poly_single_source")
+    materialized: list[dict[str, Any]] = []
+    for _slug, group in _group_rows(rows):
+        materialized.extend(_with_computed_poly_returns(group, entry_start_age_sec=base.entry_start_age_sec))
+    results: list[dict[str, Any]] = []
+    for distance, lookback, return_bps, max_ask, min_score in itertools.product(
+        reference_distances,
+        trend_lookbacks,
+        return_thresholds,
+        max_entry_asks,
+        min_scores,
+    ):
+        cfg = replace(
+            base,
+            compute_poly_returns=False,
+            poly_reference_distance_bps=float(distance),
+            poly_trend_lookback_sec=float(lookback),
+            poly_return_bps=float(return_bps),
+            max_entry_ask=float(max_ask),
+            min_poly_entry_score=float(min_score),
+        )
+        result = run_backtest(materialized, cfg)
+        if result.summary["entries"] < min_entries:
+            continue
+        results.append({
+            "poly_reference_distance_bps": distance,
+            "poly_trend_lookback_sec": lookback,
+            "poly_return_bps": return_bps,
+            "max_entry_ask": max_ask,
+            "min_poly_entry_score": min_score,
+            **result.summary,
+        })
+    if sort_by == "win_rate":
+        key = lambda item: (item["win_rate"], item["direction_accuracy"], item["entries"], item["total_pnl"])
+    elif sort_by == "direction_accuracy":
+        key = lambda item: (item["direction_accuracy"], item["total_pnl"], item["entries"])
+    else:
+        key = lambda item: (item["total_pnl"], item["win_rate"], item["direction_accuracy"], item["entries"])
     return sorted(results, key=key, reverse=True)

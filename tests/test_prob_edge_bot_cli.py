@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 from new_poly.bot_log_schema import (
     _entry_analysis,
@@ -964,3 +965,22 @@ def test_live_non_analysis_keeps_operational_lifecycle_rows() -> None:
         "exit_intent",
     ):
         assert _should_write_row({"event": event, "mode": "live", "market_slug": "m1"}, seen, analysis_logs=False) is True
+
+
+def test_poly_single_source_config_loads_and_blocks_live_mode() -> None:
+    cfg = load_bot_config(REPO_ROOT / "configs" / "prob_poly_single_source.yaml")
+
+    assert cfg.strategy_mode == "poly_single_source"
+    assert cfg.poly_source is not None
+    assert cfg.poly_source.poly_trend_lookback_sec == 3.0
+    assert cfg.poly_source.max_entry_ask == 0.65
+
+    args = build_arg_parser().parse_args([
+        "--config",
+        str(REPO_ROOT / "configs" / "prob_poly_single_source.yaml"),
+        "--mode",
+        "live",
+        "--i-understand-live-risk",
+    ])
+    with pytest.raises(ValueError, match="poly_single_source does not support live mode"):
+        build_runtime_options(args)

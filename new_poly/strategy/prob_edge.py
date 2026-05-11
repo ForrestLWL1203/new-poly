@@ -139,6 +139,12 @@ class MarketSnapshot:
     polymarket_divergence_bps: float | None = None
     polymarket_price: float | None = None
     polymarket_price_age_sec: float | None = None
+    polymarket_return_1s_bps: float | None = None
+    polymarket_return_3s_bps: float | None = None
+    polymarket_return_5s_bps: float | None = None
+    polymarket_return_10s_bps: float | None = None
+    polymarket_return_15s_bps: float | None = None
+    poly_return_since_entry_start_bps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +178,11 @@ class StrategyDecision:
     adjusted_model_prob_shadow: float | None = None
     prob_shadow_adjustment: float | None = None
     lead_follow_state: str | None = None
+    poly_reference_distance_bps: float | None = None
+    poly_return_bps: float | None = None
+    poly_trend_lookback_sec: float | None = None
+    poly_return_since_entry_start_bps: float | None = None
+    poly_entry_score: float | None = None
 
 
 def _missing_model_inputs(snapshot: MarketSnapshot) -> bool:

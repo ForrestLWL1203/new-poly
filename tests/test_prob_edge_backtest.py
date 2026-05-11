@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs
+from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs, scan_poly_source_configs
 
 
 def _row(slug: str, age: int, s_price: float | None, k_price: float | None = 100.0) -> dict:
@@ -39,6 +39,29 @@ def _row(slug: str, age: int, s_price: float | None, k_price: float | None = 100
             "book_age_ms": 20.0,
         },
     }
+
+
+def _poly_row(
+    slug: str,
+    age: int,
+    *,
+    poly_price: float,
+    k_price: float = 100.0,
+    poly_return_3s: float = 0.4,
+    up_ask: float = 0.60,
+    down_ask: float = 0.60,
+    up_bid: float = 0.59,
+    down_bid: float = 0.59,
+    final_s_price: float | None = None,
+) -> dict:
+    row = _row(slug, age, final_s_price if final_s_price is not None else poly_price, k_price)
+    row["polymarket_price"] = poly_price
+    row["lead_polymarket_return_1s_bps"] = poly_return_3s
+    row["lead_polymarket_return_3s_bps"] = poly_return_3s
+    row["lead_polymarket_return_5s_bps"] = poly_return_3s
+    row["up"].update({"ask": up_ask, "ask_avg": up_ask, "ask_limit": up_ask, "bid_avg": up_bid, "bid_limit": up_bid})
+    row["down"].update({"ask": down_ask, "ask_avg": down_ask, "ask_limit": down_ask, "bid_avg": down_bid, "bid_limit": down_bid})
+    return row
 
 
 def _hide_settlement_price(row: dict) -> None:
@@ -238,6 +261,75 @@ def test_backtest_entry_edge_matches_strategy_edge_and_records_fill_edge() -> No
     trade = result.trades[0]
     assert trade["entry_edge"] == trade["entry_model_prob"] - rows[0]["up"]["ask"]
     assert trade["entry_edge_at_fill"] == trade["entry_model_prob"] - trade["entry_price"]
+
+
+def test_poly_single_source_backtest_uses_poly_direction_and_reports_settle_only() -> None:
+    rows = [
+        _poly_row("m1", 100, poly_price=99.98, poly_return_3s=-0.4, down_ask=0.60, up_ask=0.80, final_s_price=99.0),
+        _poly_row("m1", 299, poly_price=99.90, poly_return_3s=-0.1, down_ask=0.20, down_bid=0.80, final_s_price=99.0),
+        _poly_row("m2", 100, poly_price=100.02, poly_return_3s=0.4, up_ask=0.60, down_ask=0.80, final_s_price=99.0),
+        _poly_row("m2", 130, poly_price=99.97, poly_return_3s=-0.4, up_ask=0.60, up_bid=0.45, final_s_price=99.0),
+    ]
+
+    result = run_backtest(rows, BacktestConfig(strategy_mode="poly_single_source", amount_usd=1.0))
+
+    assert result.summary["strategy_mode"] == "poly_single_source"
+    assert result.summary["entries"] == 2
+    assert result.summary["direction_accuracy"] == 0.5
+    assert result.summary["side_counts"] == {"down": 1, "up": 1}
+    assert result.summary["settle_only_total_pnl"] == pytest.approx(0.666667 - 1.0)
+    assert result.summary["exit_reason_counts"]["reference_adverse_exit"] == 1
+    assert result.trades[0]["entry_side"] == "down"
+    assert result.trades[0]["entry_model_prob"] is None
+    assert result.trades[0]["poly_entry_score"] is not None
+
+
+def test_scan_poly_source_configs_returns_ranked_parameter_results() -> None:
+    rows = [
+        _poly_row("m1", 100, poly_price=100.02, poly_return_3s=0.4, up_ask=0.60, final_s_price=101.0),
+        _poly_row("m1", 299, poly_price=100.10, poly_return_3s=0.1, up_bid=0.90, final_s_price=101.0),
+    ]
+
+    results = scan_poly_source_configs(
+        rows,
+        reference_distances=[0.5, 3.0],
+        trend_lookbacks=[3.0],
+        return_thresholds=[0.3],
+        max_entry_asks=[0.65],
+        min_scores=[0.0],
+        base_config=BacktestConfig(strategy_mode="poly_single_source", amount_usd=1.0),
+    )
+
+    assert len(results) == 2
+    assert results[0]["poly_reference_distance_bps"] == 0.5
+    assert results[0]["entries"] == 1
+    assert results[0]["total_pnl"] >= results[1]["total_pnl"]
+
+
+def test_poly_single_source_backtest_computes_configured_lookback_from_history() -> None:
+    rows = [
+        _poly_row("m1", 100, poly_price=100.00, poly_return_3s=0.0, up_ask=0.60, final_s_price=101.0),
+        _poly_row("m1", 110, poly_price=100.02, poly_return_3s=0.0, up_ask=0.60, final_s_price=101.0),
+        _poly_row("m1", 299, poly_price=100.10, poly_return_3s=0.0, up_bid=0.90, final_s_price=101.0),
+    ]
+    for row in rows:
+        row.pop("lead_polymarket_return_10s_bps", None)
+
+    result = run_backtest(
+        rows,
+        BacktestConfig(
+            strategy_mode="poly_single_source",
+            amount_usd=1.0,
+            entry_start_age_sec=100.0,
+            poly_trend_lookback_sec=10.0,
+            poly_return_bps=0.1,
+        ),
+    )
+
+    assert result.summary["entries"] == 1
+    assert result.trades[0]["poly_trend_lookback_sec"] == 10.0
+    assert result.trades[0]["poly_return_bps"] == pytest.approx(2.0, abs=0.01)
+    assert result.trades[0]["poly_return_since_entry_start_bps"] == pytest.approx(2.0, abs=0.01)
 
 
 def test_backtest_entry_phase_uses_strategy_entry_phase() -> None:
