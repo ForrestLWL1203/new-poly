@@ -10,7 +10,7 @@ from new_poly.bot_runner import BotRunner, StartedContext, StartupContext
 from new_poly.bot_runtime import DvolRefreshState, WindowPrices, build_arg_parser, build_runtime_options
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.market import MarketWindow
-from new_poly.strategy.state import PositionSnapshot, StrategyState
+from new_poly.strategy.state import PositionSnapshot, StrategyState, UnknownEntryOrder
 from new_poly.strategy.prob_edge import MarketSnapshot
 from new_poly.strategy.prob_edge import StrategyDecision
 from new_poly.strategy.dynamic_params import DynamicConfig, DynamicState, SignalProfile
@@ -208,10 +208,67 @@ def test_live_unknown_buy_no_fill_records_safety_check_candidate(monkeypatch) ->
     asyncio.run(scenario())
 
 
+def test_live_unresolved_unknown_entry_blocks_new_buy(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_flat_tick
+
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+        ]))
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=150.0,
+            remaining_sec=150.0,
+            s_price=101.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.unresolved_unknown_entry = UnknownEntryOrder(
+            market_slug="m1",
+            token_side="up",
+            token_id=window.up_token,
+            amount_usd=1.0,
+            entry_time=130.0,
+            entry_avg_price=0.29,
+            entry_model_prob=0.70,
+            entry_edge=0.41,
+        )
+
+        def fail_if_evaluated(*_args, **_kwargs):
+            raise AssertionError("entry should be blocked before strategy evaluation")
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_entry", fail_if_evaluated)
+
+        decision = await handle_flat_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=DummyGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=DummyLogger(),
+        )
+
+        assert decision.action == "skip"
+        assert decision.reason == "unresolved_unknown_entry_pending"
+        assert row["decision"]["reason"] == "unresolved_unknown_entry_pending"
+
+    asyncio.run(scenario())
+
+
 def test_live_entry_safety_check_recovers_balance_and_runs_exit(monkeypatch) -> None:
     async def scenario() -> None:
         from new_poly.bot_execution_flow import handle_flat_tick
-        from new_poly.strategy.state import UnknownEntryOrder
         from new_poly.trading.execution import ExecutionResult
 
         options = build_runtime_options(build_arg_parser().parse_args([
@@ -295,7 +352,6 @@ def test_live_entry_safety_check_recovers_balance_and_runs_exit(monkeypatch) -> 
 def test_live_entry_safety_check_skips_when_position_already_open(monkeypatch) -> None:
     async def scenario() -> None:
         from new_poly.bot_execution_flow import handle_flat_tick
-        from new_poly.strategy.state import UnknownEntryOrder
 
         options = build_runtime_options(build_arg_parser().parse_args([
             "--mode",
@@ -356,6 +412,81 @@ def test_live_entry_safety_check_skips_when_position_already_open(monkeypatch) -
         assert state.open_position is not None
         assert state.open_position.token_side == "down"
         assert logger.rows[-1]["event"] == "unknown_balance_recovery_skipped_existing_position"
+        assert logger.rows[-1]["orphan_balance_review_required"] is True
+
+    asyncio.run(scenario())
+
+
+def test_live_entry_safety_check_retries_after_balance_unavailable(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_flat_tick
+
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+        ]))
+        logger = DummyLogger()
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=241.0,
+            remaining_sec=59.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        state.unresolved_unknown_entry = UnknownEntryOrder(
+            market_slug="m1",
+            token_side="up",
+            token_id=window.up_token,
+            amount_usd=1.0,
+            entry_time=130.0,
+            entry_avg_price=0.29,
+            entry_model_prob=0.70,
+            entry_edge=0.41,
+        )
+        balances = iter([None, 0.0])
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.get_token_balance", lambda token_id, safe=True: next(balances))
+
+        await handle_flat_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=DummyGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        )
+
+        assert state.unresolved_unknown_entry is not None
+        assert state.unresolved_unknown_entry.safety_checked is False
+
+        await handle_flat_tick(
+            row={"event": "tick", "market_slug": "m1"},
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=DummyGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=logger,
+        )
+
+        assert state.unresolved_unknown_entry is None
+        assert [item["event"] for item in logger.rows].count("unknown_entry_balance_safety_check") == 2
 
     asyncio.run(scenario())
 
@@ -363,7 +494,6 @@ def test_live_entry_safety_check_skips_when_position_already_open(monkeypatch) -
 def test_live_open_position_safety_check_skips_unknown_balance_and_keeps_exit_logic(monkeypatch) -> None:
     async def scenario() -> None:
         from new_poly.bot_execution_flow import handle_open_position_tick
-        from new_poly.strategy.state import UnknownEntryOrder
 
         options = build_runtime_options(build_arg_parser().parse_args([
             "--mode",
@@ -428,6 +558,54 @@ def test_live_open_position_safety_check_skips_unknown_balance_and_keeps_exit_lo
         assert state.open_position.token_side == "down"
         assert logger.rows[0]["event"] == "unknown_entry_balance_safety_check"
         assert logger.rows[1]["event"] == "unknown_balance_recovery_skipped_existing_position"
+        assert logger.rows[1]["orphan_balance_review_required"] is True
+
+    asyncio.run(scenario())
+
+
+def test_stale_successful_entry_result_logs_orphan_audit() -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import _finish_pending_entry_order
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args([
+            "--mode",
+            "live",
+            "--i-understand-live-risk",
+        ]))
+        logger = DummyLogger()
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m2")
+        state.mark_pending_execution("entry")
+        decision = StrategyDecision(
+            action="enter",
+            reason="edge",
+            side="up",
+            model_prob=0.70,
+            price=0.29,
+            limit_price=0.30,
+            depth_limit_price=0.29,
+            best_ask=0.29,
+            edge=0.41,
+        )
+
+        await _finish_pending_entry_order(
+            token_id=window.up_token,
+            decision=decision,
+            snap=MarketSnapshot("m1", 239.0, 61.0, 101.0, 100.0, 0.6),
+            window=window,
+            cfg=options.config,
+            options=options,
+            state=state,
+            logger=logger,
+            order_coro=asyncio.sleep(0, result=ExecutionResult(True, filled_size=3.4, avg_price=0.29, message="matched", mode="live")),
+            price_analysis={},
+        )
+
+        assert logger.rows[-1]["event"] == "orphan_entry_after_window_switch"
+        assert logger.rows[-1]["action"] == "manual_or_orphan_balance_review_required"
+        assert logger.rows[-1]["entry_side"] == "up"
+        assert logger.rows[-1]["entry_shares"] == 3.4
 
     asyncio.run(scenario())
 
@@ -711,6 +889,13 @@ def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
         await asyncio.gather(initial_dynamic_task, dynamic_task, runner.dynamic.task, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+def test_roll_window_waits_long_enough_for_unknown_buy_reconcile() -> None:
+    from new_poly.bot_runner import PENDING_EXECUTION_WINDOW_CLOSE_TIMEOUT_SEC
+    from new_poly.trading.execution import UNKNOWN_BUY_RECONCILE_DELAYS_SEC
+
+    assert PENDING_EXECUTION_WINDOW_CLOSE_TIMEOUT_SEC >= max(UNKNOWN_BUY_RECONCILE_DELAYS_SEC) + 3.0
 
 
 def test_prepare_tick_context_collects_snapshot_and_row(monkeypatch) -> None:

@@ -41,6 +41,7 @@ from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import LiveFakExecutionGateway, PaperExecutionGateway
 
 Gateway = LiveFakExecutionGateway | PaperExecutionGateway
+PENDING_EXECUTION_WINDOW_CLOSE_TIMEOUT_SEC = 15.0
 
 
 @dataclass(slots=True)
@@ -355,7 +356,10 @@ class BotRunner:
     async def roll_window(self) -> bool:
         if self.state.pending_execution_task is not None:
             try:
-                await asyncio.wait_for(asyncio.shield(self.state.pending_execution_task), timeout=8.0)
+                await asyncio.wait_for(
+                    asyncio.shield(self.state.pending_execution_task),
+                    timeout=PENDING_EXECUTION_WINDOW_CLOSE_TIMEOUT_SEC,
+                )
             except asyncio.TimeoutError:
                 self.logger.write({
                     "ts": dt.datetime.now(dt.timezone.utc).isoformat(),

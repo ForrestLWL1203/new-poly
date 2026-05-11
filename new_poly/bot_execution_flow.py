@@ -131,8 +131,9 @@ async def _query_unknown_entry_safety_balance(
         return None
     pending = state.unresolved_unknown_entry
     assert pending is not None
-    pending.safety_checked = True
     balance = await asyncio.to_thread(get_token_balance, pending.token_id, safe=True)
+    if balance is not None:
+        pending.safety_checked = True
     check_row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "mode": options.mode,
@@ -172,9 +173,20 @@ async def _finish_pending_entry_order(
             "order": result.__dict__,
         }
         if state.current_market_slug != window.slug:
-            row["event"] = "order_reconcile_stale"
             row["order_intent"] = "entry"
-            row["action"] = "ignore_result_after_window_switch"
+            row["token_id"] = token_id
+            row["entry_side"] = decision.side
+            if result.success:
+                row["event"] = "orphan_entry_after_window_switch"
+                row["action"] = "manual_or_orphan_balance_review_required"
+                row["entry_price"] = _compact(result.avg_price)
+                row["entry_shares"] = _compact(result.filled_size)
+            elif options.mode == "live" and _is_unconfirmed_unknown_buy(result):
+                row["event"] = "orphan_unknown_entry_after_window_switch"
+                row["action"] = "manual_or_orphan_balance_review_required"
+            else:
+                row["event"] = "order_reconcile_stale"
+                row["action"] = "ignore_result_after_window_switch"
             logger.write(row)
             return
         if result.success and decision.side is not None and decision.model_prob is not None and decision.edge is not None:
@@ -353,7 +365,14 @@ async def _maybe_recover_unknown_entry_balance(
     if safety is None:
         return None
     pending, balance, check_row = safety
-    if balance is None or balance <= 1e-9:
+    if balance is None:
+        logger.write({
+            **check_row,
+            "event": "unknown_entry_balance_safety_unavailable",
+        })
+        return None
+    if balance <= 1e-9:
+        state.clear_unresolved_unknown_entry()
         logger.write({
             **check_row,
             "event": "unknown_entry_balance_safety_no_balance",
@@ -365,6 +384,7 @@ async def _maybe_recover_unknown_entry_balance(
         logger.write({
             **check_row,
             "event": "unknown_balance_recovery_skipped_existing_position",
+            "orphan_balance_review_required": True,
             "open_position": _position_log(state.open_position, compact=True),
         })
         return decision
@@ -434,7 +454,13 @@ async def handle_open_position_tick(
         )
         if safety is not None:
             _pending, balance, check_row = safety
-            if balance is None or balance <= 1e-9:
+            if balance is None:
+                logger.write({
+                    **check_row,
+                    "event": "unknown_entry_balance_safety_unavailable",
+                })
+            elif balance <= 1e-9:
+                state.clear_unresolved_unknown_entry()
                 logger.write({
                     **check_row,
                     "event": "unknown_entry_balance_safety_no_balance",
@@ -443,6 +469,7 @@ async def handle_open_position_tick(
                 logger.write({
                     **check_row,
                     "event": "unknown_balance_recovery_skipped_existing_position",
+                    "orphan_balance_review_required": True,
                     "open_position": _position_log(state.open_position, compact=True),
                 })
     if state.has_pending_execution:
@@ -585,6 +612,10 @@ async def handle_flat_tick(
             return recovered_decision
     if state.has_pending_execution:
         decision = StrategyDecision(action="skip", reason="pending_order_reconciliation")
+        row["decision"] = _decision_log(decision)
+        return decision
+    if state.unresolved_unknown_entry is not None:
+        decision = StrategyDecision(action="skip", reason="unresolved_unknown_entry_pending")
         row["decision"] = _decision_log(decision)
         return decision
     state.record_reference_baseline(snap)
