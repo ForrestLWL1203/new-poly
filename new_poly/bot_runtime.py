@@ -754,7 +754,13 @@ def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str,
         return False
     reason = decision.get("reason")
     one_per_window_reasons = {"outside_entry_time", "max_entries", "final_no_entry"}
-    one_per_window_phase_reasons = {"edge_too_small"}
+    one_per_window_phase_reasons = {
+        "edge_too_small",
+        "gap_direction_conflict",
+        "model_prob_too_low",
+        "reference_not_confirmed",
+        "weak_sk_distance",
+    }
     if decision.get("action") != "skip" or (reason not in one_per_window_reasons and reason not in one_per_window_phase_reasons):
         return True
     phase_suffix = f":{decision.get('phase')}" if reason in one_per_window_phase_reasons else ""

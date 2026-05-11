@@ -899,6 +899,27 @@ def test_edge_too_small_skip_logs_once_per_window_phase() -> None:
     assert _should_write_row({**row, "decision": {"action": "skip", "reason": "edge_too_small", "phase": "core"}}, seen) is True
 
 
+def test_model_prob_and_reference_skip_logs_once_per_window_phase() -> None:
+    seen: set[tuple[str, str]] = set()
+    row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {"action": "skip", "reason": "model_prob_too_low", "phase": "core"},
+    }
+
+    assert _should_write_row(row, seen) is True
+    assert _should_write_row(row, seen) is False
+    assert _should_write_row({**row, "decision": {"action": "skip", "reason": "model_prob_too_low", "phase": "early"}}, seen) is True
+
+    reference_row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {"action": "skip", "reason": "reference_not_confirmed", "phase": "core"},
+    }
+    assert _should_write_row(reference_row, seen) is True
+    assert _should_write_row(reference_row, seen) is False
+
+
 def test_final_no_entry_skip_logs_once_per_window() -> None:
     seen: set[tuple[str, str]] = set()
     row = {
@@ -926,7 +947,7 @@ def test_live_non_analysis_skips_do_not_write_tick_noise() -> None:
     assert _should_write_row({**row, "event": "exit"}, seen, analysis_logs=False) is True
     assert _should_write_row({**row, "event": "order_no_fill"}, seen, analysis_logs=False) is True
     assert _should_write_row({**row, "mode": "paper"}, seen, analysis_logs=False) is True
-    assert _should_write_row(row, seen, analysis_logs=True) is True
+    assert _should_write_row(row, seen, analysis_logs=True) is False
 
 
 def test_live_non_analysis_keeps_operational_lifecycle_rows() -> None:
