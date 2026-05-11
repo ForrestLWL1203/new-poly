@@ -48,7 +48,7 @@ from new_poly.strategy.dynamic_params import (
     analyze_dynamic_params,
 )
 from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, StrategyDecision, evaluate_entry, evaluate_exit
-from new_poly.strategy.poly_source import PolySourceConfig
+from new_poly.strategy.poly_source import PolySourceConfig, evaluate_poly_exit
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import (
     BuyRetryParams,
@@ -1205,7 +1205,10 @@ async def _refresh_exit_retry_params(
     exit_reason: str | None = None,
 ) -> SellRetryParams | None:
     snap, _meta = _snapshot(window, prices, feed, coinbase_feed, polymarket_feed, stream, cfg, sigma_eff)
-    decision = evaluate_exit(snap, position, cfg.edge, state)
+    if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None:
+        decision = evaluate_poly_exit(snap, position, cfg.poly_source, state)
+    else:
+        decision = evaluate_exit(snap, position, cfg.edge, state)
     if decision.action == "exit" and decision.limit_price is not None:
         return SellRetryParams(min_price=decision.limit_price, exit_reason=decision.reason)
     if position.token_side == "up":

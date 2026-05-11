@@ -379,6 +379,67 @@ def test_exit_retry_refresh_commits_to_sell_even_if_signal_no_longer_exits(monke
     assert retry.exit_reason == "prob_drop_exit"
 
 
+def test_poly_single_source_exit_retry_refresh_uses_poly_exit_logic(monkeypatch) -> None:
+    cfg = load_bot_config(REPO_ROOT / "configs" / "prob_poly_single_source.yaml")
+    position = PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=120.0,
+        entry_avg_price=0.60,
+        filled_shares=2.5,
+        entry_model_prob=0.0,
+        entry_edge=5.0,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=150.0,
+        remaining_sec=150.0,
+        s_price=100.0,
+        k_price=100.0,
+        sigma_eff=None,
+        up_bid_avg=0.43,
+        up_bid_limit=0.42,
+        up_bid_depth_ok=True,
+        down_bid_avg=0.56,
+        down_bid_limit=0.55,
+        down_bid_depth_ok=True,
+        up_book_age_ms=20.0,
+        down_book_age_ms=20.0,
+        polymarket_price=99.95,
+        polymarket_return_3s_bps=-0.4,
+    )
+
+    def fake_snapshot(*args, **kwargs):
+        return snap, {}
+
+    def fail_if_dual_source_exit_is_used(*args, **kwargs):
+        raise AssertionError("poly_single_source retry refresh must not use prob_edge evaluate_exit")
+
+    monkeypatch.setattr("new_poly.bot_runtime._snapshot", fake_snapshot)
+    monkeypatch.setattr("new_poly.bot_runtime.evaluate_exit", fail_if_dual_source_exit_is_used)
+
+    retry = asyncio.run(
+        _refresh_exit_retry_params(
+            window=object(),
+            prices=WindowPrices(),
+            feed=None,
+            coinbase_feed=None,
+            polymarket_feed=None,
+            stream=object(),
+            cfg=cfg,
+            sigma_eff=None,
+            state=StrategyState(current_market_slug="m1"),
+            position=position,
+            exit_reason="reference_adverse_exit",
+        )
+    )
+
+    assert retry is not None
+    assert retry.min_price == 0.42
+    assert retry.exit_reason == "reference_adverse_exit"
+
+
 def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
     args = build_arg_parser().parse_args(["--once"])
     opts = build_runtime_options(args)
