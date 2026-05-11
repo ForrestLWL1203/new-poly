@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import bisect
 from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
@@ -335,22 +336,28 @@ def _poly_price_from_row(row: dict[str, Any]) -> float | None:
     return _first_float(row.get("polymarket_price"), reference.get("polymarket_price"), analysis_sources.get("polymarket_price"))
 
 
-def _computed_poly_return(rows: list[dict[str, Any]], index: int, lookback_sec: float) -> float | None:
-    current_age = _float(rows[index].get("age_sec"))
-    current_price = _poly_price_from_row(rows[index])
+def _computed_poly_return_from_series(
+    *,
+    ages: list[float | None],
+    searchable_ages: list[float],
+    prices: list[float | None],
+    index: int,
+    lookback_sec: float,
+) -> float | None:
+    current_age = ages[index]
+    current_price = prices[index]
     if current_age is None or current_price is None or current_price <= 0:
         return None
     target_age = current_age - lookback_sec
-    best: tuple[float, float] | None = None
-    for row in rows[:index]:
-        age = _float(row.get("age_sec"))
-        price = _poly_price_from_row(row)
-        if age is None or price is None or price <= 0 or age > target_age:
-            continue
-        best = (age, price)
-    if best is None:
+    previous_index = bisect.bisect_right(searchable_ages, target_age, hi=index) - 1
+    while previous_index >= 0 and (ages[previous_index] is None or prices[previous_index] is None or (prices[previous_index] or 0.0) <= 0):
+        previous_index -= 1
+    if previous_index < 0:
         return None
-    previous_age, previous_price = best
+    previous_age = ages[previous_index]
+    previous_price = prices[previous_index]
+    if previous_age is None or previous_price is None:
+        return None
     if current_age - previous_age > lookback_sec + 2.0:
         return None
     return (current_price - previous_price) / previous_price * 10000.0
@@ -358,17 +365,32 @@ def _computed_poly_return(rows: list[dict[str, Any]], index: int, lookback_sec: 
 
 def _with_computed_poly_returns(rows: list[dict[str, Any]], *, entry_start_age_sec: float) -> list[dict[str, Any]]:
     enriched: list[dict[str, Any]] = []
+    ages = [_float(row.get("age_sec")) for row in rows]
+    searchable_ages = [age if age is not None else float("-inf") for age in ages]
+    prices = [_poly_price_from_row(row) for row in rows]
     for index, row in enumerate(rows):
         updated = dict(row)
         for lookback in (1.0, 3.0, 5.0, 10.0, 15.0):
             key = f"lead_polymarket_return_{int(lookback)}s_bps"
             if _first_float(updated.get(key), updated.get(f"polymarket_return_{int(lookback)}s_bps")) is None:
-                value = _computed_poly_return(rows, index, lookback)
+                value = _computed_poly_return_from_series(
+                    ages=ages,
+                    searchable_ages=searchable_ages,
+                    prices=prices,
+                    index=index,
+                    lookback_sec=lookback,
+                )
                 if value is not None:
                     updated[key] = value
         age = _float(updated.get("age_sec"))
         if age is not None and age > entry_start_age_sec and _first_float(updated.get("poly_return_since_entry_start_bps")) is None:
-            value = _computed_poly_return(rows, index, age - entry_start_age_sec)
+            value = _computed_poly_return_from_series(
+                ages=ages,
+                searchable_ages=searchable_ages,
+                prices=prices,
+                index=index,
+                lookback_sec=age - entry_start_age_sec,
+            )
             if value is not None:
                 updated["poly_return_since_entry_start_bps"] = value
         enriched.append(updated)

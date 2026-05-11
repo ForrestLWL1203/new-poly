@@ -242,8 +242,8 @@ class BotRunner:
         await self.refresh_window_inputs()
         sigma_eff, dvol_stale = await self.advance_dvol()
         snap, meta = self.build_snapshot(sigma_eff)
-        price_analysis = _price_analysis(meta)
-        reference_meta = _reference_meta(meta)
+        price_analysis = _price_analysis(meta, strategy_mode=self.cfg.strategy_mode)
+        reference_meta = _reference_meta(meta, strategy_mode=self.cfg.strategy_mode)
         row = build_tick_row(
             meta,
             options=self.options,

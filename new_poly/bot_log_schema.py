@@ -15,6 +15,34 @@ def _compact(value: float | None, digits: int = 6) -> float | None:
 
 def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
     fill_price = result.avg_price if result is not None and result.success else None
+    is_poly_source = (
+        decision.poly_reference_distance_bps is not None
+        or decision.poly_return_bps is not None
+        or decision.poly_trend_lookback_sec is not None
+        or decision.poly_entry_score is not None
+    )
+    if is_poly_source:
+        row = {
+            "order_intent": "entry",
+            "entry_side": decision.side,
+            "entry_signal_price": _compact(decision.price),
+            "entry_best_ask": _compact(decision.best_ask),
+            "entry_fair_cap": _compact(decision.limit_price),
+            "entry_depth_limit_price": _compact(decision.depth_limit_price),
+            "entry_price": _compact(fill_price),
+            "entry_shares": _compact(result.filled_size if result is not None and result.success else None),
+            "entry_poly_reference_distance_bps": _compact(decision.poly_reference_distance_bps, 3),
+            "entry_poly_return_bps": _compact(decision.poly_return_bps, 3),
+            "entry_poly_trend_lookback_sec": _compact(decision.poly_trend_lookback_sec, 3),
+            "entry_poly_return_since_entry_start_bps": _compact(decision.poly_return_since_entry_start_bps, 3),
+            "entry_poly_score": _compact(decision.poly_entry_score, 3),
+            "order_attempt": result.attempt if result is not None else None,
+            "order_total_latency_ms": result.total_latency_ms if result is not None else None,
+        }
+        if result is not None and result.timing:
+            row["order_timing"] = result.timing
+        return {key: value for key, value in row.items() if value is not None}
+
     row = {
         "order_intent": "entry",
         "entry_side": decision.side,
@@ -50,6 +78,34 @@ def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None =
 
 def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = None) -> dict[str, Any]:
     fill_price = result.avg_price if result is not None and result.success else None
+    is_poly_source = (
+        decision.poly_reference_distance_bps is not None
+        or decision.poly_return_bps is not None
+        or decision.poly_trend_lookback_sec is not None
+        or decision.poly_entry_score is not None
+    )
+    if is_poly_source:
+        row = {
+            "exit_intent": "exit",
+            "exit_side": decision.side,
+            "exit_reason": decision.reason,
+            "exit_signal_bid_avg": _compact(decision.price),
+            "exit_min_price": _compact(decision.limit_price),
+            "exit_profit_per_share": _compact(decision.profit_now),
+            "exit_poly_reference_distance_bps": _compact(decision.poly_reference_distance_bps, 3),
+            "exit_poly_return_bps": _compact(decision.poly_return_bps, 3),
+            "exit_poly_trend_lookback_sec": _compact(decision.poly_trend_lookback_sec, 3),
+            "exit_poly_return_since_entry_start_bps": _compact(decision.poly_return_since_entry_start_bps, 3),
+            "exit_poly_score": _compact(decision.poly_entry_score, 3),
+            "exit_price": _compact(fill_price),
+            "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
+            "order_attempt": result.attempt if result is not None else None,
+            "order_total_latency_ms": result.total_latency_ms if result is not None else None,
+        }
+        if result is not None and result.timing:
+            row["order_timing"] = result.timing
+        return {key: value for key, value in row.items() if value is not None}
+
     row = {
         "exit_intent": "exit",
         "exit_side": decision.side,

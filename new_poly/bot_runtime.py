@@ -648,6 +648,9 @@ PRICE_ANALYSIS_FIELDS = {
     "lead_polymarket_return_1s_bps",
     "lead_polymarket_return_3s_bps",
     "lead_polymarket_return_5s_bps",
+    "lead_polymarket_return_10s_bps",
+    "lead_polymarket_return_15s_bps",
+    "poly_return_since_entry_start_bps",
     "lead_binance_side",
     "lead_coinbase_side",
     "lead_polymarket_side",
@@ -659,11 +662,40 @@ PRICE_ANALYSIS_FIELDS = {
 }
 
 
-def _runtime_log_meta(meta: dict[str, Any]) -> dict[str, Any]:
+def _runtime_log_meta(meta: dict[str, Any], *, strategy_mode: str = "prob_edge") -> dict[str, Any]:
+    if strategy_mode == "poly_single_source":
+        return {
+            key: value
+            for key, value in meta.items()
+            if key not in PRICE_ANALYSIS_FIELDS
+            and key not in {"price_source", "s_price", "basis_bps"}
+        }
     return {key: value for key, value in meta.items() if key not in PRICE_ANALYSIS_FIELDS}
 
 
-def _price_analysis(meta: dict[str, Any]) -> dict[str, Any]:
+def _price_analysis(meta: dict[str, Any], *, strategy_mode: str = "prob_edge") -> dict[str, Any]:
+    if strategy_mode == "poly_single_source":
+        fields = (
+            "k_price",
+            "polymarket_price",
+            "polymarket_price_age_sec",
+            "polymarket_open_price",
+            "polymarket_open_source",
+            "lead_polymarket_return_1s_bps",
+            "lead_polymarket_return_3s_bps",
+            "lead_polymarket_return_5s_bps",
+            "lead_polymarket_return_10s_bps",
+            "lead_polymarket_return_15s_bps",
+            "poly_return_since_entry_start_bps",
+            "lead_polymarket_side",
+        )
+        row = {
+            key: value
+            for key in fields
+            if key in meta and (value := meta.get(key)) is not None and value != "missing"
+        }
+        return {"strategy_price_source": "polymarket_reference", **row}
+
     source = str(meta.get("price_source") or "")
     base_fields = ("price_source", "s_price", "k_price", "basis_bps")
     if source.startswith("proxy_"):
@@ -721,7 +753,25 @@ def _should_attach_reference_meta(
     return decision is not None and decision.action == "exit"
 
 
-def _reference_meta(meta: dict[str, Any]) -> dict[str, Any]:
+def _reference_meta(meta: dict[str, Any], *, strategy_mode: str = "prob_edge") -> dict[str, Any]:
+    if strategy_mode == "poly_single_source":
+        fields = (
+            "polymarket_price",
+            "polymarket_price_age_sec",
+            "lead_polymarket_return_1s_bps",
+            "lead_polymarket_return_3s_bps",
+            "lead_polymarket_return_5s_bps",
+            "lead_polymarket_return_10s_bps",
+            "lead_polymarket_return_15s_bps",
+            "poly_return_since_entry_start_bps",
+            "lead_polymarket_side",
+        )
+        return {
+            key: value
+            for key in fields
+            if key in meta and (value := meta.get(key)) is not None and value != "missing"
+        }
+
     fields = (
         "polymarket_price",
         "polymarket_price_age_sec",

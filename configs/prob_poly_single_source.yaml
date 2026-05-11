@@ -9,11 +9,11 @@ poly_source:
   core_to_late_age_sec: 240
   max_entries_per_market: 1
   max_book_age_ms: 1000
-  poly_reference_distance_bps: 0.5
+  poly_reference_distance_bps: 1.5
   poly_trend_lookback_sec: 3.0
   poly_return_bps: 0.3
-  max_entry_ask: 0.65
-  min_poly_entry_score: 0.0
+  max_entry_ask: 0.75
+  min_poly_entry_score: 5.0
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2
   exit_reference_adverse_bps: 1.0

@@ -27,7 +27,7 @@ def build_tick_row(
     dvol_stale: bool,
 ) -> dict[str, Any]:
     row = {
-        **_runtime_log_meta(meta),
+        **_runtime_log_meta(meta, strategy_mode=options.config.strategy_mode),
         "mode": options.mode,
         "event": "tick",
         "sigma_source": dvol.state.current.source if dvol.state.current is not None else "missing",

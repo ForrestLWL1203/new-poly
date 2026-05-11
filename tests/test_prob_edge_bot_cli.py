@@ -22,6 +22,7 @@ from new_poly.bot_runtime import (
     _config_log_row,
     _polymarket_reference_unhealthy_row,
     _price_analysis,
+    _reference_meta,
     _should_attach_reference_meta,
     _refresh_exit_retry_params,
     _runtime_log_meta,
@@ -562,6 +563,65 @@ def test_price_analysis_uses_proxy_branch_for_reference_diagnostics() -> None:
     }
 
 
+def test_poly_single_source_price_analysis_excludes_mixed_source_diagnostics() -> None:
+    meta = {
+        "price_source": "proxy_binance",
+        "s_price": 100120.0,
+        "k_price": 100000.0,
+        "basis_bps": 0.0,
+        "binance_price": 100120.0,
+        "proxy_price": 100120.0,
+        "polymarket_price": 100080.0,
+        "polymarket_price_age_sec": 0.8,
+        "polymarket_open_price": 100000.0,
+        "polymarket_open_source": "ws_first_after",
+        "lead_binance_vs_polymarket_bps": 3.997,
+        "polymarket_divergence_bps": 3.997,
+        "lead_binance_return_3s_bps": 1.2,
+        "lead_polymarket_return_1s_bps": 0.2,
+        "lead_polymarket_return_3s_bps": 0.4,
+        "lead_polymarket_return_5s_bps": 0.5,
+        "lead_polymarket_return_10s_bps": 0.7,
+        "lead_polymarket_return_15s_bps": 0.9,
+        "poly_return_since_entry_start_bps": 1.1,
+        "lead_binance_side": "up",
+        "lead_polymarket_side": "up",
+        "lead_binance_side_disagrees_with_polymarket": False,
+    }
+
+    runtime = _runtime_log_meta(meta, strategy_mode="poly_single_source")
+    analysis = _price_analysis(meta, strategy_mode="poly_single_source")
+    reference = _reference_meta(meta, strategy_mode="poly_single_source")
+
+    assert runtime == {"k_price": 100000.0}
+    assert analysis == {
+        "strategy_price_source": "polymarket_reference",
+        "k_price": 100000.0,
+        "polymarket_price": 100080.0,
+        "polymarket_price_age_sec": 0.8,
+        "polymarket_open_price": 100000.0,
+        "polymarket_open_source": "ws_first_after",
+        "lead_polymarket_return_1s_bps": 0.2,
+        "lead_polymarket_return_3s_bps": 0.4,
+        "lead_polymarket_return_5s_bps": 0.5,
+        "lead_polymarket_return_10s_bps": 0.7,
+        "lead_polymarket_return_15s_bps": 0.9,
+        "poly_return_since_entry_start_bps": 1.1,
+        "lead_polymarket_side": "up",
+    }
+    assert reference == {
+        "polymarket_price": 100080.0,
+        "polymarket_price_age_sec": 0.8,
+        "lead_polymarket_return_1s_bps": 0.2,
+        "lead_polymarket_return_3s_bps": 0.4,
+        "lead_polymarket_return_5s_bps": 0.5,
+        "lead_polymarket_return_10s_bps": 0.7,
+        "lead_polymarket_return_15s_bps": 0.9,
+        "poly_return_since_entry_start_bps": 1.1,
+        "lead_polymarket_side": "up",
+    }
+
+
 def test_binance_proxy_is_model_source_while_polymarket_is_reference() -> None:
     class FakeFeed:
         latest_price = 100_120.0
@@ -860,6 +920,49 @@ def test_exit_analysis_records_exit_floor_and_profit() -> None:
     assert analysis["order_timing"]["book_read_ms"] == 1
 
 
+def test_poly_single_source_analysis_keeps_only_poly_signal_fields() -> None:
+    entry_decision = StrategyDecision(
+        action="enter",
+        reason="poly_edge",
+        side="up",
+        price=0.40,
+        limit_price=0.42,
+        depth_limit_price=0.40,
+        best_ask=0.40,
+        edge=4.2,
+        poly_reference_distance_bps=2.0,
+        poly_return_bps=0.5,
+        poly_trend_lookback_sec=3.0,
+        poly_return_since_entry_start_bps=1.4,
+        poly_entry_score=4.2,
+    )
+    exit_decision = StrategyDecision(
+        action="exit",
+        reason="poly_trend_reversal_exit",
+        side="up",
+        price=0.36,
+        limit_price=0.34,
+        profit_now=-0.04,
+        poly_reference_distance_bps=1.2,
+        poly_return_bps=-0.6,
+        poly_trend_lookback_sec=3.0,
+        poly_return_since_entry_start_bps=0.2,
+    )
+
+    entry = _entry_analysis(entry_decision, ExecutionResult(True, filled_size=2.5, avg_price=0.40))
+    exit_ = _exit_analysis(exit_decision, ExecutionResult(True, filled_size=2.5, avg_price=0.35))
+
+    assert "entry_model_prob" not in entry
+    assert "entry_adjusted_model_prob_shadow" not in entry
+    assert "entry_polymarket_divergence_bps" not in entry
+    assert entry["entry_poly_score"] == 4.2
+    assert entry["entry_poly_return_bps"] == 0.5
+    assert "exit_model_prob" not in exit_
+    assert "exit_prob_delta_3s" not in exit_
+    assert "exit_polymarket_divergence_bps" not in exit_
+    assert exit_["exit_poly_return_bps"] == -0.6
+
+
 def test_outside_entry_time_skip_logs_once_per_window() -> None:
     seen: set[tuple[str, str]] = set()
     row = {
@@ -972,8 +1075,11 @@ def test_poly_single_source_config_loads_and_blocks_live_mode() -> None:
 
     assert cfg.strategy_mode == "poly_single_source"
     assert cfg.poly_source is not None
+    assert cfg.poly_source.poly_reference_distance_bps == 1.5
     assert cfg.poly_source.poly_trend_lookback_sec == 3.0
-    assert cfg.poly_source.max_entry_ask == 0.65
+    assert cfg.poly_source.poly_return_bps == 0.3
+    assert cfg.poly_source.max_entry_ask == 0.75
+    assert cfg.poly_source.min_poly_entry_score == 5.0
 
     args = build_arg_parser().parse_args([
         "--config",
