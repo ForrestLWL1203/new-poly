@@ -116,6 +116,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-poly-entry-score", type=float, default=0.0)
     parser.add_argument("--poly-exit-reference-adverse-bps", type=float, default=1.0)
     parser.add_argument("--poly-trend-reversal-bps", type=float, default=0.3)
+    parser.add_argument("--poly-profit-protection-min-profit", type=float, default=0.08)
+    parser.add_argument("--poly-profit-protection-trend-weak-bps", type=float, default=0.0)
+    parser.add_argument("--poly-late-depth-guard-remaining-sec", type=float, default=90.0)
+    parser.add_argument("--poly-late-depth-min-bid-avg", type=float, default=0.20)
+    parser.add_argument("--poly-late-depth-min-bid-limit", type=float, default=0.15)
+    parser.add_argument("--poly-hold-to-settlement-min-reference-distance-bps", type=float, default=1.0)
+    parser.add_argument("--poly-hold-to-settlement-min-poly-return-bps", type=float, default=0.0)
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
     parser.add_argument("--early-grid", default="0.14,0.16,0.18")
@@ -192,6 +199,13 @@ def main() -> int:
         min_poly_entry_score=args.min_poly_entry_score,
         poly_exit_reference_adverse_bps=args.poly_exit_reference_adverse_bps,
         poly_trend_reversal_bps=args.poly_trend_reversal_bps,
+        poly_profit_protection_min_profit=args.poly_profit_protection_min_profit,
+        poly_profit_protection_trend_weak_bps=args.poly_profit_protection_trend_weak_bps,
+        poly_late_depth_guard_remaining_sec=args.poly_late_depth_guard_remaining_sec,
+        poly_late_depth_min_bid_avg=args.poly_late_depth_min_bid_avg,
+        poly_late_depth_min_bid_limit=args.poly_late_depth_min_bid_limit,
+        poly_hold_to_settlement_min_reference_distance_bps=args.poly_hold_to_settlement_min_reference_distance_bps,
+        poly_hold_to_settlement_min_poly_return_bps=args.poly_hold_to_settlement_min_poly_return_bps,
         settlement_boundary_usd=args.settlement_boundary_usd,
         min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,
         entry_tick_size=args.entry_tick_size,

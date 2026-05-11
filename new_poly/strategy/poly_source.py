@@ -32,10 +32,19 @@ class PolySourceConfig:
     market_disagrees_exit_min_age_sec: float = 3.0
     final_force_exit_remaining_sec: float = 30.0
     final_profit_hold_min_profit_ratio: float = 0.10
+    profit_protection_start_remaining_sec: float = 90.0
+    profit_protection_end_remaining_sec: float = 45.0
+    profit_protection_min_profit: float = 0.08
+    profit_protection_trend_weak_bps: float = 0.0
+    late_depth_guard_remaining_sec: float = 90.0
+    late_depth_min_bid_avg: float = 0.20
+    late_depth_min_bid_limit: float = 0.15
     hold_to_settlement_enabled: bool = True
-    hold_to_settlement_min_profit_ratio: float = 2.0
+    hold_to_settlement_min_profit_ratio: float = 0.50
     hold_to_settlement_min_bid_avg: float = 0.80
     hold_to_settlement_min_bid_limit: float = 0.75
+    hold_to_settlement_min_reference_distance_bps: float = 1.0
+    hold_to_settlement_min_poly_return_bps: float = 0.0
 
 
 def _distance_bps(snapshot: MarketSnapshot, side: str) -> float | None:
@@ -188,13 +197,19 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
     side = position.token_side
     bid = _bid(snapshot, side)
     bid_limit = _bid_limit(snapshot, side)
-    if bid is None or bid_limit is None or not _depth_ok(snapshot, side):
-        return _decision("hold", "missing_exit_depth", side=side, cfg=cfg, snapshot=snapshot)
+    if bid is None or bid_limit is None:
+        reason = "late_exit_depth_unavailable" if _in_late_depth_guard(snapshot, cfg) else "missing_exit_depth"
+        return _decision("hold", reason, side=side, price=bid, limit_price=bid_limit, cfg=cfg, snapshot=snapshot)
     profit_now = bid - position.entry_avg_price
     adverse_side = "down" if side == "up" else "up"
     adverse_distance = _distance_bps(snapshot, adverse_side)
     own_distance = _distance_bps(snapshot, side)
     trend = _trend_bps(snapshot, cfg.poly_trend_lookback_sec, side)
+    hold_to_settlement = _hold_to_settlement(position, bid, bid_limit, profit_now, own_distance, trend, cfg)
+    if not _depth_ok(snapshot, side):
+        if _in_late_depth_guard(snapshot, cfg):
+            return _decision("exit", "late_depth_risk_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
+        return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
     if adverse_distance is not None and adverse_distance >= cfg.exit_reference_adverse_bps:
         return _decision("exit", "reference_adverse_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
     if trend is not None and trend <= -cfg.poly_trend_reversal_bps and profit_now < 0:
@@ -202,8 +217,15 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
     disagreement = _market_disagreement(snapshot, position, bid, profit_now, cfg)
     if disagreement is not None:
         return _decision("exit", "market_disagrees_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, market_disagreement=disagreement, profit_now=profit_now)
+    if hold_to_settlement:
+        if snapshot.remaining_sec <= cfg.profit_protection_start_remaining_sec:
+            return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
+    elif _profit_protection_exit(snapshot, profit_now, trend, cfg):
+        return _decision("exit", "profit_protection_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
+    elif _late_depth_risk(snapshot, bid, bid_limit, cfg):
+        return _decision("exit", "late_depth_risk_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
     if snapshot.remaining_sec <= cfg.final_force_exit_remaining_sec:
-        if _hold_to_settlement(position, bid, bid_limit, profit_now, cfg) or _final_profit_hold(position, profit_now, cfg):
+        if hold_to_settlement or _final_profit_hold(position, profit_now, cfg):
             return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
         return _decision("exit", "final_force_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
     return _decision("hold", "poly_edge_intact", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
@@ -226,13 +248,45 @@ def _final_profit_hold(position: PositionSnapshot, profit_now: float, cfg: PolyS
     return position.entry_avg_price > 0 and profit_now / position.entry_avg_price >= cfg.final_profit_hold_min_profit_ratio
 
 
-def _hold_to_settlement(position: PositionSnapshot, bid: float, bid_limit: float, profit_now: float, cfg: PolySourceConfig) -> bool:
+def _in_late_depth_guard(snapshot: MarketSnapshot, cfg: PolySourceConfig) -> bool:
+    return cfg.late_depth_guard_remaining_sec > 0 and snapshot.remaining_sec <= cfg.late_depth_guard_remaining_sec
+
+
+def _profit_protection_exit(snapshot: MarketSnapshot, profit_now: float, trend_bps: float | None, cfg: PolySourceConfig) -> bool:
+    if cfg.profit_protection_min_profit <= 0:
+        return False
+    if not (cfg.profit_protection_end_remaining_sec < snapshot.remaining_sec <= cfg.profit_protection_start_remaining_sec):
+        return False
+    if profit_now < cfg.profit_protection_min_profit:
+        return False
+    return trend_bps is not None and trend_bps <= cfg.profit_protection_trend_weak_bps
+
+
+def _late_depth_risk(snapshot: MarketSnapshot, bid: float, bid_limit: float, cfg: PolySourceConfig) -> bool:
+    if not _in_late_depth_guard(snapshot, cfg):
+        return False
+    return bid < cfg.late_depth_min_bid_avg or bid_limit < cfg.late_depth_min_bid_limit
+
+
+def _hold_to_settlement(
+    position: PositionSnapshot,
+    bid: float,
+    bid_limit: float,
+    profit_now: float,
+    distance_bps: float | None,
+    trend_bps: float | None,
+    cfg: PolySourceConfig,
+) -> bool:
     if not cfg.hold_to_settlement_enabled or position.entry_avg_price <= 0:
         return False
     return (
         profit_now / position.entry_avg_price >= cfg.hold_to_settlement_min_profit_ratio
         and bid >= cfg.hold_to_settlement_min_bid_avg
         and bid_limit >= cfg.hold_to_settlement_min_bid_limit
+        and distance_bps is not None
+        and distance_bps >= cfg.hold_to_settlement_min_reference_distance_bps
+        and trend_bps is not None
+        and trend_bps >= cfg.hold_to_settlement_min_poly_return_bps
     )
 
 

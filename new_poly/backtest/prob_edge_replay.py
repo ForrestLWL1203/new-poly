@@ -112,6 +112,13 @@ class BacktestConfig:
     poly_buy_price_buffer_ticks: float = 2.0
     poly_exit_reference_adverse_bps: float = 1.0
     poly_trend_reversal_bps: float = 0.3
+    poly_profit_protection_min_profit: float = 0.08
+    poly_profit_protection_trend_weak_bps: float = 0.0
+    poly_late_depth_guard_remaining_sec: float = 90.0
+    poly_late_depth_min_bid_avg: float = 0.20
+    poly_late_depth_min_bid_limit: float = 0.15
+    poly_hold_to_settlement_min_reference_distance_bps: float = 1.0
+    poly_hold_to_settlement_min_poly_return_bps: float = 0.0
     compute_poly_returns: bool = True
 
     def edge_config(self) -> EdgeConfig:
@@ -212,10 +219,19 @@ class BacktestConfig:
             market_disagrees_exit_min_age_sec=self.market_disagrees_exit_min_age_sec,
             final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
             final_profit_hold_min_profit_ratio=self.final_profit_hold_min_profit_ratio,
+            profit_protection_start_remaining_sec=self.profit_protection_start_remaining_sec,
+            profit_protection_end_remaining_sec=self.profit_protection_end_remaining_sec,
+            profit_protection_min_profit=self.poly_profit_protection_min_profit,
+            profit_protection_trend_weak_bps=self.poly_profit_protection_trend_weak_bps,
+            late_depth_guard_remaining_sec=self.poly_late_depth_guard_remaining_sec,
+            late_depth_min_bid_avg=self.poly_late_depth_min_bid_avg,
+            late_depth_min_bid_limit=self.poly_late_depth_min_bid_limit,
             hold_to_settlement_enabled=self.hold_to_settlement_enabled,
             hold_to_settlement_min_profit_ratio=self.hold_to_settlement_min_profit_ratio,
             hold_to_settlement_min_bid_avg=self.hold_to_settlement_min_bid_avg,
             hold_to_settlement_min_bid_limit=self.hold_to_settlement_min_bid_limit,
+            hold_to_settlement_min_reference_distance_bps=self.poly_hold_to_settlement_min_reference_distance_bps,
+            hold_to_settlement_min_poly_return_bps=self.poly_hold_to_settlement_min_poly_return_bps,
         )
 
 

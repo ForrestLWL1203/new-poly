@@ -1142,6 +1142,11 @@ def test_poly_single_source_config_loads_and_blocks_live_mode() -> None:
     assert cfg.poly_source.max_entry_ask == 0.75
     assert cfg.poly_source.max_entry_fill_price == 0.75
     assert cfg.poly_source.min_poly_entry_score == 5.0
+    assert cfg.poly_source.profit_protection_start_remaining_sec == 90.0
+    assert cfg.poly_source.profit_protection_end_remaining_sec == 45.0
+    assert cfg.poly_source.profit_protection_min_profit == 0.08
+    assert cfg.poly_source.late_depth_guard_remaining_sec == 90.0
+    assert cfg.poly_source.hold_to_settlement_min_profit_ratio == 0.50
 
     args = build_arg_parser().parse_args([
         "--config",
