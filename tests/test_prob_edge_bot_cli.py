@@ -1140,6 +1140,27 @@ def test_model_prob_and_reference_skip_logs_once_per_window_phase() -> None:
     assert _should_write_row(reference_row, seen) is False
 
 
+def test_poly_single_source_skip_logs_once_per_window_side() -> None:
+    seen: set[tuple[str, str]] = set()
+    row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {"action": "skip", "reason": "poly_trend_not_confirmed", "side": "down"},
+    }
+
+    assert _should_write_row(row, seen) is True
+    assert _should_write_row(row, seen) is False
+    assert _should_write_row({**row, "decision": {"action": "skip", "reason": "poly_trend_not_confirmed", "side": "up"}}, seen) is True
+
+    ask_row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {"action": "skip", "reason": "poly_ask_too_high", "side": "down"},
+    }
+    assert _should_write_row(ask_row, seen) is True
+    assert _should_write_row(ask_row, seen) is False
+
+
 def test_final_no_entry_skip_logs_once_per_window() -> None:
     seen: set[tuple[str, str]] = set()
     row = {

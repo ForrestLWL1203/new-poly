@@ -875,10 +875,24 @@ def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str,
         "reference_not_confirmed",
         "weak_sk_distance",
     }
-    if decision.get("action") != "skip" or (reason not in one_per_window_reasons and reason not in one_per_window_phase_reasons):
+    one_per_window_side_reasons = {
+        "poly_ask_too_high",
+        "poly_reference_not_confirmed",
+        "poly_score_too_low",
+        "poly_trend_not_confirmed",
+    }
+    if (
+        decision.get("action") != "skip"
+        or (
+            reason not in one_per_window_reasons
+            and reason not in one_per_window_phase_reasons
+            and reason not in one_per_window_side_reasons
+        )
+    ):
         return True
     phase_suffix = f":{decision.get('phase')}" if reason in one_per_window_phase_reasons else ""
-    key = (str(row.get("market_slug") or ""), f"{reason}{phase_suffix}")
+    side_suffix = f":{decision.get('side')}" if reason in one_per_window_side_reasons else ""
+    key = (str(row.get("market_slug") or ""), f"{reason}{phase_suffix}{side_suffix}")
     if key in seen_repetitive_skips:
         return False
     seen_repetitive_skips.add(key)
