@@ -11,7 +11,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_configs, scan_poly_source_configs
+from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_poly_source_configs
 
 
 def _float_list(value: str) -> list[float]:
@@ -39,45 +39,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay probability-edge strategy from collector JSONL")
     parser.add_argument("--jsonl", type=Path, required=True)
     parser.add_argument("--amount-usd", type=float, default=5.0)
-    parser.add_argument("--strategy-mode", choices=("prob_edge", "poly_single_source"), default="prob_edge")
-    parser.add_argument("--early-required-edge", type=float, default=0.16)
-    parser.add_argument("--core-required-edge", type=float, default=0.14)
-    parser.add_argument("--model-decay-buffer", type=float, default=0.03)
     parser.add_argument("--entry-start-age-sec", type=float, default=90.0)
     parser.add_argument("--entry-end-age-sec", type=float, default=270.0)
-    parser.add_argument("--dynamic-entry", action="store_true")
-    parser.add_argument("--fast-move-entry-start-age-sec", type=float, default=70.0)
-    parser.add_argument("--fast-move-min-abs-sk-usd", type=float, default=80.0)
-    parser.add_argument("--fast-move-required-edge", type=float, default=0.22)
-    parser.add_argument("--strong-move-entry-start-age-sec", type=float, default=60.0)
-    parser.add_argument("--strong-move-min-abs-sk-usd", type=float, default=120.0)
-    parser.add_argument("--strong-move-required-edge", type=float, default=0.24)
+    parser.add_argument("--final-no-entry-remaining-sec", type=float, default=30.0)
     parser.add_argument("--max-entries-per-market", type=int, default=2)
-    parser.add_argument("--tick-size", type=float, default=0.01)
-    parser.add_argument("--min-fair-cap-margin-ticks", type=float, default=0.0)
     parser.add_argument("--entry-tick-size", type=float, default=0.01)
-    parser.add_argument("--min-entry-model-prob", type=float, default=0.0)
-    parser.add_argument("--low-price-extra-edge-threshold", type=float, default=0.0)
-    parser.add_argument("--low-price-extra-edge", type=float, default=0.0)
-    parser.add_argument("--weak-sk-entry-filter", dest="weak_sk_entry_filter_enabled", action="store_true", default=False)
-    parser.add_argument("--weak-sk-entry-min-ask", type=float, default=0.35)
-    parser.add_argument("--weak-sk-entry-min-abs-sk-bps", type=float, default=2.0)
-    parser.add_argument("--buy-cap-relax", dest="buy_cap_relax_enabled", action="store_true", default=False)
-    parser.add_argument("--buy-low-price-relax-max-ask", type=float, default=0.25)
-    parser.add_argument("--buy-low-price-relax-min-prob", type=float, default=0.40)
-    parser.add_argument("--buy-low-price-relax-retained-edge", type=float, default=0.08)
-    parser.add_argument("--buy-low-price-relax-max-extra-ticks", type=float, default=8.0)
-    parser.add_argument("--buy-mid-price-relax-max-ask", type=float, default=0.65)
-    parser.add_argument("--buy-mid-price-relax-min-prob", type=float, default=0.60)
-    parser.add_argument("--buy-mid-price-relax-retained-edge", type=float, default=0.06)
-    parser.add_argument("--buy-mid-price-relax-max-extra-ticks", type=float, default=8.0)
-    parser.add_argument("--buy-mid-strong-relax-min-prob", type=float, default=0.75)
-    parser.add_argument("--buy-mid-strong-relax-retained-edge", type=float, default=0.05)
-    parser.add_argument("--buy-mid-strong-relax-max-extra-ticks", type=float, default=10.0)
-    parser.add_argument("--buy-high-price-relax-min-ask", type=float, default=0.65)
-    parser.add_argument("--buy-high-price-relax-min-prob", type=float, default=0.95)
-    parser.add_argument("--buy-high-price-relax-retained-edge", type=float, default=0.08)
-    parser.add_argument("--buy-high-price-relax-max-extra-ticks", type=float, default=4.0)
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
     parser.add_argument("--buy-slippage-ticks", type=float)
     parser.add_argument("--sell-slippage-ticks", type=float)
@@ -90,23 +56,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sell-risk-exit-retry-buffer-ticks", type=float, default=12.0)
     parser.add_argument("--sell-force-exit-buffer-ticks", type=float, default=10.0)
     parser.add_argument("--sell-force-exit-retry-buffer-ticks", type=float, default=15.0)
-    parser.add_argument("--prob-drop-exit-window-sec", type=float, default=0.0)
-    parser.add_argument("--prob-drop-exit-threshold", type=float, default=0.0)
-    parser.add_argument("--final-force-exit-remaining-sec", type=float, default=30.0)
-    parser.add_argument("--defensive-take-profit", dest="defensive_take_profit_enabled", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--cross-source-max-bps", type=float, default=0.0)
-    parser.add_argument("--market-disagrees-exit-threshold", type=float, default=0.0)
-    parser.add_argument("--low-price-market-disagrees-entry-threshold", type=float, default=0.0)
-    parser.add_argument("--low-price-market-disagrees-exit-threshold", type=float, default=0.0)
-    parser.add_argument("--market-disagrees-exit-max-remaining-sec", type=float, default=0.0)
-    parser.add_argument("--market-disagrees-exit-min-loss", type=float, default=0.0)
-    parser.add_argument("--market-disagrees-exit-min-age-sec", type=float, default=0.0)
-    parser.add_argument("--market-disagrees-exit-max-profit", type=float, default=0.01)
-    parser.add_argument("--market-disagrees-exit-min-model-drop", type=float, default=0.0)
-    parser.add_argument("--polymarket-divergence-exit-bps", type=float, default=3.0)
-    parser.add_argument("--polymarket-divergence-exit-min-age-sec", type=float, default=3.0)
-    parser.add_argument("--entry-reference-confirm-bps", type=float, default=0.0)
-    parser.add_argument("--exit-reference-adverse-bps", type=float, default=0.0)
+    parser.add_argument("--hold-to-settlement", dest="hold_to_settlement_enabled", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--hold-to-settlement-min-profit-ratio", type=float, default=2.0)
+    parser.add_argument("--hold-to-settlement-min-bid-avg", type=float, default=0.80)
+    parser.add_argument("--hold-to-settlement-min-bid-limit", type=float, default=0.75)
     parser.add_argument("--honor-order-events", action="store_true", help="For paper/live strategy JSONL, replay actual entry/exit/no-fill events instead of idealized fills.")
     parser.add_argument("--poly-reference-distance-bps", type=float, default=0.5)
     parser.add_argument("--poly-trend-lookback-sec", type=float, default=3.0)
@@ -114,35 +67,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-entry-ask", type=float, default=0.65)
     parser.add_argument("--max-entry-fill-price", type=float, default=0.0)
     parser.add_argument("--min-poly-entry-score", type=float, default=0.0)
-    parser.add_argument("--poly-exit-reference-adverse-bps", type=float, default=1.0)
-    parser.add_argument("--poly-trend-reversal-exit-enabled", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--poly-trend-reversal-bps", type=float, default=0.3)
-    parser.add_argument("--market-disagrees-exit-mode", choices=("fixed", "dynamic"), default="fixed")
-    parser.add_argument("--dynamic-market-disagrees-low-entry-price", type=float, default=0.45)
-    parser.add_argument("--dynamic-market-disagrees-mid-entry-price", type=float, default=0.60)
-    parser.add_argument("--dynamic-market-disagrees-low-entry-ratio", type=float, default=0.70)
-    parser.add_argument("--dynamic-market-disagrees-mid-entry-ratio", type=float, default=0.60)
-    parser.add_argument("--dynamic-market-disagrees-high-entry-ratio", type=float, default=0.55)
-    parser.add_argument("--dynamic-market-disagrees-require-poly-weakening", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--dynamic-market-disagrees-poly-weakening-bps", type=float, default=1.0)
-    parser.add_argument("--poly-profit-protection-min-profit", type=float, default=0.08)
-    parser.add_argument("--poly-profit-protection-trend-weak-bps", type=float, default=0.0)
-    parser.add_argument("--poly-late-depth-guard-remaining-sec", type=float, default=90.0)
-    parser.add_argument("--poly-late-depth-min-bid-avg", type=float, default=0.20)
-    parser.add_argument("--poly-late-depth-min-bid-limit", type=float, default=0.15)
+    parser.add_argument("--min-poly-hold-score", type=float, default=0.0)
+    parser.add_argument("--poly-score-component-logs", choices=("compact", "full"), default="compact")
+    parser.add_argument("--reference-distance-exit-remaining-sec", default="120,90,70,45,30")
+    parser.add_argument("--reference-distance-exit-min-bps", default="-2,-1,0.25,0.75,1")
+    parser.add_argument("--poly-exit-min-hold-sec", type=float, default=3.0)
     parser.add_argument("--poly-hold-to-settlement-min-reference-distance-bps", type=float, default=1.0)
     parser.add_argument("--poly-hold-to-settlement-min-poly-return-bps", type=float, default=0.0)
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
-    parser.add_argument("--early-grid", default="0.14,0.16,0.18")
-    parser.add_argument("--core-grid", default="0.12,0.14,0.16")
-    parser.add_argument("--entry-start-grid", default="25,40,60")
-    parser.add_argument("--entry-end-grid", default="210,240,270")
     parser.add_argument("--poly-reference-distance-grid", default="0.5,1.0,1.5,2.0,3.0,4.0")
     parser.add_argument("--poly-trend-lookback-grid", default="1,3,5,10,15")
     parser.add_argument("--poly-return-grid", default="0.0,0.1,0.2,0.3,0.5")
     parser.add_argument("--max-entry-ask-grid", default="0.55,0.65,0.75,0.85")
-    parser.add_argument("--min-poly-entry-score-grid", default="0.0,1.0,2.0,3.0,4.0")
+    parser.add_argument("--min-poly-entry-score-grid", default="0.0,2.0,4.0,4.5,5.0")
+    parser.add_argument("--min-poly-hold-score-grid", default="0.0")
     parser.add_argument("--grid-min-entries", type=int, default=0)
     parser.add_argument("--grid-sort-by", choices=("pnl", "win_rate", "avg_pnl"), default="pnl")
     parser.add_argument("--top-n", type=int, default=10)
@@ -155,22 +94,11 @@ def main() -> int:
     buy_slippage_ticks = args.slippage_ticks if args.buy_slippage_ticks is None else args.buy_slippage_ticks
     sell_slippage_ticks = args.slippage_ticks if args.sell_slippage_ticks is None else args.sell_slippage_ticks
     cfg = BacktestConfig(
-        strategy_mode=args.strategy_mode,
         amount_usd=args.amount_usd,
-        early_required_edge=args.early_required_edge,
-        core_required_edge=args.core_required_edge,
-        model_decay_buffer=args.model_decay_buffer,
         entry_start_age_sec=args.entry_start_age_sec,
         entry_end_age_sec=args.entry_end_age_sec,
-        dynamic_entry_enabled=args.dynamic_entry,
-        fast_move_entry_start_age_sec=args.fast_move_entry_start_age_sec,
-        fast_move_min_abs_sk_usd=args.fast_move_min_abs_sk_usd,
-        fast_move_required_edge=args.fast_move_required_edge,
-        strong_move_entry_start_age_sec=args.strong_move_entry_start_age_sec,
-        strong_move_min_abs_sk_usd=args.strong_move_min_abs_sk_usd,
-        strong_move_required_edge=args.strong_move_required_edge,
+        final_no_entry_remaining_sec=args.final_no_entry_remaining_sec,
         max_entries_per_market=args.max_entries_per_market,
-        tick_size=args.tick_size,
         buy_slippage_ticks=buy_slippage_ticks,
         sell_slippage_ticks=sell_slippage_ticks,
         sell_price_buffer_ticks=args.sell_price_buffer_ticks,
@@ -182,23 +110,10 @@ def main() -> int:
         sell_risk_exit_retry_buffer_ticks=args.sell_risk_exit_retry_buffer_ticks,
         sell_force_exit_buffer_ticks=args.sell_force_exit_buffer_ticks,
         sell_force_exit_retry_buffer_ticks=args.sell_force_exit_retry_buffer_ticks,
-        prob_drop_exit_window_sec=args.prob_drop_exit_window_sec,
-        prob_drop_exit_threshold=args.prob_drop_exit_threshold,
-        final_force_exit_remaining_sec=args.final_force_exit_remaining_sec,
-        defensive_take_profit_enabled=args.defensive_take_profit_enabled,
-        cross_source_max_bps=args.cross_source_max_bps,
-        market_disagrees_exit_threshold=args.market_disagrees_exit_threshold,
-        low_price_market_disagrees_entry_threshold=args.low_price_market_disagrees_entry_threshold,
-        low_price_market_disagrees_exit_threshold=args.low_price_market_disagrees_exit_threshold,
-        market_disagrees_exit_max_remaining_sec=args.market_disagrees_exit_max_remaining_sec,
-        market_disagrees_exit_min_loss=args.market_disagrees_exit_min_loss,
-        market_disagrees_exit_min_age_sec=args.market_disagrees_exit_min_age_sec,
-        market_disagrees_exit_max_profit=args.market_disagrees_exit_max_profit,
-        market_disagrees_exit_min_model_drop=args.market_disagrees_exit_min_model_drop,
-        polymarket_divergence_exit_bps=args.polymarket_divergence_exit_bps,
-        polymarket_divergence_exit_min_age_sec=args.polymarket_divergence_exit_min_age_sec,
-        entry_reference_confirm_bps=args.entry_reference_confirm_bps,
-        exit_reference_adverse_bps=args.exit_reference_adverse_bps,
+        hold_to_settlement_enabled=args.hold_to_settlement_enabled,
+        hold_to_settlement_min_profit_ratio=args.hold_to_settlement_min_profit_ratio,
+        hold_to_settlement_min_bid_avg=args.hold_to_settlement_min_bid_avg,
+        hold_to_settlement_min_bid_limit=args.hold_to_settlement_min_bid_limit,
         honor_order_events=args.honor_order_events,
         poly_reference_distance_bps=args.poly_reference_distance_bps,
         poly_trend_lookback_sec=args.poly_trend_lookback_sec,
@@ -206,49 +121,15 @@ def main() -> int:
         max_entry_ask=args.max_entry_ask,
         max_entry_fill_price=args.max_entry_fill_price,
         min_poly_entry_score=args.min_poly_entry_score,
-        poly_exit_reference_adverse_bps=args.poly_exit_reference_adverse_bps,
-        poly_trend_reversal_exit_enabled=args.poly_trend_reversal_exit_enabled,
-        poly_trend_reversal_bps=args.poly_trend_reversal_bps,
-        market_disagrees_exit_mode=args.market_disagrees_exit_mode,
-        dynamic_market_disagrees_low_entry_price=args.dynamic_market_disagrees_low_entry_price,
-        dynamic_market_disagrees_mid_entry_price=args.dynamic_market_disagrees_mid_entry_price,
-        dynamic_market_disagrees_low_entry_ratio=args.dynamic_market_disagrees_low_entry_ratio,
-        dynamic_market_disagrees_mid_entry_ratio=args.dynamic_market_disagrees_mid_entry_ratio,
-        dynamic_market_disagrees_high_entry_ratio=args.dynamic_market_disagrees_high_entry_ratio,
-        dynamic_market_disagrees_require_poly_weakening=args.dynamic_market_disagrees_require_poly_weakening,
-        dynamic_market_disagrees_poly_weakening_bps=args.dynamic_market_disagrees_poly_weakening_bps,
-        poly_profit_protection_min_profit=args.poly_profit_protection_min_profit,
-        poly_profit_protection_trend_weak_bps=args.poly_profit_protection_trend_weak_bps,
-        poly_late_depth_guard_remaining_sec=args.poly_late_depth_guard_remaining_sec,
-        poly_late_depth_min_bid_avg=args.poly_late_depth_min_bid_avg,
-        poly_late_depth_min_bid_limit=args.poly_late_depth_min_bid_limit,
+        min_poly_hold_score=args.min_poly_hold_score,
+        poly_score_component_logs=args.poly_score_component_logs,
+        reference_distance_exit_remaining_sec=tuple(_float_list(args.reference_distance_exit_remaining_sec)),
+        reference_distance_exit_min_bps=tuple(_float_list(args.reference_distance_exit_min_bps)),
+        poly_exit_min_hold_sec=args.poly_exit_min_hold_sec,
         poly_hold_to_settlement_min_reference_distance_bps=args.poly_hold_to_settlement_min_reference_distance_bps,
         poly_hold_to_settlement_min_poly_return_bps=args.poly_hold_to_settlement_min_poly_return_bps,
         settlement_boundary_usd=args.settlement_boundary_usd,
-        min_fair_cap_margin_ticks=args.min_fair_cap_margin_ticks,
         entry_tick_size=args.entry_tick_size,
-        min_entry_model_prob=args.min_entry_model_prob,
-        low_price_extra_edge_threshold=args.low_price_extra_edge_threshold,
-        low_price_extra_edge=args.low_price_extra_edge,
-        weak_sk_entry_filter_enabled=args.weak_sk_entry_filter_enabled,
-        weak_sk_entry_min_ask=args.weak_sk_entry_min_ask,
-        weak_sk_entry_min_abs_sk_bps=args.weak_sk_entry_min_abs_sk_bps,
-        buy_cap_relax_enabled=args.buy_cap_relax_enabled,
-        buy_low_price_relax_max_ask=args.buy_low_price_relax_max_ask,
-        buy_low_price_relax_min_prob=args.buy_low_price_relax_min_prob,
-        buy_low_price_relax_retained_edge=args.buy_low_price_relax_retained_edge,
-        buy_low_price_relax_max_extra_ticks=args.buy_low_price_relax_max_extra_ticks,
-        buy_mid_price_relax_max_ask=args.buy_mid_price_relax_max_ask,
-        buy_mid_price_relax_min_prob=args.buy_mid_price_relax_min_prob,
-        buy_mid_price_relax_retained_edge=args.buy_mid_price_relax_retained_edge,
-        buy_mid_price_relax_max_extra_ticks=args.buy_mid_price_relax_max_extra_ticks,
-        buy_mid_strong_relax_min_prob=args.buy_mid_strong_relax_min_prob,
-        buy_mid_strong_relax_retained_edge=args.buy_mid_strong_relax_retained_edge,
-        buy_mid_strong_relax_max_extra_ticks=args.buy_mid_strong_relax_max_extra_ticks,
-        buy_high_price_relax_min_ask=args.buy_high_price_relax_min_ask,
-        buy_high_price_relax_min_prob=args.buy_high_price_relax_min_prob,
-        buy_high_price_relax_retained_edge=args.buy_high_price_relax_retained_edge,
-        buy_high_price_relax_max_extra_ticks=args.buy_high_price_relax_max_extra_ticks,
     )
     result = run_backtest(rows, cfg)
     payload: dict[str, Any] = {
@@ -261,29 +142,18 @@ def main() -> int:
         "sample_trades": result.trades[:5],
     }
     if not args.no_grid:
-        if args.strategy_mode == "poly_single_source":
-            payload["grid_top"] = scan_poly_source_configs(
-                rows,
-                reference_distances=_float_list(args.poly_reference_distance_grid),
-                trend_lookbacks=_float_list(args.poly_trend_lookback_grid),
-                return_thresholds=_float_list(args.poly_return_grid),
-                max_entry_asks=_float_list(args.max_entry_ask_grid),
-                min_scores=_float_list(args.min_poly_entry_score_grid),
-                base_config=cfg,
-                min_entries=max(0, args.grid_min_entries),
-                sort_by=args.grid_sort_by,
-            )[: max(0, args.top_n)]
-        else:
-            payload["grid_top"] = scan_configs(
-                rows,
-                early_edges=_float_list(args.early_grid),
-                core_edges=_float_list(args.core_grid),
-                entry_starts=_float_list(args.entry_start_grid),
-                entry_ends=_float_list(args.entry_end_grid),
-                base_config=cfg,
-                min_entries=max(0, args.grid_min_entries),
-                sort_by=args.grid_sort_by,
-            )[: max(0, args.top_n)]
+        payload["grid_top"] = scan_poly_source_configs(
+            rows,
+            reference_distances=_float_list(args.poly_reference_distance_grid),
+            trend_lookbacks=_float_list(args.poly_trend_lookback_grid),
+            return_thresholds=_float_list(args.poly_return_grid),
+            max_entry_asks=_float_list(args.max_entry_ask_grid),
+            min_scores=_float_list(args.min_poly_entry_score_grid),
+            min_hold_scores=_float_list(args.min_poly_hold_score_grid),
+            base_config=cfg,
+            min_entries=max(0, args.grid_min_entries),
+            sort_by=args.grid_sort_by,
+        )[: max(0, args.top_n)]
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

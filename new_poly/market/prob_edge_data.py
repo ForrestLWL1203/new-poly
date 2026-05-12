@@ -136,6 +136,7 @@ def extract_crypto_prices_from_api_response(data: dict[str, Any]) -> dict[str, A
     try:
         return {
             "openPrice": float(data["openPrice"]),
+            "closePrice": float(data["closePrice"]) if data.get("closePrice") is not None else None,
             "completed": bool(data.get("completed")),
             "incomplete": bool(data.get("incomplete")),
             "cached": bool(data.get("cached")),

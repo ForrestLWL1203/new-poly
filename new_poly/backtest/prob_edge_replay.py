@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import itertools
 import math
 import bisect
+import itertools
 from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
-from new_poly.strategy.prob_edge import EdgeConfig, MarketSnapshot, evaluate_entry, evaluate_exit, required_edge_for_entry
+from new_poly.strategy.prob_edge import MarketSnapshot
 from new_poly.strategy.poly_source import PolySourceConfig, evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.execution import sell_aggression_ticks
@@ -17,26 +17,16 @@ from new_poly.trading.execution import sell_aggression_ticks
 
 @dataclass(frozen=True)
 class BacktestConfig:
-    strategy_mode: str = "prob_edge"
+    strategy_mode: str = "poly_single_source"
     amount_usd: float = 5.0
-    early_required_edge: float = 0.16
-    core_required_edge: float = 0.14
     early_to_core_age_sec: float = 120.0
     core_to_late_age_sec: float = 240.0
-    model_decay_buffer: float = 0.03
     entry_start_age_sec: float = 90.0
     entry_end_age_sec: float = 270.0
-    dynamic_entry_enabled: bool = False
-    fast_move_entry_start_age_sec: float = 70.0
-    fast_move_min_abs_sk_usd: float = 80.0
-    fast_move_required_edge: float = 0.22
-    strong_move_entry_start_age_sec: float = 60.0
-    strong_move_min_abs_sk_usd: float = 120.0
-    strong_move_required_edge: float = 0.24
+    final_no_entry_remaining_sec: float = 30.0
     max_book_age_ms: float = 1000.0
     max_entries_per_market: int = 2
-    late_entry_enabled: bool = False
-    tick_size: float = 0.01
+    entry_tick_size: float = 0.01
     buy_slippage_ticks: float = 0.0
     sell_slippage_ticks: float = 0.0
     sell_price_buffer_ticks: float = 5.0
@@ -48,60 +38,11 @@ class BacktestConfig:
     sell_risk_exit_retry_buffer_ticks: float = 12.0
     sell_force_exit_buffer_ticks: float = 10.0
     sell_force_exit_retry_buffer_ticks: float = 15.0
-    prob_drop_exit_window_sec: float = 0.0
-    prob_drop_exit_threshold: float = 0.0
-    final_force_exit_remaining_sec: float = 30.0
-    final_profit_hold_min_profit_ratio: float = 0.10
-    final_model_hold_min_prob: float = 0.0
     hold_to_settlement_enabled: bool = False
     hold_to_settlement_min_profit_ratio: float = 2.0
-    hold_to_settlement_min_model_prob: float = 0.90
     hold_to_settlement_min_bid_avg: float = 0.80
     hold_to_settlement_min_bid_limit: float = 0.75
-    defensive_take_profit_enabled: bool = True
-    profit_protection_start_remaining_sec: float = 15.0
-    profit_protection_end_remaining_sec: float = 30.0
-    defensive_take_profit_start_remaining_sec: float = 30.0
-    defensive_take_profit_end_remaining_sec: float = 60.0
     settlement_boundary_usd: float = 5.0
-    min_fair_cap_margin_ticks: float = 0.0
-    entry_tick_size: float = 0.01
-    min_entry_model_prob: float = 0.0
-    low_price_extra_edge_threshold: float = 0.0
-    low_price_extra_edge: float = 0.0
-    weak_sk_entry_filter_enabled: bool = False
-    weak_sk_entry_min_ask: float = 0.35
-    weak_sk_entry_min_abs_sk_bps: float = 2.0
-    buy_cap_relax_enabled: bool = False
-    buy_low_price_relax_max_ask: float = 0.25
-    buy_low_price_relax_min_prob: float = 0.40
-    buy_low_price_relax_retained_edge: float = 0.08
-    buy_low_price_relax_max_extra_ticks: float = 8.0
-    buy_mid_price_relax_max_ask: float = 0.65
-    buy_mid_price_relax_min_prob: float = 0.60
-    buy_mid_price_relax_retained_edge: float = 0.06
-    buy_mid_price_relax_max_extra_ticks: float = 8.0
-    buy_mid_strong_relax_min_prob: float = 0.75
-    buy_mid_strong_relax_retained_edge: float = 0.05
-    buy_mid_strong_relax_max_extra_ticks: float = 10.0
-    buy_high_price_relax_min_ask: float = 0.65
-    buy_high_price_relax_min_prob: float = 0.95
-    buy_high_price_relax_retained_edge: float = 0.08
-    buy_high_price_relax_max_extra_ticks: float = 4.0
-    cross_source_max_bps: float = 0.0
-    market_disagrees_exit_threshold: float = 0.0
-    low_price_market_disagrees_entry_threshold: float = 0.0
-    low_price_market_disagrees_exit_threshold: float = 0.0
-    market_disagrees_exit_max_remaining_sec: float = 0.0
-    market_disagrees_exit_min_loss: float = 0.0
-    market_disagrees_exit_min_age_sec: float = 0.0
-    market_disagrees_exit_max_profit: float = 0.01
-    market_disagrees_exit_min_model_drop: float = 0.0
-    polymarket_divergence_exit_bps: float = 3.0
-    polymarket_divergence_exit_min_age_sec: float = 3.0
-    entry_reference_confirm_bps: float = 0.0
-    exit_reference_adverse_bps: float = 0.0
-    logic_decay_reentry_cooldown_sec: float = 30.0
     honor_order_events: bool = False
     poly_reference_distance_bps: float = 0.5
     poly_trend_lookback_sec: float = 3.0
@@ -109,106 +50,21 @@ class BacktestConfig:
     max_entry_ask: float = 0.65
     max_entry_fill_price: float = 0.0
     min_poly_entry_score: float = 0.0
+    min_poly_hold_score: float = 0.0
+    poly_score_component_logs: str = "compact"
     poly_buy_price_buffer_ticks: float = 2.0
-    poly_exit_reference_adverse_bps: float = 1.0
-    poly_trend_reversal_exit_enabled: bool = False
-    poly_trend_reversal_bps: float = 0.3
-    market_disagrees_exit_mode: str = "fixed"
-    dynamic_market_disagrees_low_entry_price: float = 0.45
-    dynamic_market_disagrees_mid_entry_price: float = 0.60
-    dynamic_market_disagrees_low_entry_ratio: float = 0.70
-    dynamic_market_disagrees_mid_entry_ratio: float = 0.60
-    dynamic_market_disagrees_high_entry_ratio: float = 0.55
-    dynamic_market_disagrees_require_poly_weakening: bool = True
-    dynamic_market_disagrees_poly_weakening_bps: float = 1.0
-    poly_profit_protection_min_profit: float = 0.08
-    poly_profit_protection_trend_weak_bps: float = 0.0
-    poly_late_depth_guard_remaining_sec: float = 90.0
-    poly_late_depth_min_bid_avg: float = 0.20
-    poly_late_depth_min_bid_limit: float = 0.15
+    reference_distance_exit_remaining_sec: tuple[float, ...] = (120.0, 90.0, 70.0, 45.0, 30.0)
+    reference_distance_exit_min_bps: tuple[float, ...] = (-2.0, -1.0, 0.25, 0.75, 1.0)
+    poly_exit_min_hold_sec: float = 3.0
     poly_hold_to_settlement_min_reference_distance_bps: float = 1.0
     poly_hold_to_settlement_min_poly_return_bps: float = 0.0
     compute_poly_returns: bool = True
-
-    def edge_config(self) -> EdgeConfig:
-        return EdgeConfig(
-            early_required_edge=self.early_required_edge,
-            core_required_edge=self.core_required_edge,
-            early_to_core_age_sec=self.early_to_core_age_sec,
-            core_to_late_age_sec=self.core_to_late_age_sec,
-            model_decay_buffer=self.model_decay_buffer,
-            entry_start_age_sec=self.entry_start_age_sec,
-            entry_end_age_sec=self.entry_end_age_sec,
-            dynamic_entry_enabled=self.dynamic_entry_enabled,
-            fast_move_entry_start_age_sec=self.fast_move_entry_start_age_sec,
-            fast_move_min_abs_sk_usd=self.fast_move_min_abs_sk_usd,
-            fast_move_required_edge=self.fast_move_required_edge,
-            strong_move_entry_start_age_sec=self.strong_move_entry_start_age_sec,
-            strong_move_min_abs_sk_usd=self.strong_move_min_abs_sk_usd,
-            strong_move_required_edge=self.strong_move_required_edge,
-            max_book_age_ms=self.max_book_age_ms,
-            max_entries_per_market=self.max_entries_per_market,
-            late_entry_enabled=self.late_entry_enabled,
-            prob_drop_exit_window_sec=self.prob_drop_exit_window_sec,
-            prob_drop_exit_threshold=self.prob_drop_exit_threshold,
-            final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
-            final_profit_hold_min_profit_ratio=self.final_profit_hold_min_profit_ratio,
-            final_model_hold_min_prob=self.final_model_hold_min_prob,
-            hold_to_settlement_enabled=self.hold_to_settlement_enabled,
-            hold_to_settlement_min_profit_ratio=self.hold_to_settlement_min_profit_ratio,
-            hold_to_settlement_min_model_prob=self.hold_to_settlement_min_model_prob,
-            hold_to_settlement_min_bid_avg=self.hold_to_settlement_min_bid_avg,
-            hold_to_settlement_min_bid_limit=self.hold_to_settlement_min_bid_limit,
-            profit_protection_start_remaining_sec=self.profit_protection_start_remaining_sec,
-            profit_protection_end_remaining_sec=self.profit_protection_end_remaining_sec,
-            defensive_take_profit_enabled=self.defensive_take_profit_enabled,
-            defensive_take_profit_start_remaining_sec=self.defensive_take_profit_start_remaining_sec,
-            defensive_take_profit_end_remaining_sec=self.defensive_take_profit_end_remaining_sec,
-            min_fair_cap_margin_ticks=self.min_fair_cap_margin_ticks,
-            entry_tick_size=self.entry_tick_size,
-            min_entry_model_prob=self.min_entry_model_prob,
-            low_price_extra_edge_threshold=self.low_price_extra_edge_threshold,
-            low_price_extra_edge=self.low_price_extra_edge,
-            weak_sk_entry_filter_enabled=self.weak_sk_entry_filter_enabled,
-            weak_sk_entry_min_ask=self.weak_sk_entry_min_ask,
-            weak_sk_entry_min_abs_sk_bps=self.weak_sk_entry_min_abs_sk_bps,
-            buy_cap_relax_enabled=self.buy_cap_relax_enabled,
-            buy_low_price_relax_max_ask=self.buy_low_price_relax_max_ask,
-            buy_low_price_relax_min_prob=self.buy_low_price_relax_min_prob,
-            buy_low_price_relax_retained_edge=self.buy_low_price_relax_retained_edge,
-            buy_low_price_relax_max_extra_ticks=self.buy_low_price_relax_max_extra_ticks,
-            buy_mid_price_relax_max_ask=self.buy_mid_price_relax_max_ask,
-            buy_mid_price_relax_min_prob=self.buy_mid_price_relax_min_prob,
-            buy_mid_price_relax_retained_edge=self.buy_mid_price_relax_retained_edge,
-            buy_mid_price_relax_max_extra_ticks=self.buy_mid_price_relax_max_extra_ticks,
-            buy_mid_strong_relax_min_prob=self.buy_mid_strong_relax_min_prob,
-            buy_mid_strong_relax_retained_edge=self.buy_mid_strong_relax_retained_edge,
-            buy_mid_strong_relax_max_extra_ticks=self.buy_mid_strong_relax_max_extra_ticks,
-            buy_high_price_relax_min_ask=self.buy_high_price_relax_min_ask,
-            buy_high_price_relax_min_prob=self.buy_high_price_relax_min_prob,
-            buy_high_price_relax_retained_edge=self.buy_high_price_relax_retained_edge,
-            buy_high_price_relax_max_extra_ticks=self.buy_high_price_relax_max_extra_ticks,
-            cross_source_max_bps=self.cross_source_max_bps,
-            market_disagrees_exit_threshold=self.market_disagrees_exit_threshold,
-            low_price_market_disagrees_entry_threshold=self.low_price_market_disagrees_entry_threshold,
-            low_price_market_disagrees_exit_threshold=self.low_price_market_disagrees_exit_threshold,
-            market_disagrees_exit_max_remaining_sec=self.market_disagrees_exit_max_remaining_sec,
-            market_disagrees_exit_min_loss=self.market_disagrees_exit_min_loss,
-            market_disagrees_exit_min_age_sec=self.market_disagrees_exit_min_age_sec,
-            market_disagrees_exit_max_profit=self.market_disagrees_exit_max_profit,
-            market_disagrees_exit_min_model_drop=self.market_disagrees_exit_min_model_drop,
-            polymarket_divergence_exit_bps=self.polymarket_divergence_exit_bps,
-            polymarket_divergence_exit_min_age_sec=self.polymarket_divergence_exit_min_age_sec,
-            entry_reference_confirm_bps=self.entry_reference_confirm_bps,
-            exit_reference_adverse_bps=self.exit_reference_adverse_bps,
-            logic_decay_reentry_cooldown_sec=self.logic_decay_reentry_cooldown_sec,
-        )
 
     def poly_source_config(self) -> PolySourceConfig:
         return PolySourceConfig(
             entry_start_age_sec=self.entry_start_age_sec,
             entry_end_age_sec=self.entry_end_age_sec,
-            final_no_entry_remaining_sec=self.final_force_exit_remaining_sec,
+            final_no_entry_remaining_sec=self.final_no_entry_remaining_sec,
             early_to_core_age_sec=self.early_to_core_age_sec,
             core_to_late_age_sec=self.core_to_late_age_sec,
             max_entries_per_market=self.max_entries_per_market,
@@ -219,31 +75,13 @@ class BacktestConfig:
             max_entry_ask=self.max_entry_ask,
             max_entry_fill_price=self.max_entry_fill_price,
             min_poly_entry_score=self.min_poly_entry_score,
+            min_poly_hold_score=self.min_poly_hold_score,
+            poly_score_component_logs=self.poly_score_component_logs,
             entry_tick_size=self.entry_tick_size,
             buy_price_buffer_ticks=self.poly_buy_price_buffer_ticks,
-            exit_reference_adverse_bps=self.poly_exit_reference_adverse_bps,
-            exit_min_hold_sec=self.market_disagrees_exit_min_age_sec,
-            poly_trend_reversal_exit_enabled=self.poly_trend_reversal_exit_enabled,
-            poly_trend_reversal_bps=self.poly_trend_reversal_bps,
-            market_disagrees_exit_mode=self.market_disagrees_exit_mode,
-            market_disagrees_exit_threshold=self.market_disagrees_exit_threshold or 0.55,
-            market_disagrees_exit_min_age_sec=self.market_disagrees_exit_min_age_sec,
-            dynamic_market_disagrees_low_entry_price=self.dynamic_market_disagrees_low_entry_price,
-            dynamic_market_disagrees_mid_entry_price=self.dynamic_market_disagrees_mid_entry_price,
-            dynamic_market_disagrees_low_entry_ratio=self.dynamic_market_disagrees_low_entry_ratio,
-            dynamic_market_disagrees_mid_entry_ratio=self.dynamic_market_disagrees_mid_entry_ratio,
-            dynamic_market_disagrees_high_entry_ratio=self.dynamic_market_disagrees_high_entry_ratio,
-            dynamic_market_disagrees_require_poly_weakening=self.dynamic_market_disagrees_require_poly_weakening,
-            dynamic_market_disagrees_poly_weakening_bps=self.dynamic_market_disagrees_poly_weakening_bps,
-            final_force_exit_remaining_sec=self.final_force_exit_remaining_sec,
-            final_profit_hold_min_profit_ratio=self.final_profit_hold_min_profit_ratio,
-            profit_protection_start_remaining_sec=self.profit_protection_start_remaining_sec,
-            profit_protection_end_remaining_sec=self.profit_protection_end_remaining_sec,
-            profit_protection_min_profit=self.poly_profit_protection_min_profit,
-            profit_protection_trend_weak_bps=self.poly_profit_protection_trend_weak_bps,
-            late_depth_guard_remaining_sec=self.poly_late_depth_guard_remaining_sec,
-            late_depth_min_bid_avg=self.poly_late_depth_min_bid_avg,
-            late_depth_min_bid_limit=self.poly_late_depth_min_bid_limit,
+            reference_distance_exit_remaining_sec=self.reference_distance_exit_remaining_sec,
+            reference_distance_exit_min_bps=self.reference_distance_exit_min_bps,
+            exit_min_hold_sec=self.poly_exit_min_hold_sec,
             hold_to_settlement_enabled=self.hold_to_settlement_enabled,
             hold_to_settlement_min_profit_ratio=self.hold_to_settlement_min_profit_ratio,
             hold_to_settlement_min_bid_avg=self.hold_to_settlement_min_bid_avg,
@@ -446,7 +284,7 @@ def _entry_fill_price(decision, cfg: BacktestConfig) -> float | None:
     base = decision.depth_limit_price if decision.depth_limit_price is not None else decision.price
     if base is None:
         return None
-    fill_price = round(base + cfg.buy_slippage_ticks * cfg.tick_size, 6)
+    fill_price = round(base + cfg.buy_slippage_ticks * cfg.entry_tick_size, 6)
     if decision.limit_price is not None and fill_price > decision.limit_price + 1e-12:
         return None
     return fill_price
@@ -471,9 +309,9 @@ def _exit_fill_price(decision, cfg: BacktestConfig) -> float | None:
         sell_force_exit_buffer_ticks=cfg.sell_force_exit_buffer_ticks,
         sell_force_exit_retry_buffer_ticks=cfg.sell_force_exit_retry_buffer_ticks,
     )
-    fak_floor = floor_base - strategy_floor_ticks * cfg.tick_size
-    slipped = executable - cfg.sell_slippage_ticks * cfg.tick_size
-    return round(min(1.0, max(cfg.tick_size, fak_floor, slipped)), 6)
+    fak_floor = floor_base - strategy_floor_ticks * cfg.entry_tick_size
+    slipped = executable - cfg.sell_slippage_ticks * cfg.entry_tick_size
+    return round(min(1.0, max(cfg.entry_tick_size, fak_floor, slipped)), 6)
 
 
 def _entry_fill_price_from_snapshot(decision, snap: MarketSnapshot, cfg: BacktestConfig) -> float | None:
@@ -485,7 +323,7 @@ def _entry_fill_price_from_snapshot(decision, snap: MarketSnapshot, cfg: Backtes
         return None
     if base is None:
         return None
-    fill_price = round(base + cfg.buy_slippage_ticks * cfg.tick_size, 6)
+    fill_price = round(base + cfg.buy_slippage_ticks * cfg.entry_tick_size, 6)
     if decision.limit_price is not None and fill_price > decision.limit_price + 1e-12:
         return None
     return fill_price
@@ -517,9 +355,9 @@ def _exit_fill_price_from_snapshot(decision, snap: MarketSnapshot, cfg: Backtest
         sell_force_exit_buffer_ticks=cfg.sell_force_exit_buffer_ticks,
         sell_force_exit_retry_buffer_ticks=cfg.sell_force_exit_retry_buffer_ticks,
     )
-    fak_floor = bid_limit - strategy_floor_ticks * cfg.tick_size
-    slipped = bid_avg - cfg.sell_slippage_ticks * cfg.tick_size
-    return round(min(1.0, max(cfg.tick_size, fak_floor, slipped)), 6)
+    fak_floor = bid_limit - strategy_floor_ticks * cfg.entry_tick_size
+    slipped = bid_avg - cfg.sell_slippage_ticks * cfg.entry_tick_size
+    return round(min(1.0, max(cfg.entry_tick_size, fak_floor, slipped)), 6)
 
 
 def _order_success(row: dict[str, Any]) -> bool:
@@ -604,7 +442,6 @@ def _annotate_trade_settlement(trade: dict[str, Any], settlement: dict[str, Any]
 
 def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None = None) -> BacktestResult:
     cfg = config or BacktestConfig()
-    edge_cfg = cfg.edge_config()
     poly_cfg = cfg.poly_source_config()
     trades: list[dict[str, Any]] = []
     equity = 0.0
@@ -679,16 +516,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         exits += 1
                         continue
             if state.has_position and state.open_position is not None:
-                if cfg.strategy_mode == "poly_single_source":
-                    decision = evaluate_poly_exit(snap, state.open_position, poly_cfg, state)
-                else:
-                    decision = evaluate_exit(snap, state.open_position, edge_cfg, state)
-                if cfg.strategy_mode != "poly_single_source" and decision.model_prob is not None:
-                    state.record_model_prob(
-                        snap.age_sec,
-                        decision.model_prob,
-                        retention_sec=max(edge_cfg.prob_stagnation_window_sec, edge_cfg.prob_drop_exit_window_sec, 5.0),
-                    )
+                decision = evaluate_poly_exit(snap, state.open_position, poly_cfg, state)
                 if decision.action == "exit" and decision.price is not None and active_trade is not None:
                     exit_price = _exit_fill_price(decision, cfg)
                     retry_snap: MarketSnapshot | None = None
@@ -708,6 +536,9 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "exit_price": exit_price,
                         "pnl": pnl,
                         "hold_sec": exit_age - active_trade["entry_age_sec"],
+                        "poly_hold_score": decision.poly_hold_score,
+                        "poly_hold_floor_bps": decision.poly_hold_floor_bps,
+                        "poly_hold_reference_margin_bps": decision.poly_hold_reference_margin_bps,
                     })
                     _annotate_trade_settlement(active_trade, group_settlement)
                     equity += pnl
@@ -717,10 +548,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                     exits += 1
             else:
                 state.record_reference_baseline(snap)
-                if cfg.strategy_mode == "poly_single_source":
-                    decision = evaluate_poly_entry(snap, state, poly_cfg)
-                else:
-                    decision = evaluate_entry(snap, state, edge_cfg)
+                decision = evaluate_poly_entry(snap, state, poly_cfg)
                 if decision.action == "skip":
                     skip_reasons[decision.reason] += 1
                 if decision.action == "enter" and decision.side is not None and decision.price is not None and decision.edge is not None:
@@ -751,17 +579,21 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         entry_favorable_gap_bps=decision.favorable_gap_bps,
                         entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
                     ))
-                    entry_phase = decision.phase or required_edge_for_entry(fill_snap, edge_cfg).phase
                     active_trade = {
                         "market_slug": slug,
                         "entry_side": decision.side,
-                        "entry_phase": entry_phase,
+                        "entry_phase": decision.phase,
                         "entry_age_sec": fill_snap.age_sec,
                         "entry_price": fill_price,
                         "entry_model_prob": decision.model_prob,
                         "entry_edge": decision.edge,
                         "entry_edge_at_fill": (decision.model_prob - fill_price) if decision.model_prob is not None else None,
                         "poly_entry_score": decision.poly_entry_score,
+                        "poly_entry_distance_score": decision.poly_entry_distance_score,
+                        "poly_entry_trend_score": decision.poly_entry_trend_score,
+                        "poly_entry_price_quality_score": decision.poly_entry_price_quality_score,
+                        "poly_entry_market_quality_score": decision.poly_entry_market_quality_score,
+                        "poly_entry_overextended": decision.poly_entry_overextended,
                         "poly_reference_distance_bps": decision.poly_reference_distance_bps,
                         "poly_return_bps": decision.poly_return_bps,
                         "poly_trend_lookback_sec": decision.poly_trend_lookback_sec,
@@ -840,47 +672,6 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
     return BacktestResult(summary=summary, trades=trades)
 
 
-def scan_configs(
-    rows: Iterable[dict[str, Any]],
-    *,
-    early_edges: Iterable[float],
-    core_edges: Iterable[float],
-    entry_starts: Iterable[float],
-    entry_ends: Iterable[float],
-    base_config: BacktestConfig | None = None,
-    min_entries: int = 0,
-    sort_by: str = "pnl",
-) -> list[dict[str, Any]]:
-    materialized = list(rows)
-    base = base_config or BacktestConfig()
-    results: list[dict[str, Any]] = []
-    for early, core, start, end in itertools.product(early_edges, core_edges, entry_starts, entry_ends):
-        cfg = replace(
-            base,
-            early_required_edge=float(early),
-            core_required_edge=float(core),
-            entry_start_age_sec=float(start),
-            entry_end_age_sec=float(end),
-        )
-        result = run_backtest(materialized, cfg)
-        if result.summary["entries"] < min_entries:
-            continue
-        results.append({
-            "early_required_edge": early,
-            "core_required_edge": core,
-            "entry_start_age_sec": start,
-            "entry_end_age_sec": end,
-            **result.summary,
-        })
-    if sort_by == "win_rate":
-        key = lambda item: (item["win_rate"], item["entries"], item["total_pnl"])
-    elif sort_by == "avg_pnl":
-        key = lambda item: (item["avg_pnl_per_trade"], item["win_rate"], item["entries"])
-    else:
-        key = lambda item: (item["total_pnl"], item["win_rate"], item["entries"])
-    return sorted(results, key=key, reverse=True)
-
-
 def scan_poly_source_configs(
     rows: Iterable[dict[str, Any]],
     *,
@@ -889,21 +680,23 @@ def scan_poly_source_configs(
     return_thresholds: Iterable[float],
     max_entry_asks: Iterable[float],
     min_scores: Iterable[float],
+    min_hold_scores: Iterable[float] = (0.0,),
     base_config: BacktestConfig | None = None,
     min_entries: int = 0,
     sort_by: str = "pnl",
 ) -> list[dict[str, Any]]:
-    base = replace(base_config or BacktestConfig(), strategy_mode="poly_single_source")
+    base = base_config or BacktestConfig()
     materialized: list[dict[str, Any]] = []
     for _slug, group in _group_rows(rows):
         materialized.extend(_with_computed_poly_returns(group, entry_start_age_sec=base.entry_start_age_sec))
     results: list[dict[str, Any]] = []
-    for distance, lookback, return_bps, max_ask, min_score in itertools.product(
+    for distance, lookback, return_bps, max_ask, min_score, min_hold_score in itertools.product(
         reference_distances,
         trend_lookbacks,
         return_thresholds,
         max_entry_asks,
         min_scores,
+        min_hold_scores,
     ):
         cfg = replace(
             base,
@@ -913,6 +706,7 @@ def scan_poly_source_configs(
             poly_return_bps=float(return_bps),
             max_entry_ask=float(max_ask),
             min_poly_entry_score=float(min_score),
+            min_poly_hold_score=float(min_hold_score),
         )
         result = run_backtest(materialized, cfg)
         if result.summary["entries"] < min_entries:
@@ -923,6 +717,7 @@ def scan_poly_source_configs(
             "poly_return_bps": return_bps,
             "max_entry_ask": max_ask,
             "min_poly_entry_score": min_score,
+            "min_poly_hold_score": min_hold_score,
             **result.summary,
         })
     if sort_by == "win_rate":

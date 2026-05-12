@@ -114,3 +114,40 @@ async def test_feed_reconnects_when_messages_have_no_valid_ticks(monkeypatch, ca
 
     assert instances[0].closed is True
     assert not [record for record in caplog.records if "reconnecting" in record.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_feed_reconnects_when_valid_ticks_are_source_stale(monkeypatch) -> None:
+    instances = []
+
+    class SourceStaleWs:
+        def __init__(self) -> None:
+            self.closed = False
+            instances.append(self)
+
+        async def send(self, _message: str) -> None:
+            return None
+
+        async def recv(self) -> str:
+            await asyncio.sleep(0.05)
+            old_ms = int((polymarket_live.time.time() - 60.0) * 1000)
+            return f'{{"payload":{{"timestamp":{old_ms},"value":81436.25}}}}'
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def fake_connect(*_args, **_kwargs):
+        return SourceStaleWs()
+
+    monkeypatch.setattr(polymarket_live.websockets, "connect", fake_connect)
+    feed = PolymarketChainlinkBtcPriceFeed(stale_reconnect_sec=1.0)
+
+    await feed.start()
+    try:
+        async with asyncio.timeout(3.5):
+            while len(instances) < 2:
+                await asyncio.sleep(0.05)
+    finally:
+        await feed.stop()
+
+    assert instances[0].closed is True

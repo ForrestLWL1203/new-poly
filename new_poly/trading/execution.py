@@ -281,18 +281,11 @@ def _avg_sell_fill_partial(levels: list[tuple[float, float]], shares: float, min
 
 
 PROFIT_SELL_EXIT_REASONS = frozenset({
-    "market_overprice_exit",
-    "defensive_take_profit",
-    "profit_protection_exit",
 })
 
 RISK_SELL_EXIT_REASONS = frozenset({
-    "logic_decay_exit",
     "risk_exit",
-    "market_disagrees_exit",
-    "polymarket_divergence_exit",
-    "reference_adverse_exit",
-    "prob_drop_exit",
+    "poly_hold_score_exit",
 })
 
 

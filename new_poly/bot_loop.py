@@ -31,6 +31,7 @@ from new_poly.bot_runtime import (
 )
 from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
+from new_poly.market.prob_edge_data import fetch_crypto_price_api
 from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
@@ -72,15 +73,30 @@ class WindowCloseResult:
 
 
 @dataclass
+class PendingWindowSettlement:
+    window: Any
+    cfg: BotConfig
+    options: RuntimeOptions
+    due_at: dt.datetime
+
+
+@dataclass
 class LoopRuntime:
     completed_windows: int = 0
     seen_repetitive_skips: set[tuple[str, str]] | None = None
     polymarket_reference_warning_logged: bool = False
     polymarket_unhealthy_since: float | None = None
+    pending_window_settlement: PendingWindowSettlement | None = None
+    post_exit_observation_market_slug: str | None = None
+    post_exit_observation_last_age_sec: float | None = None
 
     def __post_init__(self) -> None:
         if self.seen_repetitive_skips is None:
             self.seen_repetitive_skips = set()
+
+    def reset_post_exit_observation(self) -> None:
+        self.post_exit_observation_market_slug = None
+        self.post_exit_observation_last_age_sec = None
 
 
 async def _prefetch_live_order_params(*, token_side: str, token_id: str, market_slug: str, logger: JsonlLogger) -> dict[str, Any]:
@@ -242,7 +258,7 @@ async def _advance_dvol_refresh(
     return sigma_eff, dvol_stale
 
 
-def _settle_open_position_if_needed(
+async def _settle_open_position_if_needed(
     *,
     window: Any,
     prices: WindowPrices,
@@ -262,7 +278,14 @@ def _settle_open_position_if_needed(
         polymarket_feed=feeds.polymarket,
         polymarket_enabled=cfg.polymarket_price_enabled,
     ).effective
-    settlement = choose_settlement(prices, settlement_price, boundary_usd=cfg.settlement_boundary_usd)
+    settlement = await _crypto_close_settlement(window, cfg)
+    if settlement["winning_side"] is None:
+        close_settlement = settlement
+        settlement = choose_settlement(prices, settlement_price, boundary_usd=cfg.settlement_boundary_usd)
+        settlement["settlement_open_price"] = close_settlement.get("settlement_open_price")
+        settlement["settlement_close_price"] = close_settlement.get("settlement_close_price")
+        settlement["settlement_completed"] = close_settlement.get("settlement_completed")
+        settlement["settlement_cached"] = close_settlement.get("settlement_cached")
     settled_position = state.open_position
     if settlement["winning_side"] is not None:
         pnl = state.record_settlement(settlement["winning_side"])
@@ -275,6 +298,8 @@ def _settle_open_position_if_needed(
         "market_slug": window.slug,
         **settlement,
         "settlement_price": _compact(settlement.get("settlement_price"), 2),
+        "settlement_open_price": _compact(settlement.get("settlement_open_price"), 2),
+        "settlement_close_price": _compact(settlement.get("settlement_close_price"), 2),
         "settlement_proxy_price": _compact(settlement_price, 2),
         "k_price": _compact(prices.k_price, 2),
         "position": settled_position.__dict__,
@@ -289,6 +314,74 @@ def _settle_open_position_if_needed(
     if risk_event is not None:
         row["risk_event"] = risk_event
     logger.write(row)
+
+
+async def _crypto_close_settlement(window: Any, cfg: BotConfig) -> dict[str, Any]:
+    close_data = await asyncio.to_thread(fetch_crypto_price_api, window)
+    close_price = close_data.get("closePrice") if close_data is not None else None
+    open_price = close_data.get("openPrice") if close_data is not None else None
+    base = {
+        "settlement_open_price": open_price,
+        "settlement_close_price": close_price,
+        "settlement_completed": bool(close_data.get("completed")) if close_data is not None else None,
+        "settlement_cached": bool(close_data.get("cached")) if close_data is not None else None,
+    }
+    if close_price is None or open_price is None:
+        return {
+            **base,
+            "winning_side": None,
+            "settlement_source": "polymarket_crypto_price_api_missing_close",
+            "settlement_price": close_price,
+            "settlement_uncertain": True,
+        }
+    return {
+        **base,
+        "winning_side": "up" if close_price >= open_price else "down",
+        "settlement_source": "polymarket_crypto_price_api_close",
+        "settlement_price": close_price,
+        "settlement_uncertain": abs(close_price - open_price) < cfg.settlement_boundary_usd,
+    }
+
+
+async def _write_window_settlement_row(
+    *,
+    window: Any,
+    cfg: BotConfig,
+    options: RuntimeOptions,
+    logger: JsonlLogger,
+) -> None:
+    settlement = await _crypto_close_settlement(window, cfg)
+    logger.write({
+        "ts": dt.datetime.now().astimezone().isoformat(),
+        "mode": options.mode,
+        "event": "window_settlement",
+        "market_slug": window.slug,
+        **settlement,
+        "settlement_price": _compact(settlement.get("settlement_price"), 2),
+        "settlement_open_price": _compact(settlement.get("settlement_open_price"), 2),
+        "settlement_close_price": _compact(settlement.get("settlement_close_price"), 2),
+    })
+
+
+async def _write_pending_window_settlement_if_due(
+    *,
+    loop: LoopRuntime,
+    logger: JsonlLogger,
+    now: dt.datetime | None = None,
+) -> None:
+    pending = loop.pending_window_settlement
+    if pending is None:
+        return
+    now = now or dt.datetime.now(dt.timezone.utc)
+    if now < pending.due_at:
+        return
+    loop.pending_window_settlement = None
+    await _write_window_settlement_row(
+        window=pending.window,
+        cfg=pending.cfg,
+        options=pending.options,
+        logger=logger,
+    )
 
 
 def _prune_logs_after_window_if_needed(
@@ -328,6 +421,7 @@ async def _switch_to_next_window(
     prices = WindowPrices()
     state.reset_for_market(next_window.slug)
     loop.seen_repetitive_skips.clear()
+    loop.reset_post_exit_observation()
     await asyncio.wait_for(feeds.stream.switch_tokens([next_window.up_token, next_window.down_token]), timeout=8.0)
     logger.write({
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -370,15 +464,16 @@ async def _handle_window_close(
     trigger_dynamic_analysis: Callable[[int, str, float, BotConfig], asyncio.Task[tuple[DynamicDecision, DynamicState]] | None] | None = None,
     apply_pending_dynamic_profile: Callable[[str, BotConfig], tuple[BotConfig, DynamicState | None]] | None = None,
 ) -> WindowCloseResult:
-    _settle_open_position_if_needed(
-        window=window,
-        prices=prices,
-        cfg=cfg,
-        options=options,
-        feeds=feeds,
-        state=state,
-        logger=logger,
-    )
+    if state.has_position:
+        await _settle_open_position_if_needed(
+            window=window,
+            prices=prices,
+            cfg=cfg,
+            options=options,
+            feeds=feeds,
+            state=state,
+            logger=logger,
+        )
     if prices.k_price is not None:
         loop.completed_windows += 1
     pause_event = state.advance_loss_pause_after_window(window.slug)
@@ -392,9 +487,18 @@ async def _handle_window_close(
     if trigger_dynamic_analysis is not None:
         dynamic_task = trigger_dynamic_analysis(loop.completed_windows, window.slug, state.drawdown, cfg)
     if options.windows is not None and loop.completed_windows >= options.windows:
+        if not state.has_position:
+            loop.pending_window_settlement = None
         return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, True)
 
     next_window = find_following_window(window, series)
+    if not state.has_position and prices.k_price is not None:
+        loop.pending_window_settlement = PendingWindowSettlement(
+            window=window,
+            cfg=cfg,
+            options=options,
+            due_at=next_window.start_time + dt.timedelta(seconds=30),
+        )
     if apply_pending_dynamic_profile is not None:
         cfg, dynamic_state = apply_pending_dynamic_profile(next_window.slug, cfg)
 

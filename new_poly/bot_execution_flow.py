@@ -15,7 +15,7 @@ from new_poly.bot_runtime import (
     _refresh_entry_retry_params,
     _refresh_exit_retry_params,
 )
-from new_poly.strategy.prob_edge import StrategyDecision, evaluate_entry, evaluate_exit
+from new_poly.strategy.prob_edge import StrategyDecision
 from new_poly.strategy.poly_source import evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState, UnknownEntryOrder
 from new_poly.trading.clob_client import get_token_balance
@@ -61,8 +61,13 @@ def _order_intent_row(
     if extra:
         out.update(extra)
     if options.analysis_logs:
-        out["analysis"] = {"price_sources": price_analysis}
+        strategy_analysis = _entry_analysis(decision, None) if intent == "entry" else _exit_analysis(decision, None)
+        out["analysis"] = {"price_sources": price_analysis, **strategy_analysis}
     return out
+
+
+def _score_component_log_mode(cfg: BotConfig) -> str:
+    return cfg.poly_source.poly_score_component_logs
 
 
 def _apply_closed_trade_risk(row: dict[str, Any], *, state: StrategyState, cfg: BotConfig, pnl: float) -> None:
@@ -83,11 +88,7 @@ def _unknown_buy_needs_safety_check(*, state: StrategyState, snap, window: Any, 
         return False
     if snap.age_sec - pending.entry_time < UNKNOWN_ENTRY_SAFETY_MIN_AGE_SEC:
         return False
-    entry_end_age_sec = (
-        cfg.poly_source.entry_end_age_sec
-        if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None
-        else cfg.edge.entry_end_age_sec
-    )
+    entry_end_age_sec = cfg.poly_source.entry_end_age_sec
     return snap.remaining_sec <= UNKNOWN_ENTRY_SAFETY_REMAINING_SEC or snap.age_sec >= entry_end_age_sec
 
 
@@ -392,7 +393,7 @@ async def _maybe_recover_unknown_entry_balance(
         return None
     if state.has_position:
         decision = StrategyDecision(action="skip", reason="unknown_balance_recovery_skipped_existing_position")
-        row["decision"] = _decision_log(decision)
+        row["decision"] = _decision_log(decision, component_logs=_score_component_log_mode(cfg))
         logger.write({
             **check_row,
             "event": "unknown_balance_recovery_skipped_existing_position",
@@ -486,19 +487,10 @@ async def handle_open_position_tick(
                 })
     if state.has_pending_execution:
         decision = StrategyDecision(action="hold", reason="pending_order_reconciliation", side=state.open_position.token_side)
-        row["decision"] = _decision_log(decision)
+        row["decision"] = _decision_log(decision, component_logs=_score_component_log_mode(cfg))
         return decision
-    if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None:
-        decision = evaluate_poly_exit(snap, state.open_position, cfg.poly_source, state)
-    else:
-        decision = evaluate_exit(snap, state.open_position, cfg.edge, state)
-    row["decision"] = _decision_log(decision)
-    if decision.model_prob is not None:
-        state.record_model_prob(
-            snap.age_sec,
-            decision.model_prob,
-            retention_sec=max(cfg.edge.prob_stagnation_window_sec, cfg.edge.prob_drop_exit_window_sec, 5.0),
-        )
+    decision = evaluate_poly_exit(snap, state.open_position, cfg.poly_source, state)
+    row["decision"] = _decision_log(decision, component_logs=_score_component_log_mode(cfg))
     if decision.action != "exit":
         return decision
 
@@ -627,18 +619,15 @@ async def handle_flat_tick(
             return recovered_decision
     if state.has_pending_execution:
         decision = StrategyDecision(action="skip", reason="pending_order_reconciliation")
-        row["decision"] = _decision_log(decision)
+        row["decision"] = _decision_log(decision, component_logs=_score_component_log_mode(cfg))
         return decision
     if state.unresolved_unknown_entry is not None:
         decision = StrategyDecision(action="skip", reason="unresolved_unknown_entry_pending")
-        row["decision"] = _decision_log(decision)
+        row["decision"] = _decision_log(decision, component_logs=_score_component_log_mode(cfg))
         return decision
     state.record_reference_baseline(snap)
-    if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None:
-        decision = evaluate_poly_entry(snap, state, cfg.poly_source)
-    else:
-        decision = evaluate_entry(snap, state, cfg.edge)
-    row["decision"] = _decision_log(decision)
+    decision = evaluate_poly_entry(snap, state, cfg.poly_source)
+    row["decision"] = _decision_log(decision, component_logs=_score_component_log_mode(cfg))
     if decision.action != "enter":
         return decision
 

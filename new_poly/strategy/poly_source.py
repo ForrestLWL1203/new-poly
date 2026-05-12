@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .prob_edge import MarketSnapshot, StrategyDecision, required_edge_for_entry
+from .prob_edge import MarketSnapshot, StrategyDecision
 from .state import PositionSnapshot, StrategyState
 
 
@@ -23,37 +23,41 @@ class PolySourceConfig:
     max_entry_ask: float = 0.65
     max_entry_fill_price: float = 0.0
     min_poly_entry_score: float = 0.0
+    min_poly_hold_score: float = 0.0
+    poly_score_component_logs: str = "compact"
     entry_tick_size: float = 0.01
     buy_price_buffer_ticks: float = 2.0
-    exit_reference_adverse_bps: float = 1.0
+    reference_distance_exit_remaining_sec: tuple[float, ...] = (120.0, 90.0, 70.0, 45.0, 30.0)
+    reference_distance_exit_min_bps: tuple[float, ...] = (-2.0, -1.0, 0.25, 0.75, 1.0)
     exit_min_hold_sec: float = 3.0
-    poly_trend_reversal_exit_enabled: bool = False
-    poly_trend_reversal_bps: float = 0.3
-    market_disagrees_exit_mode: str = "fixed"
-    market_disagrees_exit_threshold: float = 0.55
-    market_disagrees_exit_min_age_sec: float = 3.0
-    dynamic_market_disagrees_low_entry_price: float = 0.45
-    dynamic_market_disagrees_mid_entry_price: float = 0.60
-    dynamic_market_disagrees_low_entry_ratio: float = 0.70
-    dynamic_market_disagrees_mid_entry_ratio: float = 0.60
-    dynamic_market_disagrees_high_entry_ratio: float = 0.55
-    dynamic_market_disagrees_require_poly_weakening: bool = True
-    dynamic_market_disagrees_poly_weakening_bps: float = 1.0
-    final_force_exit_remaining_sec: float = 30.0
-    final_profit_hold_min_profit_ratio: float = 0.10
-    profit_protection_start_remaining_sec: float = 90.0
-    profit_protection_end_remaining_sec: float = 45.0
-    profit_protection_min_profit: float = 0.08
-    profit_protection_trend_weak_bps: float = 0.0
-    late_depth_guard_remaining_sec: float = 90.0
-    late_depth_min_bid_avg: float = 0.20
-    late_depth_min_bid_limit: float = 0.15
     hold_to_settlement_enabled: bool = True
     hold_to_settlement_min_profit_ratio: float = 0.50
     hold_to_settlement_min_bid_avg: float = 0.80
     hold_to_settlement_min_bid_limit: float = 0.75
     hold_to_settlement_min_reference_distance_bps: float = 1.0
     hold_to_settlement_min_poly_return_bps: float = 0.0
+
+
+@dataclass(frozen=True)
+class PolyEntryScore:
+    total: float
+    distance_score: float
+    trend_score: float
+    price_quality_score: float
+    market_quality_score: float
+    overextended: bool
+
+
+@dataclass(frozen=True)
+class PolyHoldScore:
+    total: float
+    floor_bps: float | None
+    reference_margin_bps: float | None
+    reference_margin_score: float
+    trend_score: float
+    entry_baseline_score: float
+    pnl_context_score: float
+    settlement_bonus: float
 
 
 def _distance_bps(snapshot: MarketSnapshot, side: str) -> float | None:
@@ -116,14 +120,88 @@ def _raw_poly_side(snapshot: MarketSnapshot) -> str | None:
     return None
 
 
-def _entry_score(distance_bps: float, trend_bps: float, ask: float, bid: float | None) -> float:
-    distance_score = min(max(distance_bps, 0.0), 5.0)
-    trend_score = min(max(trend_bps, 0.0), 2.0) * 2.0
+def _clamp(value: float, low: float, high: float) -> float:
+    return min(max(value, low), high)
+
+
+def _distance_score(distance_bps: float) -> tuple[float, bool]:
+    distance = max(distance_bps, 0.0)
+    if distance <= 5.0:
+        return distance, False
+    if distance <= 8.0:
+        return 5.0 + (distance - 5.0) / 3.0, False
+    if distance <= 12.0:
+        return 6.0, False
+    penalty = min((distance - 12.0) * 0.25, 2.0)
+    return max(4.0, 6.0 - penalty), True
+
+
+def _price_quality_score(ask: float) -> float:
+    if ask <= 0.55:
+        return 1.0
+    if ask <= 0.65:
+        return 1.0 - (ask - 0.55) / 0.10
+    if ask <= 0.75:
+        return -1.5 * ((ask - 0.65) / 0.10)
+    return -2.0
+
+
+def _entry_score(distance_bps: float, trend_bps: float, ask: float, bid: float | None) -> PolyEntryScore:
+    distance_score, overextended = _distance_score(distance_bps)
+    trend_score = min(max(trend_bps, 0.0), 2.5) * 1.5
+    price_score = _price_quality_score(ask)
     market_score = 0.0
     if bid is not None:
         spread = max(0.0, ask - bid)
         market_score = max(0.0, 1.0 - spread / 0.05)
-    return round(distance_score + trend_score + market_score, 6)
+    total = round(distance_score + trend_score + price_score + market_score, 6)
+    return PolyEntryScore(
+        total=total,
+        distance_score=round(distance_score, 6),
+        trend_score=round(trend_score, 6),
+        price_quality_score=round(price_score, 6),
+        market_quality_score=round(market_score, 6),
+        overextended=overextended,
+    )
+
+
+def _hold_score(
+    *,
+    position: PositionSnapshot,
+    own_distance: float | None,
+    reference_floor: float | None,
+    trend_bps: float | None,
+    bid: float,
+    hold_to_settlement: bool,
+) -> PolyHoldScore:
+    if own_distance is None or reference_floor is None:
+        reference_margin = None
+        reference_score = -2.0
+    else:
+        reference_margin = own_distance - reference_floor
+        reference_score = min(reference_margin * 1.2, 3.0) if reference_margin >= 0 else reference_margin * 3.0
+
+    trend_score = _clamp((trend_bps or 0.0) * 0.5, -1.0, 1.0)
+    if own_distance is None or position.entry_reference_distance_bps is None:
+        baseline_score = 0.0
+    else:
+        baseline_score = _clamp((own_distance - position.entry_reference_distance_bps) / 10.0, -0.5, 0.5)
+    if position.entry_avg_price > 0:
+        pnl_score = _clamp((bid - position.entry_avg_price) / position.entry_avg_price, -0.75, 0.75)
+    else:
+        pnl_score = 0.0
+    settlement_bonus = 1.0 if hold_to_settlement and reference_margin is not None and reference_margin >= 0 else 0.0
+    total = round(reference_score + trend_score + baseline_score + pnl_score + settlement_bonus, 6)
+    return PolyHoldScore(
+        total=total,
+        floor_bps=reference_floor,
+        reference_margin_bps=reference_margin,
+        reference_margin_score=round(reference_score, 6),
+        trend_score=round(trend_score, 6),
+        entry_baseline_score=round(baseline_score, 6),
+        pnl_context_score=round(pnl_score, 6),
+        settlement_bonus=settlement_bonus,
+    )
 
 
 def _decision(
@@ -140,6 +218,8 @@ def _decision(
     snapshot: MarketSnapshot | None = None,
     market_disagreement: float | None = None,
     profit_now: float | None = None,
+    entry_score: PolyEntryScore | None = None,
+    hold_score: PolyHoldScore | None = None,
 ) -> StrategyDecision:
     return StrategyDecision(
         action=action,
@@ -149,12 +229,25 @@ def _decision(
         limit_price=limit_price,
         best_ask=price if action == "enter" else None,
         depth_limit_price=price if action == "enter" else None,
-        edge=score,
+        edge=(entry_score.total if entry_score is not None else score),
         poly_reference_distance_bps=distance_bps,
         poly_return_bps=trend_bps,
         poly_trend_lookback_sec=cfg.poly_trend_lookback_sec,
         poly_return_since_entry_start_bps=(snapshot.poly_return_since_entry_start_bps if snapshot is not None else None),
-        poly_entry_score=score,
+        poly_entry_score=(entry_score.total if entry_score is not None else score),
+        poly_entry_distance_score=(entry_score.distance_score if entry_score is not None else None),
+        poly_entry_trend_score=(entry_score.trend_score if entry_score is not None else None),
+        poly_entry_price_quality_score=(entry_score.price_quality_score if entry_score is not None else None),
+        poly_entry_market_quality_score=(entry_score.market_quality_score if entry_score is not None else None),
+        poly_entry_overextended=(entry_score.overextended if entry_score is not None else None),
+        poly_hold_score=(hold_score.total if hold_score is not None else None),
+        poly_hold_floor_bps=(hold_score.floor_bps if hold_score is not None else None),
+        poly_hold_reference_margin_bps=(hold_score.reference_margin_bps if hold_score is not None else None),
+        poly_hold_reference_margin_score=(hold_score.reference_margin_score if hold_score is not None else None),
+        poly_hold_trend_score=(hold_score.trend_score if hold_score is not None else None),
+        poly_hold_entry_baseline_score=(hold_score.entry_baseline_score if hold_score is not None else None),
+        poly_hold_pnl_context_score=(hold_score.pnl_context_score if hold_score is not None else None),
+        poly_hold_settlement_bonus=(hold_score.settlement_bonus if hold_score is not None else None),
         market_disagreement=market_disagreement,
         profit_now=profit_now,
     )
@@ -168,8 +261,7 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
     if state.entry_count >= cfg.max_entries_per_market:
         return _decision("skip", "max_entries", cfg=cfg, snapshot=snapshot)
 
-    phase_cfg = _phase_adapter(cfg)
-    phase = required_edge_for_entry(snapshot, phase_cfg)
+    phase = _entry_phase(snapshot, cfg)
     if not phase.allowed:
         reason = "outside_entry_time" if phase.phase == "outside_window" else phase.phase
         return _decision("skip", reason, cfg=cfg, snapshot=snapshot)
@@ -194,12 +286,12 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
     if max_fill is not None and ask > max_fill:
         return _decision("skip", "poly_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
     score = _entry_score(distance, trend, ask, _bid(snapshot, side))
-    if score < cfg.min_poly_entry_score:
-        return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, score=score, snapshot=snapshot)
+    if score.total < cfg.min_poly_entry_score:
+        return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot)
     tick = cfg.entry_tick_size if cfg.entry_tick_size > 0 else 0.01
     limit_cap = max_fill if max_fill is not None else 1.0
     limit = min(1.0, limit_cap, round(ask + cfg.buy_price_buffer_ticks * tick, 6))
-    return _decision("enter", "poly_edge", side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, score=score, snapshot=snapshot)
+    return _decision("enter", "poly_edge", side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot)
 
 
 def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: PolySourceConfig, state: StrategyState | None = None) -> StrategyDecision:
@@ -207,8 +299,7 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
     bid = _bid(snapshot, side)
     bid_limit = _bid_limit(snapshot, side)
     if bid is None or bid_limit is None:
-        reason = "late_exit_depth_unavailable" if _in_late_depth_guard(snapshot, cfg) else "missing_exit_depth"
-        return _decision("hold", reason, side=side, price=bid, limit_price=bid_limit, cfg=cfg, snapshot=snapshot)
+        return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, cfg=cfg, snapshot=snapshot)
     profit_now = bid - position.entry_avg_price
     adverse_side = "down" if side == "up" else "up"
     adverse_distance = _distance_bps(snapshot, adverse_side)
@@ -217,94 +308,42 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
     hold_to_settlement = _hold_to_settlement(position, bid, bid_limit, profit_now, own_distance, trend, cfg)
     held_sec = snapshot.age_sec - position.entry_time
     if not _depth_ok(snapshot, side):
-        if _in_late_depth_guard(snapshot, cfg):
-            return _decision("exit", "late_depth_risk_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
         return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    if held_sec >= cfg.exit_min_hold_sec and adverse_distance is not None and adverse_distance >= cfg.exit_reference_adverse_bps:
-        return _decision("exit", "reference_adverse_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    if (
-        cfg.poly_trend_reversal_exit_enabled
-        and held_sec >= cfg.exit_min_hold_sec
-        and trend is not None
-        and trend <= -cfg.poly_trend_reversal_bps
-        and profit_now < 0
-    ):
-        return _decision("exit", "poly_trend_reversal_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    disagreement = _market_disagreement(snapshot, position, bid, profit_now, cfg)
-    if disagreement is not None:
-        return _decision("exit", disagreement["reason"], side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, market_disagreement=disagreement["ratio"], profit_now=profit_now)
+    reference_floor = _reference_distance_exit_floor(snapshot.remaining_sec, cfg)
+    hold_score = _hold_score(
+        position=position,
+        own_distance=own_distance,
+        reference_floor=reference_floor,
+        trend_bps=trend,
+        bid=bid,
+        hold_to_settlement=hold_to_settlement,
+    )
+    if held_sec >= cfg.exit_min_hold_sec and hold_score.total < cfg.min_poly_hold_score:
+        return _decision("exit", "poly_hold_score_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score)
     if hold_to_settlement:
-        if snapshot.remaining_sec <= cfg.profit_protection_start_remaining_sec:
-            return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    elif _profit_protection_exit(snapshot, profit_now, trend, cfg):
-        return _decision("exit", "profit_protection_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    elif _late_depth_risk(snapshot, bid, bid_limit, cfg):
-        return _decision("exit", "late_depth_risk_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    if snapshot.remaining_sec <= cfg.final_force_exit_remaining_sec:
-        if hold_to_settlement or _final_profit_hold(position, profit_now, cfg):
-            return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-        return _decision("exit", "final_force_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    return _decision("hold", "poly_edge_intact", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
+        return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score)
+    return _decision("hold", "poly_edge_intact", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score)
 
 
-def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, bid: float, profit_now: float, cfg: PolySourceConfig) -> dict[str, float | str] | None:
-    if cfg.market_disagrees_exit_min_age_sec > 0 and snapshot.age_sec - position.entry_time < cfg.market_disagrees_exit_min_age_sec:
+def _reference_distance_exit_floor(remaining_sec: float, cfg: PolySourceConfig) -> float | None:
+    remaining_points = tuple(float(value) for value in cfg.reference_distance_exit_remaining_sec)
+    floor_points = tuple(float(value) for value in cfg.reference_distance_exit_min_bps)
+    if len(remaining_points) != len(floor_points) or not remaining_points:
         return None
-    if position.entry_avg_price <= 0:
-        return None
-    ratio = bid / position.entry_avg_price
-    mode = cfg.market_disagrees_exit_mode.lower()
-    if mode == "dynamic":
-        threshold = _dynamic_market_disagrees_ratio(position.entry_avg_price, cfg)
-        if ratio > threshold:
-            return None
-        if cfg.dynamic_market_disagrees_require_poly_weakening and not _poly_is_weakening(snapshot, position.token_side, cfg):
-            return None
-        return {"reason": "dynamic_market_disagrees_exit", "ratio": ratio}
-    if cfg.market_disagrees_exit_threshold <= 0:
-        return None
-    return {"reason": "market_disagrees_exit", "ratio": ratio} if ratio <= cfg.market_disagrees_exit_threshold else None
+    points = sorted(zip(remaining_points, floor_points), key=lambda item: item[0], reverse=True)
+    if remaining_sec >= points[0][0]:
+        return points[0][1]
+    if remaining_sec <= points[-1][0]:
+        return points[-1][1]
+    for (left_remaining, left_floor), (right_remaining, right_floor) in zip(points, points[1:]):
+        if left_remaining >= remaining_sec >= right_remaining:
+            span = left_remaining - right_remaining
+            if span <= 0:
+                return right_floor
+            progress = (left_remaining - remaining_sec) / span
+            return left_floor + progress * (right_floor - left_floor)
+    return points[-1][1]
 
-
-def _dynamic_market_disagrees_ratio(entry_price: float, cfg: PolySourceConfig) -> float:
-    if entry_price <= cfg.dynamic_market_disagrees_low_entry_price:
-        return cfg.dynamic_market_disagrees_low_entry_ratio
-    if entry_price <= cfg.dynamic_market_disagrees_mid_entry_price:
-        return cfg.dynamic_market_disagrees_mid_entry_ratio
-    return cfg.dynamic_market_disagrees_high_entry_ratio
-
-
-def _poly_is_weakening(snapshot: MarketSnapshot, side: str, cfg: PolySourceConfig) -> bool:
-    adverse_side = "down" if side == "up" else "up"
-    adverse_distance = _distance_bps(snapshot, adverse_side)
-    if adverse_distance is not None and adverse_distance >= cfg.exit_reference_adverse_bps:
-        return True
-    trend = _trend_bps(snapshot, cfg.poly_trend_lookback_sec, side)
-    return trend is not None and trend <= -cfg.dynamic_market_disagrees_poly_weakening_bps
-
-
-def _final_profit_hold(position: PositionSnapshot, profit_now: float, cfg: PolySourceConfig) -> bool:
-    return position.entry_avg_price > 0 and profit_now / position.entry_avg_price >= cfg.final_profit_hold_min_profit_ratio
-
-
-def _in_late_depth_guard(snapshot: MarketSnapshot, cfg: PolySourceConfig) -> bool:
-    return cfg.late_depth_guard_remaining_sec > 0 and snapshot.remaining_sec <= cfg.late_depth_guard_remaining_sec
-
-
-def _profit_protection_exit(snapshot: MarketSnapshot, profit_now: float, trend_bps: float | None, cfg: PolySourceConfig) -> bool:
-    if cfg.profit_protection_min_profit <= 0:
-        return False
-    if not (cfg.profit_protection_end_remaining_sec < snapshot.remaining_sec <= cfg.profit_protection_start_remaining_sec):
-        return False
-    if profit_now < cfg.profit_protection_min_profit:
-        return False
-    return trend_bps is not None and trend_bps <= cfg.profit_protection_trend_weak_bps
-
-
-def _late_depth_risk(snapshot: MarketSnapshot, bid: float, bid_limit: float, cfg: PolySourceConfig) -> bool:
-    if not _in_late_depth_guard(snapshot, cfg):
-        return False
-    return bid < cfg.late_depth_min_bid_avg or bid_limit < cfg.late_depth_min_bid_limit
 
 
 def _hold_to_settlement(
@@ -329,14 +368,19 @@ def _hold_to_settlement(
     )
 
 
-def _phase_adapter(cfg: PolySourceConfig):
-    from .prob_edge import EdgeConfig
+@dataclass(frozen=True)
+class _EntryPhase:
+    phase: str
+    allowed: bool
 
-    return EdgeConfig(
-        entry_start_age_sec=cfg.entry_start_age_sec,
-        entry_end_age_sec=cfg.entry_end_age_sec,
-        early_to_core_age_sec=cfg.early_to_core_age_sec,
-        core_to_late_age_sec=cfg.core_to_late_age_sec,
-        final_no_entry_remaining_sec=cfg.final_no_entry_remaining_sec,
-        max_entries_per_market=cfg.max_entries_per_market,
-    )
+
+def _entry_phase(snapshot: MarketSnapshot, cfg: PolySourceConfig) -> _EntryPhase:
+    if snapshot.remaining_sec <= cfg.final_no_entry_remaining_sec:
+        return _EntryPhase("final_no_entry", False)
+    if snapshot.age_sec < cfg.entry_start_age_sec or snapshot.age_sec > cfg.entry_end_age_sec:
+        return _EntryPhase("outside_window", False)
+    if snapshot.age_sec < cfg.early_to_core_age_sec:
+        return _EntryPhase("early", True)
+    if snapshot.age_sec < cfg.core_to_late_age_sec:
+        return _EntryPhase("core", True)
+    return _EntryPhase("late", True)

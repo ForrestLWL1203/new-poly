@@ -36,6 +36,11 @@ def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None =
             "entry_poly_trend_lookback_sec": _compact(decision.poly_trend_lookback_sec, 3),
             "entry_poly_return_since_entry_start_bps": _compact(decision.poly_return_since_entry_start_bps, 3),
             "entry_poly_score": _compact(decision.poly_entry_score, 3),
+            "entry_poly_distance_score": _compact(decision.poly_entry_distance_score, 3),
+            "entry_poly_trend_score": _compact(decision.poly_entry_trend_score, 3),
+            "entry_poly_price_quality_score": _compact(decision.poly_entry_price_quality_score, 3),
+            "entry_poly_market_quality_score": _compact(decision.poly_entry_market_quality_score, 3),
+            "entry_poly_overextended": decision.poly_entry_overextended,
             "order_attempt": result.attempt if result is not None else None,
             "order_total_latency_ms": result.total_latency_ms if result is not None else None,
         }
@@ -68,6 +73,11 @@ def _entry_analysis(decision: StrategyDecision, result: ExecutionResult | None =
         "entry_poly_trend_lookback_sec": _compact(decision.poly_trend_lookback_sec, 3),
         "entry_poly_return_since_entry_start_bps": _compact(decision.poly_return_since_entry_start_bps, 3),
         "entry_poly_score": _compact(decision.poly_entry_score, 3),
+        "entry_poly_distance_score": _compact(decision.poly_entry_distance_score, 3),
+        "entry_poly_trend_score": _compact(decision.poly_entry_trend_score, 3),
+        "entry_poly_price_quality_score": _compact(decision.poly_entry_price_quality_score, 3),
+        "entry_poly_market_quality_score": _compact(decision.poly_entry_market_quality_score, 3),
+        "entry_poly_overextended": decision.poly_entry_overextended,
         "order_attempt": result.attempt if result is not None else None,
         "order_total_latency_ms": result.total_latency_ms if result is not None else None,
     }
@@ -97,6 +107,14 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
             "exit_poly_trend_lookback_sec": _compact(decision.poly_trend_lookback_sec, 3),
             "exit_poly_return_since_entry_start_bps": _compact(decision.poly_return_since_entry_start_bps, 3),
             "exit_poly_score": _compact(decision.poly_entry_score, 3),
+            "exit_poly_hold_score": _compact(decision.poly_hold_score, 3),
+            "exit_poly_hold_floor_bps": _compact(decision.poly_hold_floor_bps, 3),
+            "exit_poly_hold_reference_margin_bps": _compact(decision.poly_hold_reference_margin_bps, 3),
+            "exit_poly_hold_reference_margin_score": _compact(decision.poly_hold_reference_margin_score, 3),
+            "exit_poly_hold_trend_score": _compact(decision.poly_hold_trend_score, 3),
+            "exit_poly_hold_entry_baseline_score": _compact(decision.poly_hold_entry_baseline_score, 3),
+            "exit_poly_hold_pnl_context_score": _compact(decision.poly_hold_pnl_context_score, 3),
+            "exit_poly_hold_settlement_bonus": _compact(decision.poly_hold_settlement_bonus, 3),
             "exit_price": _compact(fill_price),
             "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
             "order_attempt": result.attempt if result is not None else None,
@@ -126,6 +144,14 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
         "exit_poly_trend_lookback_sec": _compact(decision.poly_trend_lookback_sec, 3),
         "exit_poly_return_since_entry_start_bps": _compact(decision.poly_return_since_entry_start_bps, 3),
         "exit_poly_score": _compact(decision.poly_entry_score, 3),
+        "exit_poly_hold_score": _compact(decision.poly_hold_score, 3),
+        "exit_poly_hold_floor_bps": _compact(decision.poly_hold_floor_bps, 3),
+        "exit_poly_hold_reference_margin_bps": _compact(decision.poly_hold_reference_margin_bps, 3),
+        "exit_poly_hold_reference_margin_score": _compact(decision.poly_hold_reference_margin_score, 3),
+        "exit_poly_hold_trend_score": _compact(decision.poly_hold_trend_score, 3),
+        "exit_poly_hold_entry_baseline_score": _compact(decision.poly_hold_entry_baseline_score, 3),
+        "exit_poly_hold_pnl_context_score": _compact(decision.poly_hold_pnl_context_score, 3),
+        "exit_poly_hold_settlement_bonus": _compact(decision.poly_hold_settlement_bonus, 3),
         "exit_price": _compact(fill_price),
         "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
         "order_attempt": result.attempt if result is not None else None,
@@ -136,11 +162,24 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
     return row
 
 
-def _decision_log(decision: StrategyDecision) -> dict[str, Any]:
+def _decision_log(decision: StrategyDecision, *, component_logs: str = "compact") -> dict[str, Any]:
+    full_components = component_logs == "full" or decision.action == "exit" or decision.reason == "poly_score_too_low"
+    compact_tick_omits = set() if full_components else {
+        "poly_entry_distance_score",
+        "poly_entry_trend_score",
+        "poly_entry_price_quality_score",
+        "poly_entry_market_quality_score",
+        "poly_entry_overextended",
+        "poly_hold_reference_margin_score",
+        "poly_hold_trend_score",
+        "poly_hold_entry_baseline_score",
+        "poly_hold_pnl_context_score",
+        "poly_hold_settlement_bonus",
+    }
     return {
         key: value
         for key, value in decision.__dict__.items()
-        if value is not None
+        if value is not None and key not in compact_tick_omits
     }
 
 

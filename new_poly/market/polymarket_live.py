@@ -190,6 +190,18 @@ class PolymarketChainlinkBtcPriceFeed:
                         self._inject(ts, price)
                     if ticks:
                         last_tick_monotonic = time.monotonic()
+                        latest_age = self.latest_age_sec()
+                        if latest_age is not None and latest_age >= self._stale_reconnect_sec:
+                            log.debug(
+                                "PolymarketChainlinkBtcPriceFeed source timestamp stale for %.1fs, reconnecting...",
+                                latest_age,
+                            )
+                            try:
+                                await asyncio.wait_for(self._ws.close(), timeout=3.0)
+                            except Exception:
+                                pass
+                            self._ws = None
+                            break
                         self._prune(time.time())
                     elif time.monotonic() - last_tick_monotonic >= self._stale_reconnect_sec:
                         log.debug("PolymarketChainlinkBtcPriceFeed received no valid ticks for %.1fs, reconnecting...", self._stale_reconnect_sec)

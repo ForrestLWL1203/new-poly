@@ -14,32 +14,14 @@ poly_source:
   poly_return_bps: 0.3
   max_entry_ask: 0.75
   max_entry_fill_price: 0.75
-  min_poly_entry_score: 5.0
+  min_poly_entry_score: 4.5
+  min_poly_hold_score: 0.0
+  poly_score_component_logs: compact
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2
-  exit_reference_adverse_bps: 1.0
+  reference_distance_exit_remaining_sec: [120.0, 90.0, 70.0, 45.0, 30.0]
+  reference_distance_exit_min_bps: [-2.0, -1.0, 0.25, 0.75, 1.0]
   exit_min_hold_sec: 3.0
-  poly_trend_reversal_exit_enabled: false
-  poly_trend_reversal_bps: 2.0
-  market_disagrees_exit_mode: dynamic
-  market_disagrees_exit_threshold: 0.55
-  market_disagrees_exit_min_age_sec: 3.0
-  dynamic_market_disagrees_low_entry_price: 0.45
-  dynamic_market_disagrees_mid_entry_price: 0.60
-  dynamic_market_disagrees_low_entry_ratio: 0.70
-  dynamic_market_disagrees_mid_entry_ratio: 0.60
-  dynamic_market_disagrees_high_entry_ratio: 0.55
-  dynamic_market_disagrees_require_poly_weakening: true
-  dynamic_market_disagrees_poly_weakening_bps: 1.0
-  final_force_exit_remaining_sec: 30.0
-  final_profit_hold_min_profit_ratio: 0.10
-  profit_protection_start_remaining_sec: 90.0
-  profit_protection_end_remaining_sec: 45.0
-  profit_protection_min_profit: 0.08
-  profit_protection_trend_weak_bps: 0.0
-  late_depth_guard_remaining_sec: 90.0
-  late_depth_min_bid_avg: 0.20
-  late_depth_min_bid_limit: 0.15
   hold_to_settlement_enabled: true
   hold_to_settlement_min_profit_ratio: 0.0
   hold_to_settlement_min_bid_avg: 0.78
@@ -76,18 +58,9 @@ risk:
 runtime:
   interval_sec: 0.5
   warmup_timeout_sec: 8.0
-  volatility_source: binance_rv
-  rv_refresh_sec: 60
-  rv_lookback_minutes: 60
-  rv_ewma_half_life_minutes: 10
-  rv_floor_annual: 0.20
-  rv_cap_annual: 2.50
-  dvol_fallback_enabled: true
-  dvol_refresh_sec: 300
-  max_dvol_age_sec: 900
-  dvol_retry_interval_sec: 5
-  dvol_retry_attempts: 10
   settlement_boundary_usd: 5
+  post_exit_observation_enabled: true
+  post_exit_observation_interval_sec: 10.0
 
 market_data:
   polymarket_price_enabled: true
