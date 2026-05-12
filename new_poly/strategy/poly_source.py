@@ -27,9 +27,18 @@ class PolySourceConfig:
     buy_price_buffer_ticks: float = 2.0
     exit_reference_adverse_bps: float = 1.0
     exit_min_hold_sec: float = 3.0
+    poly_trend_reversal_exit_enabled: bool = False
     poly_trend_reversal_bps: float = 0.3
+    market_disagrees_exit_mode: str = "fixed"
     market_disagrees_exit_threshold: float = 0.55
     market_disagrees_exit_min_age_sec: float = 3.0
+    dynamic_market_disagrees_low_entry_price: float = 0.45
+    dynamic_market_disagrees_mid_entry_price: float = 0.60
+    dynamic_market_disagrees_low_entry_ratio: float = 0.70
+    dynamic_market_disagrees_mid_entry_ratio: float = 0.60
+    dynamic_market_disagrees_high_entry_ratio: float = 0.55
+    dynamic_market_disagrees_require_poly_weakening: bool = True
+    dynamic_market_disagrees_poly_weakening_bps: float = 1.0
     final_force_exit_remaining_sec: float = 30.0
     final_profit_hold_min_profit_ratio: float = 0.10
     profit_protection_start_remaining_sec: float = 90.0
@@ -213,11 +222,17 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
         return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
     if held_sec >= cfg.exit_min_hold_sec and adverse_distance is not None and adverse_distance >= cfg.exit_reference_adverse_bps:
         return _decision("exit", "reference_adverse_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    if held_sec >= cfg.exit_min_hold_sec and trend is not None and trend <= -cfg.poly_trend_reversal_bps and profit_now < 0:
+    if (
+        cfg.poly_trend_reversal_exit_enabled
+        and held_sec >= cfg.exit_min_hold_sec
+        and trend is not None
+        and trend <= -cfg.poly_trend_reversal_bps
+        and profit_now < 0
+    ):
         return _decision("exit", "poly_trend_reversal_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
     disagreement = _market_disagreement(snapshot, position, bid, profit_now, cfg)
     if disagreement is not None:
-        return _decision("exit", "market_disagrees_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, market_disagreement=disagreement, profit_now=profit_now)
+        return _decision("exit", disagreement["reason"], side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, market_disagreement=disagreement["ratio"], profit_now=profit_now)
     if hold_to_settlement:
         if snapshot.remaining_sec <= cfg.profit_protection_start_remaining_sec:
             return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
@@ -232,15 +247,40 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
     return _decision("hold", "poly_edge_intact", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
 
 
-def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, bid: float, profit_now: float, cfg: PolySourceConfig) -> float | None:
-    if cfg.market_disagrees_exit_threshold <= 0:
-        return None
+def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, bid: float, profit_now: float, cfg: PolySourceConfig) -> dict[str, float | str] | None:
     if cfg.market_disagrees_exit_min_age_sec > 0 and snapshot.age_sec - position.entry_time < cfg.market_disagrees_exit_min_age_sec:
         return None
     if position.entry_avg_price <= 0:
         return None
     ratio = bid / position.entry_avg_price
-    return ratio if ratio <= cfg.market_disagrees_exit_threshold else None
+    mode = cfg.market_disagrees_exit_mode.lower()
+    if mode == "dynamic":
+        threshold = _dynamic_market_disagrees_ratio(position.entry_avg_price, cfg)
+        if ratio > threshold:
+            return None
+        if cfg.dynamic_market_disagrees_require_poly_weakening and not _poly_is_weakening(snapshot, position.token_side, cfg):
+            return None
+        return {"reason": "dynamic_market_disagrees_exit", "ratio": ratio}
+    if cfg.market_disagrees_exit_threshold <= 0:
+        return None
+    return {"reason": "market_disagrees_exit", "ratio": ratio} if ratio <= cfg.market_disagrees_exit_threshold else None
+
+
+def _dynamic_market_disagrees_ratio(entry_price: float, cfg: PolySourceConfig) -> float:
+    if entry_price <= cfg.dynamic_market_disagrees_low_entry_price:
+        return cfg.dynamic_market_disagrees_low_entry_ratio
+    if entry_price <= cfg.dynamic_market_disagrees_mid_entry_price:
+        return cfg.dynamic_market_disagrees_mid_entry_ratio
+    return cfg.dynamic_market_disagrees_high_entry_ratio
+
+
+def _poly_is_weakening(snapshot: MarketSnapshot, side: str, cfg: PolySourceConfig) -> bool:
+    adverse_side = "down" if side == "up" else "up"
+    adverse_distance = _distance_bps(snapshot, adverse_side)
+    if adverse_distance is not None and adverse_distance >= cfg.exit_reference_adverse_bps:
+        return True
+    trend = _trend_bps(snapshot, cfg.poly_trend_lookback_sec, side)
+    return trend is not None and trend <= -cfg.dynamic_market_disagrees_poly_weakening_bps
 
 
 def _final_profit_hold(position: PositionSnapshot, profit_now: float, cfg: PolySourceConfig) -> bool:

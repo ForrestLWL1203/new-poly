@@ -1197,6 +1197,16 @@ def test_poly_single_source_config_loads_and_blocks_live_mode() -> None:
     assert cfg.poly_source.max_entry_ask == 0.75
     assert cfg.poly_source.max_entry_fill_price == 0.75
     assert cfg.poly_source.min_poly_entry_score == 5.0
+    assert cfg.poly_source.poly_trend_reversal_exit_enabled is False
+    assert cfg.poly_source.market_disagrees_exit_mode == "dynamic"
+    assert cfg.poly_source.market_disagrees_exit_threshold == 0.55
+    assert cfg.poly_source.dynamic_market_disagrees_low_entry_price == 0.45
+    assert cfg.poly_source.dynamic_market_disagrees_mid_entry_price == 0.60
+    assert cfg.poly_source.dynamic_market_disagrees_low_entry_ratio == 0.70
+    assert cfg.poly_source.dynamic_market_disagrees_mid_entry_ratio == 0.60
+    assert cfg.poly_source.dynamic_market_disagrees_high_entry_ratio == 0.55
+    assert cfg.poly_source.dynamic_market_disagrees_require_poly_weakening is True
+    assert cfg.poly_source.dynamic_market_disagrees_poly_weakening_bps == 1.0
     assert cfg.poly_source.profit_protection_start_remaining_sec == 90.0
     assert cfg.poly_source.profit_protection_end_remaining_sec == 45.0
     assert cfg.poly_source.profit_protection_min_profit == 0.08

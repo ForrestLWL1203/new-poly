@@ -189,8 +189,23 @@ def test_poly_source_reference_adverse_exit_is_market_only() -> None:
     assert decision.price == 0.45
 
 
-def test_poly_source_trend_reversal_exit_when_losing() -> None:
-    cfg = PolySourceConfig(poly_trend_reversal_bps=0.3, exit_reference_adverse_bps=5.0)
+def test_poly_source_trend_reversal_is_disabled_by_default() -> None:
+    cfg = PolySourceConfig(exit_reference_adverse_bps=5.0)
+    position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.60, 10.0, 0.0, 0.0)
+    snap = _snapshot(poly_price=100.02, return_bps=-0.4, up_bid=0.55, age=140.0)
+
+    decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
+
+
+def test_poly_source_trend_reversal_exit_can_be_enabled() -> None:
+    cfg = PolySourceConfig(
+        poly_trend_reversal_exit_enabled=True,
+        poly_trend_reversal_bps=0.3,
+        exit_reference_adverse_bps=5.0,
+    )
     position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.60, 10.0, 0.0, 0.0)
     snap = _snapshot(poly_price=100.02, return_bps=-0.4, up_bid=0.55, age=140.0)
 
@@ -202,6 +217,7 @@ def test_poly_source_trend_reversal_exit_when_losing() -> None:
 
 def test_poly_source_adverse_and_trend_exits_wait_for_min_hold() -> None:
     cfg = PolySourceConfig(
+        poly_trend_reversal_exit_enabled=True,
         exit_min_hold_sec=3.0,
         exit_reference_adverse_bps=1.0,
         poly_trend_reversal_bps=0.3,
@@ -243,6 +259,54 @@ def test_poly_source_market_disagrees_exit_uses_bid_ratio_without_model_prob() -
     assert decision.action == "exit"
     assert decision.reason == "market_disagrees_exit"
     assert decision.market_disagreement == pytest.approx(0.32 / 0.60)
+
+
+def test_poly_source_dynamic_market_disagrees_uses_entry_price_buckets() -> None:
+    cfg = PolySourceConfig(
+        market_disagrees_exit_mode="dynamic",
+        dynamic_market_disagrees_low_entry_price=0.45,
+        dynamic_market_disagrees_mid_entry_price=0.60,
+        dynamic_market_disagrees_low_entry_ratio=0.70,
+        dynamic_market_disagrees_mid_entry_ratio=0.60,
+        dynamic_market_disagrees_high_entry_ratio=0.55,
+        dynamic_market_disagrees_require_poly_weakening=True,
+        exit_reference_adverse_bps=5.0,
+    )
+    position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.73, 10.0, 0.0, 0.0)
+
+    still_too_high = evaluate_poly_exit(
+        _snapshot(poly_price=100.02, return_bps=-2.0, up_bid=0.41, age=140.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+    weak_enough = evaluate_poly_exit(
+        _snapshot(poly_price=100.02, return_bps=-2.0, up_bid=0.40, age=140.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert still_too_high.action == "hold"
+    assert weak_enough.action == "exit"
+    assert weak_enough.reason == "dynamic_market_disagrees_exit"
+    assert weak_enough.market_disagreement == pytest.approx(0.40 / 0.73)
+
+
+def test_poly_source_dynamic_market_disagrees_requires_poly_weakening() -> None:
+    cfg = PolySourceConfig(
+        market_disagrees_exit_mode="dynamic",
+        dynamic_market_disagrees_high_entry_ratio=0.55,
+        dynamic_market_disagrees_require_poly_weakening=True,
+        exit_reference_adverse_bps=5.0,
+    )
+    position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.73, 10.0, 0.0, 0.0)
+    snap = _snapshot(poly_price=100.02, return_bps=0.1, up_bid=0.38, age=140.0)
+
+    decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
 
 
 def test_poly_source_hold_to_settlement_allows_high_price_winner() -> None:

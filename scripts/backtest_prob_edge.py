@@ -115,7 +115,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-entry-fill-price", type=float, default=0.0)
     parser.add_argument("--min-poly-entry-score", type=float, default=0.0)
     parser.add_argument("--poly-exit-reference-adverse-bps", type=float, default=1.0)
+    parser.add_argument("--poly-trend-reversal-exit-enabled", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--poly-trend-reversal-bps", type=float, default=0.3)
+    parser.add_argument("--market-disagrees-exit-mode", choices=("fixed", "dynamic"), default="fixed")
+    parser.add_argument("--dynamic-market-disagrees-low-entry-price", type=float, default=0.45)
+    parser.add_argument("--dynamic-market-disagrees-mid-entry-price", type=float, default=0.60)
+    parser.add_argument("--dynamic-market-disagrees-low-entry-ratio", type=float, default=0.70)
+    parser.add_argument("--dynamic-market-disagrees-mid-entry-ratio", type=float, default=0.60)
+    parser.add_argument("--dynamic-market-disagrees-high-entry-ratio", type=float, default=0.55)
+    parser.add_argument("--dynamic-market-disagrees-require-poly-weakening", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--dynamic-market-disagrees-poly-weakening-bps", type=float, default=1.0)
     parser.add_argument("--poly-profit-protection-min-profit", type=float, default=0.08)
     parser.add_argument("--poly-profit-protection-trend-weak-bps", type=float, default=0.0)
     parser.add_argument("--poly-late-depth-guard-remaining-sec", type=float, default=90.0)
@@ -198,7 +207,16 @@ def main() -> int:
         max_entry_fill_price=args.max_entry_fill_price,
         min_poly_entry_score=args.min_poly_entry_score,
         poly_exit_reference_adverse_bps=args.poly_exit_reference_adverse_bps,
+        poly_trend_reversal_exit_enabled=args.poly_trend_reversal_exit_enabled,
         poly_trend_reversal_bps=args.poly_trend_reversal_bps,
+        market_disagrees_exit_mode=args.market_disagrees_exit_mode,
+        dynamic_market_disagrees_low_entry_price=args.dynamic_market_disagrees_low_entry_price,
+        dynamic_market_disagrees_mid_entry_price=args.dynamic_market_disagrees_mid_entry_price,
+        dynamic_market_disagrees_low_entry_ratio=args.dynamic_market_disagrees_low_entry_ratio,
+        dynamic_market_disagrees_mid_entry_ratio=args.dynamic_market_disagrees_mid_entry_ratio,
+        dynamic_market_disagrees_high_entry_ratio=args.dynamic_market_disagrees_high_entry_ratio,
+        dynamic_market_disagrees_require_poly_weakening=args.dynamic_market_disagrees_require_poly_weakening,
+        dynamic_market_disagrees_poly_weakening_bps=args.dynamic_market_disagrees_poly_weakening_bps,
         poly_profit_protection_min_profit=args.poly_profit_protection_min_profit,
         poly_profit_protection_trend_weak_bps=args.poly_profit_protection_trend_weak_bps,
         poly_late_depth_guard_remaining_sec=args.poly_late_depth_guard_remaining_sec,
