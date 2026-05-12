@@ -26,9 +26,9 @@ class PolySourceConfig:
     entry_tick_size: float = 0.01
     buy_price_buffer_ticks: float = 2.0
     exit_reference_adverse_bps: float = 1.0
+    exit_min_hold_sec: float = 3.0
     poly_trend_reversal_bps: float = 0.3
     market_disagrees_exit_threshold: float = 0.55
-    market_disagrees_exit_min_loss: float = 0.03
     market_disagrees_exit_min_age_sec: float = 3.0
     final_force_exit_remaining_sec: float = 30.0
     final_profit_hold_min_profit_ratio: float = 0.10
@@ -206,13 +206,14 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
     own_distance = _distance_bps(snapshot, side)
     trend = _trend_bps(snapshot, cfg.poly_trend_lookback_sec, side)
     hold_to_settlement = _hold_to_settlement(position, bid, bid_limit, profit_now, own_distance, trend, cfg)
+    held_sec = snapshot.age_sec - position.entry_time
     if not _depth_ok(snapshot, side):
         if _in_late_depth_guard(snapshot, cfg):
             return _decision("exit", "late_depth_risk_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
         return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    if adverse_distance is not None and adverse_distance >= cfg.exit_reference_adverse_bps:
+    if held_sec >= cfg.exit_min_hold_sec and adverse_distance is not None and adverse_distance >= cfg.exit_reference_adverse_bps:
         return _decision("exit", "reference_adverse_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
-    if trend is not None and trend <= -cfg.poly_trend_reversal_bps and profit_now < 0:
+    if held_sec >= cfg.exit_min_hold_sec and trend is not None and trend <= -cfg.poly_trend_reversal_bps and profit_now < 0:
         return _decision("exit", "poly_trend_reversal_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
     disagreement = _market_disagreement(snapshot, position, bid, profit_now, cfg)
     if disagreement is not None:
@@ -235,8 +236,6 @@ def _market_disagreement(snapshot: MarketSnapshot, position: PositionSnapshot, b
     if cfg.market_disagrees_exit_threshold <= 0:
         return None
     if cfg.market_disagrees_exit_min_age_sec > 0 and snapshot.age_sec - position.entry_time < cfg.market_disagrees_exit_min_age_sec:
-        return None
-    if cfg.market_disagrees_exit_min_loss > 0 and profit_now > -cfg.market_disagrees_exit_min_loss:
         return None
     if position.entry_avg_price <= 0:
         return None

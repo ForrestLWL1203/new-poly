@@ -18,9 +18,9 @@ poly_source:
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2
   exit_reference_adverse_bps: 1.0
-  poly_trend_reversal_bps: 1.0
-  market_disagrees_exit_threshold: 0.55
-  market_disagrees_exit_min_loss: 0.03
+  exit_min_hold_sec: 3.0
+  poly_trend_reversal_bps: 2.0
+  market_disagrees_exit_threshold: 0.70
   market_disagrees_exit_min_age_sec: 3.0
   final_force_exit_remaining_sec: 30.0
   final_profit_hold_min_profit_ratio: 0.10

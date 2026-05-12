@@ -200,8 +200,41 @@ def test_poly_source_trend_reversal_exit_when_losing() -> None:
     assert decision.reason == "poly_trend_reversal_exit"
 
 
+def test_poly_source_adverse_and_trend_exits_wait_for_min_hold() -> None:
+    cfg = PolySourceConfig(
+        exit_min_hold_sec=3.0,
+        exit_reference_adverse_bps=1.0,
+        poly_trend_reversal_bps=0.3,
+    )
+    position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.60, 10.0, 0.0, 0.0)
+
+    adverse = evaluate_poly_exit(
+        _snapshot(poly_price=99.98, return_bps=-0.1, up_bid=0.55, age=122.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+    trend = evaluate_poly_exit(
+        _snapshot(poly_price=100.02, return_bps=-0.4, up_bid=0.55, age=122.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+    mature = evaluate_poly_exit(
+        _snapshot(poly_price=100.02, return_bps=-0.4, up_bid=0.55, age=123.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert adverse.action == "hold"
+    assert trend.action == "hold"
+    assert mature.action == "exit"
+    assert mature.reason == "poly_trend_reversal_exit"
+
+
 def test_poly_source_market_disagrees_exit_uses_bid_ratio_without_model_prob() -> None:
-    cfg = PolySourceConfig(market_disagrees_exit_threshold=0.55, market_disagrees_exit_min_loss=0.03)
+    cfg = PolySourceConfig(market_disagrees_exit_threshold=0.55)
     position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.60, 10.0, 0.0, 0.0)
     snap = _snapshot(poly_price=100.02, return_bps=0.1, up_bid=0.32, age=140.0)
 

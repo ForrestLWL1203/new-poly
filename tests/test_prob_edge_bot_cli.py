@@ -440,6 +440,61 @@ def test_poly_single_source_exit_retry_refresh_uses_poly_exit_logic(monkeypatch)
     assert retry.exit_reason == "reference_adverse_exit"
 
 
+def test_snapshot_nullifies_stale_polymarket_price(monkeypatch) -> None:
+    class Price:
+        source = "proxy_binance"
+        effective = 100.0
+        basis_bps = None
+        spread_bps = None
+        spread_usd = None
+        proxy = None
+        proxy_open = None
+        polymarket = 99.9
+        polymarket_age_sec = 10.0
+
+    def fake_token_state(*args, **kwargs):
+        return {
+            "ask_avg": None,
+            "ask_limit": None,
+            "ask": None,
+            "bid_avg": None,
+            "bid_limit": None,
+            "bid": None,
+            "bid_depth_ok": False,
+            "book_age_ms": None,
+            "bid_age_ms": None,
+        }
+
+    monkeypatch.setattr("new_poly.bot_runtime.effective_price", lambda *args, **kwargs: Price())
+    monkeypatch.setattr("new_poly.bot_runtime.token_state", fake_token_state)
+    monkeypatch.setattr("new_poly.bot_runtime.price_return_bps", lambda *args, **kwargs: None)
+
+    now = dt.datetime.now(dt.timezone.utc)
+    window = type("Window", (), {
+        "slug": "m1",
+        "up_token": "up",
+        "down_token": "down",
+        "start_time": now - dt.timedelta(seconds=120),
+        "end_time": now + dt.timedelta(seconds=180),
+    })()
+    cfg = load_bot_config(REPO_ROOT / "configs" / "prob_poly_single_source.yaml")
+
+    snap, meta = _snapshot(
+        window,
+        WindowPrices(k_price=100.0),
+        feed=None,
+        coinbase_feed=None,
+        polymarket_feed=None,
+        stream=object(),
+        cfg=cfg,
+        sigma_eff=None,
+    )
+
+    assert snap.polymarket_price is None
+    assert snap.polymarket_price_age_sec == 10.0
+    assert meta["polymarket_price"] == 99.9
+
+
 def test_config_uses_phase_edges_and_defensive_exit_thresholds() -> None:
     args = build_arg_parser().parse_args(["--once"])
     opts = build_runtime_options(args)

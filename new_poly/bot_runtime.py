@@ -304,9 +304,9 @@ def load_bot_config(path: Path) -> BotConfig:
         entry_tick_size=float(_deep_get(raw, ("poly_source", "entry_tick_size"), 0.01)),
         buy_price_buffer_ticks=float(_deep_get(raw, ("poly_source", "buy_price_buffer_ticks"), 2.0)),
         exit_reference_adverse_bps=float(_deep_get(raw, ("poly_source", "exit_reference_adverse_bps"), 1.0)),
+        exit_min_hold_sec=float(_deep_get(raw, ("poly_source", "exit_min_hold_sec"), 3.0)),
         poly_trend_reversal_bps=float(_deep_get(raw, ("poly_source", "poly_trend_reversal_bps"), 0.3)),
         market_disagrees_exit_threshold=float(_deep_get(raw, ("poly_source", "market_disagrees_exit_threshold"), 0.55)),
-        market_disagrees_exit_min_loss=float(_deep_get(raw, ("poly_source", "market_disagrees_exit_min_loss"), 0.03)),
         market_disagrees_exit_min_age_sec=float(_deep_get(raw, ("poly_source", "market_disagrees_exit_min_age_sec"), 3.0)),
         final_force_exit_remaining_sec=float(_deep_get(raw, ("poly_source", "final_force_exit_remaining_sec"), 30.0)),
         final_profit_hold_min_profit_ratio=float(_deep_get(raw, ("poly_source", "final_profit_hold_min_profit_ratio"), 0.10)),
@@ -1070,6 +1070,14 @@ def _snapshot(
     lead_coinbase_side = side_vs_k(raw_coinbase_price, prices.k_price)
     lead_proxy_side = side_vs_k(raw_proxy_price, prices.k_price)
     lead_polymarket_side = side_vs_k(price.polymarket, prices.k_price)
+    polymarket_price_is_fresh = (
+        price.polymarket is not None
+        and (
+            price.polymarket_age_sec is None
+            or price.polymarket_age_sec <= cfg.max_polymarket_price_age_sec
+        )
+    )
+    fresh_polymarket_price = price.polymarket if polymarket_price_is_fresh else None
     poly_entry_start_age = (
         cfg.poly_source.entry_start_age_sec
         if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None
@@ -1120,7 +1128,7 @@ def _snapshot(
         down_bid_age_ms=down.get("bid_age_ms"),
         source_spread_bps=price.spread_bps,
         polymarket_divergence_bps=lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps,
-        polymarket_price=price.polymarket,
+        polymarket_price=fresh_polymarket_price,
         polymarket_price_age_sec=price.polymarket_age_sec,
         polymarket_return_1s_bps=price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=1.0),
         polymarket_return_3s_bps=price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=3.0),

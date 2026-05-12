@@ -208,6 +208,78 @@ def test_live_unknown_buy_no_fill_records_safety_check_candidate(monkeypatch) ->
     asyncio.run(scenario())
 
 
+def test_live_unknown_buy_safety_check_starts_at_90s_remaining() -> None:
+    from new_poly.bot_execution_flow import _unknown_buy_needs_safety_check
+
+    options = build_runtime_options(build_arg_parser().parse_args([
+        "--mode",
+        "live",
+        "--i-understand-live-risk",
+    ]))
+    window = _window("m1")
+    state = StrategyState(current_market_slug="m1")
+    state.unresolved_unknown_entry = UnknownEntryOrder(
+        market_slug="m1",
+        token_side="up",
+        token_id=window.up_token,
+        amount_usd=1.0,
+        entry_time=180.0,
+        entry_avg_price=0.29,
+        entry_model_prob=0.70,
+        entry_edge=0.41,
+    )
+
+    too_soon = MarketSnapshot(
+        market_slug="m1",
+        age_sec=209.0,
+        remaining_sec=91.0,
+        s_price=101.0,
+        k_price=100.0,
+        sigma_eff=0.6,
+    )
+    before = replace(too_soon, age_sec=209.5, remaining_sec=90.0)
+    at_threshold = replace(too_soon, age_sec=210.0, remaining_sec=90.0)
+
+    assert not _unknown_buy_needs_safety_check(state=state, snap=too_soon, window=window, cfg=options.config, options=options)
+    assert not _unknown_buy_needs_safety_check(state=state, snap=before, window=window, cfg=options.config, options=options)
+    assert _unknown_buy_needs_safety_check(state=state, snap=at_threshold, window=window, cfg=options.config, options=options)
+
+
+def test_live_unknown_buy_safety_check_uses_poly_entry_end_age() -> None:
+    from new_poly.bot_execution_flow import _unknown_buy_needs_safety_check
+
+    options = build_runtime_options(build_arg_parser().parse_args([
+        "--config",
+        "configs/prob_poly_single_source.yaml",
+    ]))
+    options = replace(options, mode="live")
+    window = _window("m1")
+    state = StrategyState(current_market_slug="m1")
+    state.unresolved_unknown_entry = UnknownEntryOrder(
+        market_slug="m1",
+        token_side="up",
+        token_id=window.up_token,
+        amount_usd=1.0,
+        entry_time=200.0,
+        entry_avg_price=0.29,
+        entry_model_prob=0.0,
+        entry_edge=5.0,
+    )
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=240.0,
+        remaining_sec=100.0,
+        s_price=101.0,
+        k_price=100.0,
+        sigma_eff=0.6,
+    )
+
+    assert options.config.poly_source is not None
+    assert options.config.poly_source.entry_end_age_sec == 240.0
+    assert options.config.edge.entry_end_age_sec != 240.0
+    assert _unknown_buy_needs_safety_check(state=state, snap=snap, window=window, cfg=options.config, options=options)
+
+
 def test_live_unresolved_unknown_entry_blocks_new_buy(monkeypatch) -> None:
     async def scenario() -> None:
         from new_poly.bot_execution_flow import handle_flat_tick

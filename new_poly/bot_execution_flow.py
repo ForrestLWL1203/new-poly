@@ -21,6 +21,10 @@ from new_poly.strategy.state import PositionSnapshot, StrategyState, UnknownEntr
 from new_poly.trading.clob_client import get_token_balance
 
 
+UNKNOWN_ENTRY_SAFETY_REMAINING_SEC = 90.0
+UNKNOWN_ENTRY_SAFETY_MIN_AGE_SEC = 30.0
+
+
 def _order_intent_row(
     *,
     row: dict[str, Any],
@@ -77,7 +81,14 @@ def _unknown_buy_needs_safety_check(*, state: StrategyState, snap, window: Any, 
         return False
     if pending.safety_checked or pending.market_slug != window.slug:
         return False
-    return snap.remaining_sec <= 60.0 or snap.age_sec >= cfg.edge.entry_end_age_sec
+    if snap.age_sec - pending.entry_time < UNKNOWN_ENTRY_SAFETY_MIN_AGE_SEC:
+        return False
+    entry_end_age_sec = (
+        cfg.poly_source.entry_end_age_sec
+        if cfg.strategy_mode == "poly_single_source" and cfg.poly_source is not None
+        else cfg.edge.entry_end_age_sec
+    )
+    return snap.remaining_sec <= UNKNOWN_ENTRY_SAFETY_REMAINING_SEC or snap.age_sec >= entry_end_age_sec
 
 
 def _is_unconfirmed_unknown_buy(result) -> bool:
