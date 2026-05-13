@@ -45,6 +45,7 @@ class BacktestConfig:
     settlement_boundary_usd: float = 5.0
     honor_order_events: bool = False
     poly_reference_distance_bps: float = 0.5
+    max_poly_reference_distance_bps: float = 0.0
     poly_trend_lookback_sec: float = 3.0
     poly_return_bps: float = 0.3
     max_entry_ask: float = 0.65
@@ -70,6 +71,7 @@ class BacktestConfig:
             max_entries_per_market=self.max_entries_per_market,
             max_book_age_ms=self.max_book_age_ms,
             poly_reference_distance_bps=self.poly_reference_distance_bps,
+            max_poly_reference_distance_bps=self.max_poly_reference_distance_bps,
             poly_trend_lookback_sec=self.poly_trend_lookback_sec,
             poly_return_bps=self.poly_return_bps,
             max_entry_ask=self.max_entry_ask,
@@ -676,6 +678,7 @@ def scan_poly_source_configs(
     rows: Iterable[dict[str, Any]],
     *,
     reference_distances: Iterable[float],
+    max_reference_distances: Iterable[float] = (0.0,),
     trend_lookbacks: Iterable[float],
     return_thresholds: Iterable[float],
     max_entry_asks: Iterable[float],
@@ -690,8 +693,9 @@ def scan_poly_source_configs(
     for _slug, group in _group_rows(rows):
         materialized.extend(_with_computed_poly_returns(group, entry_start_age_sec=base.entry_start_age_sec))
     results: list[dict[str, Any]] = []
-    for distance, lookback, return_bps, max_ask, min_score, min_hold_score in itertools.product(
+    for distance, max_distance, lookback, return_bps, max_ask, min_score, min_hold_score in itertools.product(
         reference_distances,
+        max_reference_distances,
         trend_lookbacks,
         return_thresholds,
         max_entry_asks,
@@ -702,6 +706,7 @@ def scan_poly_source_configs(
             base,
             compute_poly_returns=False,
             poly_reference_distance_bps=float(distance),
+            max_poly_reference_distance_bps=float(max_distance),
             poly_trend_lookback_sec=float(lookback),
             poly_return_bps=float(return_bps),
             max_entry_ask=float(max_ask),
@@ -713,6 +718,7 @@ def scan_poly_source_configs(
             continue
         results.append({
             "poly_reference_distance_bps": distance,
+            "max_poly_reference_distance_bps": max_distance,
             "poly_trend_lookback_sec": lookback,
             "poly_return_bps": return_bps,
             "max_entry_ask": max_ask,

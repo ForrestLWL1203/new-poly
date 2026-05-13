@@ -82,6 +82,29 @@ def test_scan_poly_source_configs_returns_ranked_parameter_results() -> None:
     assert results[0]["total_pnl"] >= results[1]["total_pnl"]
 
 
+def test_scan_poly_source_configs_can_cap_reference_distance() -> None:
+    rows = [
+        _poly_row("m1", 120, poly_price=100.05, poly_return_3s=0.8, up_ask=0.60, final_s_price=101.0),
+        _poly_row("m1", 150, poly_price=100.02, poly_return_3s=0.8, up_ask=0.60, final_s_price=101.0),
+        _poly_row("m1", 299, poly_price=100.10, poly_return_3s=0.1, up_bid=0.90, final_s_price=101.0),
+    ]
+
+    results = scan_poly_source_configs(
+        rows,
+        reference_distances=[0.5],
+        max_reference_distances=[4.0],
+        trend_lookbacks=[3.0],
+        return_thresholds=[0.3],
+        max_entry_asks=[0.65],
+        min_scores=[0.0],
+        base_config=BacktestConfig(amount_usd=1.0, entry_start_age_sec=120.0),
+    )
+
+    assert results[0]["max_poly_reference_distance_bps"] == 4.0
+    assert results[0]["entries"] == 1
+    assert results[0]["total_pnl"] == pytest.approx(0.666667)
+
+
 def test_poly_single_source_backtest_accepts_compact_tick_rows() -> None:
     rows = [
         _poly_row("m1", 120, poly_price=100.02, poly_return_3s=0.4, up_ask=0.60, final_s_price=101.0),

@@ -10,6 +10,7 @@ poly_source:
   max_entries_per_market: 1
   max_book_age_ms: 1000
   poly_reference_distance_bps: 1.5
+  max_poly_reference_distance_bps: 4.0
   poly_trend_lookback_sec: 10.0
   poly_return_bps: 0.3
   max_entry_ask: 0.75

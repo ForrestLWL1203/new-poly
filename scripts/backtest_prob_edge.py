@@ -62,6 +62,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hold-to-settlement-min-bid-limit", type=float, default=0.75)
     parser.add_argument("--honor-order-events", action="store_true", help="For paper/live strategy JSONL, replay actual entry/exit/no-fill events instead of idealized fills.")
     parser.add_argument("--poly-reference-distance-bps", type=float, default=0.5)
+    parser.add_argument("--max-poly-reference-distance-bps", type=float, default=0.0)
     parser.add_argument("--poly-trend-lookback-sec", type=float, default=3.0)
     parser.add_argument("--poly-return-bps", type=float, default=0.3)
     parser.add_argument("--max-entry-ask", type=float, default=0.65)
@@ -77,6 +78,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--settlement-boundary-usd", type=float, default=5.0)
     parser.add_argument("--no-grid", action="store_true")
     parser.add_argument("--poly-reference-distance-grid", default="0.5,1.0,1.5,2.0,3.0,4.0")
+    parser.add_argument("--max-poly-reference-distance-grid", default="0,3.5,4.0,5.0")
     parser.add_argument("--poly-trend-lookback-grid", default="1,3,5,10,15")
     parser.add_argument("--poly-return-grid", default="0.0,0.1,0.2,0.3,0.5")
     parser.add_argument("--max-entry-ask-grid", default="0.55,0.65,0.75,0.85")
@@ -116,6 +118,7 @@ def main() -> int:
         hold_to_settlement_min_bid_limit=args.hold_to_settlement_min_bid_limit,
         honor_order_events=args.honor_order_events,
         poly_reference_distance_bps=args.poly_reference_distance_bps,
+        max_poly_reference_distance_bps=args.max_poly_reference_distance_bps,
         poly_trend_lookback_sec=args.poly_trend_lookback_sec,
         poly_return_bps=args.poly_return_bps,
         max_entry_ask=args.max_entry_ask,
@@ -145,6 +148,7 @@ def main() -> int:
         payload["grid_top"] = scan_poly_source_configs(
             rows,
             reference_distances=_float_list(args.poly_reference_distance_grid),
+            max_reference_distances=_float_list(args.max_poly_reference_distance_grid),
             trend_lookbacks=_float_list(args.poly_trend_lookback_grid),
             return_thresholds=_float_list(args.poly_return_grid),
             max_entry_asks=_float_list(args.max_entry_ask_grid),

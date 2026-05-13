@@ -102,6 +102,7 @@ def test_poly_source_config_exposes_only_active_single_source_exit_knobs() -> No
         "max_entries_per_market",
         "max_book_age_ms",
         "poly_reference_distance_bps",
+        "max_poly_reference_distance_bps",
         "poly_trend_lookback_sec",
         "poly_return_bps",
         "max_entry_ask",
@@ -121,6 +122,41 @@ def test_poly_source_config_exposes_only_active_single_source_exit_knobs() -> No
         "hold_to_settlement_min_reference_distance_bps",
         "hold_to_settlement_min_poly_return_bps",
     }
+
+
+def test_poly_source_reference_distance_cap_defaults_off() -> None:
+    cfg = PolySourceConfig(poly_reference_distance_bps=0.5, poly_return_bps=0.3, max_entry_ask=0.75)
+    state = StrategyState(current_market_slug="m1")
+
+    decision = evaluate_poly_entry(
+        _snapshot(poly_price=100.06, return_bps=1.0, up_ask=0.60),
+        state,
+        cfg,
+    )
+
+    assert decision.action == "enter"
+    assert decision.poly_reference_distance_bps == pytest.approx(6.0)
+
+
+def test_poly_source_skips_entry_when_reference_distance_exceeds_cap() -> None:
+    cfg = PolySourceConfig(
+        poly_reference_distance_bps=0.5,
+        max_poly_reference_distance_bps=4.0,
+        poly_return_bps=0.3,
+        max_entry_ask=0.75,
+    )
+    state = StrategyState(current_market_slug="m1")
+
+    decision = evaluate_poly_entry(
+        _snapshot(poly_price=100.05, return_bps=1.0, up_ask=0.60),
+        state,
+        cfg,
+    )
+
+    assert decision.action == "skip"
+    assert decision.reason == "poly_reference_distance_too_high"
+    assert decision.side == "up"
+    assert decision.poly_reference_distance_bps == pytest.approx(5.0)
 
 
 def test_poly_source_enters_down_when_reference_and_rolling_return_are_down() -> None:

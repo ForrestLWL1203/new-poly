@@ -18,6 +18,7 @@ class PolySourceConfig:
     max_entries_per_market: int = 1
     max_book_age_ms: float = 1000.0
     poly_reference_distance_bps: float = 0.5
+    max_poly_reference_distance_bps: float = 0.0
     poly_trend_lookback_sec: float = 3.0
     poly_return_bps: float = 0.3
     max_entry_ask: float = 0.65
@@ -274,6 +275,8 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
     distance = _distance_bps(snapshot, side)
     if distance is None or distance < cfg.poly_reference_distance_bps:
         return _decision("skip", "poly_reference_not_confirmed", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot)
+    if cfg.max_poly_reference_distance_bps > 0 and distance > cfg.max_poly_reference_distance_bps:
+        return _decision("skip", "poly_reference_distance_too_high", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot)
     trend = _trend_bps(snapshot, cfg.poly_trend_lookback_sec, side)
     if trend is None or trend < cfg.poly_return_bps:
         return _decision("skip", "poly_trend_not_confirmed", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)

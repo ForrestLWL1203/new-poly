@@ -18,6 +18,7 @@ def test_default_mode_is_paper_single_source() -> None:
     assert opts.analysis_logs is True
     assert opts.config.strategy_mode == "poly_single_source"
     assert opts.config.poly_source.poly_reference_distance_bps == 1.5
+    assert opts.config.poly_source.max_poly_reference_distance_bps == 4.0
     assert not hasattr(opts.config, "edge")
 
 
@@ -36,6 +37,7 @@ def test_config_log_row_contains_only_single_source_strategy_config() -> None:
     assert row["event"] == "config"
     assert "strategy" not in row
     assert row["poly_source"]["poly_reference_distance_bps"] == 1.5
+    assert row["poly_source"]["max_poly_reference_distance_bps"] == 4.0
     assert "private_key" not in str(row).lower()
 
 
@@ -44,6 +46,7 @@ def test_poly_single_source_config_loads() -> None:
 
     assert cfg.strategy_mode == "poly_single_source"
     assert cfg.poly_source.poly_reference_distance_bps == 1.5
+    assert cfg.poly_source.max_poly_reference_distance_bps == 4.0
     assert cfg.poly_source.reference_distance_exit_remaining_sec == (120.0, 90.0, 70.0, 45.0, 30.0)
     assert cfg.poly_source.reference_distance_exit_min_bps == (-2.0, -1.0, 0.25, 0.75, 1.0)
     assert cfg.poly_source.hold_to_settlement_min_poly_return_bps == -0.3
