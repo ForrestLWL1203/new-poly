@@ -58,6 +58,7 @@ class PolyHoldScore:
     trend_score: float
     entry_baseline_score: float
     pnl_context_score: float
+    orderbook_score: float
     settlement_bonus: float
 
 
@@ -175,6 +176,8 @@ def _hold_score(
     reference_floor: float | None,
     trend_bps: float | None,
     bid: float,
+    adverse_bid: float | None,
+    remaining_sec: float,
     hold_to_settlement: bool,
 ) -> PolyHoldScore:
     if own_distance is None or reference_floor is None:
@@ -193,8 +196,14 @@ def _hold_score(
         pnl_score = _clamp((bid - position.entry_avg_price) / position.entry_avg_price, -0.75, 0.75)
     else:
         pnl_score = 0.0
+    orderbook_score = 0.0
+    if position.entry_avg_price > 0 and bid < position.entry_avg_price and remaining_sec <= 60.0:
+        time_weight = _clamp((60.0 - remaining_sec) / 60.0, 0.0, 1.0)
+        disagreement = max(0.0, (adverse_bid or 0.0) - bid)
+        loss_ratio = (position.entry_avg_price - bid) / position.entry_avg_price
+        orderbook_score = -time_weight * _clamp(loss_ratio * 5.0 + disagreement * 12.0, 0.0, 4.5)
     settlement_bonus = 1.0 if hold_to_settlement and reference_margin is not None and reference_margin >= 0 else 0.0
-    total = round(reference_score + trend_score + baseline_score + pnl_score + settlement_bonus, 6)
+    total = round(reference_score + trend_score + baseline_score + pnl_score + orderbook_score + settlement_bonus, 6)
     return PolyHoldScore(
         total=total,
         floor_bps=reference_floor,
@@ -203,6 +212,7 @@ def _hold_score(
         trend_score=round(trend_score, 6),
         entry_baseline_score=round(baseline_score, 6),
         pnl_context_score=round(pnl_score, 6),
+        orderbook_score=round(orderbook_score, 6),
         settlement_bonus=settlement_bonus,
     )
 
@@ -250,6 +260,7 @@ def _decision(
         poly_hold_trend_score=(hold_score.trend_score if hold_score is not None else None),
         poly_hold_entry_baseline_score=(hold_score.entry_baseline_score if hold_score is not None else None),
         poly_hold_pnl_context_score=(hold_score.pnl_context_score if hold_score is not None else None),
+        poly_hold_orderbook_score=(hold_score.orderbook_score if hold_score is not None else None),
         poly_hold_settlement_bonus=(hold_score.settlement_bonus if hold_score is not None else None),
         market_disagreement=market_disagreement,
         profit_now=profit_now,
@@ -319,6 +330,8 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
         reference_floor=reference_floor,
         trend_bps=trend,
         bid=bid,
+        adverse_bid=_bid(snapshot, adverse_side),
+        remaining_sec=snapshot.remaining_sec,
         hold_to_settlement=hold_to_settlement,
     )
     if held_sec >= cfg.exit_min_hold_sec and hold_score.total < cfg.min_poly_hold_score:

@@ -93,4 +93,5 @@ class StrategyDecision:
     poly_hold_trend_score: float | None = None
     poly_hold_entry_baseline_score: float | None = None
     poly_hold_pnl_context_score: float | None = None
+    poly_hold_orderbook_score: float | None = None
     poly_hold_settlement_bonus: float | None = None

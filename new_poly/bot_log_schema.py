@@ -114,6 +114,7 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
             "exit_poly_hold_trend_score": _compact(decision.poly_hold_trend_score, 3),
             "exit_poly_hold_entry_baseline_score": _compact(decision.poly_hold_entry_baseline_score, 3),
             "exit_poly_hold_pnl_context_score": _compact(decision.poly_hold_pnl_context_score, 3),
+            "exit_poly_hold_orderbook_score": _compact(decision.poly_hold_orderbook_score, 3),
             "exit_poly_hold_settlement_bonus": _compact(decision.poly_hold_settlement_bonus, 3),
             "exit_price": _compact(fill_price),
             "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
@@ -151,6 +152,7 @@ def _exit_analysis(decision: StrategyDecision, result: ExecutionResult | None = 
         "exit_poly_hold_trend_score": _compact(decision.poly_hold_trend_score, 3),
         "exit_poly_hold_entry_baseline_score": _compact(decision.poly_hold_entry_baseline_score, 3),
         "exit_poly_hold_pnl_context_score": _compact(decision.poly_hold_pnl_context_score, 3),
+        "exit_poly_hold_orderbook_score": _compact(decision.poly_hold_orderbook_score, 3),
         "exit_poly_hold_settlement_bonus": _compact(decision.poly_hold_settlement_bonus, 3),
         "exit_price": _compact(fill_price),
         "exit_shares": _compact(result.filled_size if result is not None and result.success else None),
@@ -174,6 +176,7 @@ def _decision_log(decision: StrategyDecision, *, component_logs: str = "compact"
         "poly_hold_trend_score",
         "poly_hold_entry_baseline_score",
         "poly_hold_pnl_context_score",
+        "poly_hold_orderbook_score",
         "poly_hold_settlement_bonus",
     }
     return {
