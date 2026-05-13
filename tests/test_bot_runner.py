@@ -169,7 +169,7 @@ def test_live_unknown_buy_safety_check_uses_poly_entry_end_age() -> None:
     )
 
     assert options.config.poly_source is not None
-    assert options.config.poly_source.entry_end_age_sec == 240.0
+    assert options.config.poly_source.entry_end_age_sec == 220.0
     assert _unknown_buy_needs_safety_check(state=state, snap=snap, window=window, cfg=options.config, options=options)
 
 
@@ -863,14 +863,14 @@ def test_window_close_without_position_defers_settlement_until_next_window(monke
         await bot_loop._write_pending_window_settlement_if_due(
             loop=loop,
             logger=logger,
-            now=second.start_time + dt.timedelta(seconds=29),
+            now=second.start_time + dt.timedelta(seconds=89),
         )
         assert calls == []
 
         await bot_loop._write_pending_window_settlement_if_due(
             loop=loop,
             logger=logger,
-            now=second.start_time + dt.timedelta(seconds=30),
+            now=second.start_time + dt.timedelta(seconds=90),
         )
         assert calls == ["m1"]
         assert logger.rows[-1]["event"] == "window_settlement"

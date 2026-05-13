@@ -79,7 +79,7 @@ def test_poly_source_enters_up_when_reference_and_rolling_return_are_up() -> Non
     assert decision.side == "up"
     assert decision.reason == "poly_edge"
     assert decision.price == 0.60
-    assert decision.limit_price == pytest.approx(0.62)
+    assert decision.limit_price == pytest.approx(1.0)
     assert decision.poly_reference_distance_bps == pytest.approx(4.0)
     assert decision.poly_return_bps == pytest.approx(0.4)
     assert decision.poly_entry_score is not None
@@ -218,6 +218,19 @@ def test_poly_source_entry_score_rewards_lower_ask_price_quality() -> None:
     assert low_ask.poly_entry_score > high_ask.poly_entry_score
 
 
+def test_poly_source_entry_score_discounts_very_low_ask_price_quality() -> None:
+    cfg = PolySourceConfig(poly_reference_distance_bps=0.5, poly_return_bps=0.3, max_entry_ask=0.75)
+
+    very_low = evaluate_poly_entry(
+        _snapshot(poly_price=100.06, return_bps=0.8, up_ask=0.21, up_bid=0.20),
+        StrategyState(current_market_slug="m1"),
+        cfg,
+    )
+
+    assert very_low.action == "enter"
+    assert very_low.poly_entry_price_quality_score == pytest.approx(0.1)
+
+
 def test_poly_source_entry_score_is_symmetric_for_down_side() -> None:
     cfg = PolySourceConfig(poly_reference_distance_bps=0.5, poly_return_bps=0.3, max_entry_ask=0.75)
     up = evaluate_poly_entry(
@@ -251,6 +264,26 @@ def test_poly_source_caps_entry_limit_price_at_max_fill_price() -> None:
 
     assert decision.action == "enter"
     assert decision.price == 0.70
+    assert decision.limit_price == pytest.approx(0.75)
+
+
+def test_poly_source_uses_fill_cap_as_buy_limit_so_execution_dynamic_buffer_can_apply() -> None:
+    cfg = PolySourceConfig(
+        poly_reference_distance_bps=0.5,
+        poly_return_bps=0.3,
+        max_entry_ask=0.75,
+        max_entry_fill_price=0.75,
+        buy_price_buffer_ticks=2,
+    )
+
+    decision = evaluate_poly_entry(
+        _snapshot(poly_price=100.04, return_bps=0.4, up_ask=0.60),
+        StrategyState(current_market_slug="m1"),
+        cfg,
+    )
+
+    assert decision.action == "enter"
+    assert decision.price == 0.60
     assert decision.limit_price == pytest.approx(0.75)
 
 

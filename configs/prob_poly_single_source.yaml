@@ -2,15 +2,15 @@ strategy:
   strategy_mode: poly_single_source
 
 poly_source:
-  entry_start_age_sec: 100
-  entry_end_age_sec: 240
+  entry_start_age_sec: 120
+  entry_end_age_sec: 220
   final_no_entry_remaining_sec: 30
   early_to_core_age_sec: 120
   core_to_late_age_sec: 240
   max_entries_per_market: 1
   max_book_age_ms: 1000
   poly_reference_distance_bps: 1.5
-  poly_trend_lookback_sec: 3.0
+  poly_trend_lookback_sec: 10.0
   poly_return_bps: 0.3
   max_entry_ask: 0.75
   max_entry_fill_price: 0.75

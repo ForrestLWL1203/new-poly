@@ -137,6 +137,8 @@ def _distance_score(distance_bps: float) -> tuple[float, bool]:
 
 
 def _price_quality_score(ask: float) -> float:
+    if ask < 0.35:
+        return -0.5 + ask / 0.35
     if ask <= 0.55:
         return 1.0
     if ask <= 0.65:
@@ -288,9 +290,7 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
     score = _entry_score(distance, trend, ask, _bid(snapshot, side))
     if score.total < cfg.min_poly_entry_score:
         return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot)
-    tick = cfg.entry_tick_size if cfg.entry_tick_size > 0 else 0.01
-    limit_cap = max_fill if max_fill is not None else 1.0
-    limit = min(1.0, limit_cap, round(ask + cfg.buy_price_buffer_ticks * tick, 6))
+    limit = min(1.0, max_fill if max_fill is not None else 1.0)
     return _decision("enter", "poly_edge", side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot)
 
 

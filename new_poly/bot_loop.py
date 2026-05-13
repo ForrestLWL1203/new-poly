@@ -497,7 +497,7 @@ async def _handle_window_close(
             window=window,
             cfg=cfg,
             options=options,
-            due_at=next_window.start_time + dt.timedelta(seconds=30),
+            due_at=next_window.start_time + dt.timedelta(seconds=90),
         )
     if apply_pending_dynamic_profile is not None:
         cfg, dynamic_state = apply_pending_dynamic_profile(next_window.slug, cfg)
