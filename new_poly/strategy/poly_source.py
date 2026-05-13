@@ -150,6 +150,16 @@ def _price_quality_score(ask: float) -> float:
     return -2.0
 
 
+def _hold_orderbook_time_weight(remaining_sec: float) -> float:
+    if remaining_sec > 110.0:
+        return 0.0
+    if remaining_sec > 90.0:
+        return (110.0 - remaining_sec) / 20.0 * 0.45
+    if remaining_sec > 60.0:
+        return 0.45 + (90.0 - remaining_sec) / 30.0 * 0.30
+    return 0.75 + (60.0 - max(0.0, remaining_sec)) / 60.0 * 0.25
+
+
 def _entry_score(distance_bps: float, trend_bps: float, ask: float, bid: float | None) -> PolyEntryScore:
     distance_score, overextended = _distance_score(distance_bps)
     trend_score = min(max(trend_bps, 0.0), 2.5) * 1.5
@@ -197,11 +207,12 @@ def _hold_score(
     else:
         pnl_score = 0.0
     orderbook_score = 0.0
-    if position.entry_avg_price > 0 and bid < position.entry_avg_price and remaining_sec <= 60.0:
-        time_weight = _clamp((60.0 - remaining_sec) / 60.0, 0.0, 1.0)
+    if position.entry_avg_price > 0 and bid < position.entry_avg_price:
+        time_weight = _hold_orderbook_time_weight(remaining_sec)
         disagreement = max(0.0, (adverse_bid or 0.0) - bid)
-        loss_ratio = (position.entry_avg_price - bid) / position.entry_avg_price
-        orderbook_score = -time_weight * _clamp(loss_ratio * 5.0 + disagreement * 12.0, 0.0, 4.5)
+        if disagreement > 0.0:
+            loss_ratio = (position.entry_avg_price - bid) / position.entry_avg_price
+            orderbook_score = -time_weight * _clamp(loss_ratio * 5.0 + disagreement * 12.0, 0.0, 4.5)
     settlement_bonus = 1.0 if hold_to_settlement and reference_margin is not None and reference_margin >= 0 else 0.0
     total = round(reference_score + trend_score + baseline_score + pnl_score + orderbook_score + settlement_bonus, 6)
     return PolyHoldScore(

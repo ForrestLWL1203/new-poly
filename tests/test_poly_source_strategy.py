@@ -577,7 +577,7 @@ def test_poly_source_hold_to_settlement_allows_high_price_winner() -> None:
     assert decision.reason == "hold_to_settlement"
 
 
-def test_poly_source_orderbook_pressure_is_ignored_before_last_60s() -> None:
+def test_poly_source_orderbook_pressure_is_ignored_before_120s() -> None:
     cfg = PolySourceConfig(
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
@@ -603,8 +603,8 @@ def test_poly_source_orderbook_pressure_is_ignored_before_last_60s() -> None:
         up_ask=0.40,
         down_bid=0.60,
         down_ask=0.64,
-        age=218.0,
-        remaining=82.0,
+        age=170.0,
+        remaining=130.0,
     )
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
@@ -613,7 +613,7 @@ def test_poly_source_orderbook_pressure_is_ignored_before_last_60s() -> None:
     assert decision.poly_hold_orderbook_score == pytest.approx(0.0)
 
 
-def test_poly_source_orderbook_pressure_is_light_near_55s() -> None:
+def test_poly_source_orderbook_pressure_is_light_near_105s() -> None:
     cfg = PolySourceConfig(
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
@@ -637,20 +637,20 @@ def test_poly_source_orderbook_pressure_is_light_near_55s() -> None:
         lookback=10.0,
         up_bid=0.51,
         up_ask=0.52,
-        down_bid=0.48,
+        down_bid=0.53,
         down_ask=0.49,
-        age=245.0,
-        remaining=55.0,
+        age=195.0,
+        remaining=105.0,
     )
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
 
     assert decision.action == "hold"
     assert decision.poly_hold_orderbook_score is not None
-    assert -0.10 < decision.poly_hold_orderbook_score < 0.0
+    assert -0.25 < decision.poly_hold_orderbook_score < 0.0
 
 
-def test_poly_source_orderbook_pressure_can_override_slow_reference_late() -> None:
+def test_poly_source_orderbook_pressure_is_meaningful_near_85s() -> None:
     cfg = PolySourceConfig(
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
@@ -676,8 +676,46 @@ def test_poly_source_orderbook_pressure_can_override_slow_reference_late() -> No
         up_ask=0.40,
         down_bid=0.60,
         down_ask=0.64,
-        age=280.0,
-        remaining=20.0,
+        age=215.0,
+        remaining=85.0,
+    )
+
+    decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.poly_hold_orderbook_score is not None
+    assert decision.poly_hold_orderbook_score < -0.40
+    assert decision.poly_hold_score is not None
+    assert decision.poly_hold_score > decision.poly_hold_orderbook_score
+
+
+def test_poly_source_orderbook_pressure_can_override_slow_reference_near_66s() -> None:
+    cfg = PolySourceConfig(
+        poly_trend_lookback_sec=10.0,
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+        min_poly_hold_score=0.0,
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        178.0,
+        0.54,
+        1.85,
+        0.0,
+        5.2,
+        entry_reference_distance_bps=2.35,
+    )
+    snap = _snapshot(
+        poly_price=100.0136,
+        return_bps=0.266,
+        lookback=10.0,
+        up_bid=0.23,
+        up_ask=0.24,
+        down_bid=0.76,
+        down_ask=0.77,
+        age=234.0,
+        remaining=66.0,
     )
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
@@ -686,6 +724,43 @@ def test_poly_source_orderbook_pressure_can_override_slow_reference_late() -> No
     assert decision.reason == "poly_hold_score_exit"
     assert decision.poly_hold_score is not None
     assert decision.poly_hold_score < 0.0
+    assert decision.poly_hold_orderbook_score is not None
+    assert decision.poly_hold_orderbook_score < -1.0
+
+
+def test_poly_source_orderbook_pressure_remains_strong_near_30s() -> None:
+    cfg = PolySourceConfig(
+        poly_trend_lookback_sec=10.0,
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+        min_poly_hold_score=0.0,
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        178.0,
+        0.54,
+        1.85,
+        0.0,
+        5.2,
+        entry_reference_distance_bps=2.35,
+    )
+    snap = _snapshot(
+        poly_price=100.0404,
+        return_bps=0.266,
+        lookback=10.0,
+        up_bid=0.36,
+        up_ask=0.40,
+        down_bid=0.60,
+        down_ask=0.64,
+        age=270.0,
+        remaining=30.0,
+    )
+
+    decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.action == "exit"
     assert decision.poly_hold_orderbook_score is not None
     assert decision.poly_hold_orderbook_score < -1.0
 
