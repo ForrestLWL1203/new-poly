@@ -139,6 +139,96 @@ def test_entry_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_compact_trade_events_keep_position_snapshots_without_analysis_logs(monkeypatch) -> None:
+    async def scenario() -> None:
+        from new_poly.bot_execution_flow import handle_flat_tick, handle_open_position_tick
+        from new_poly.trading.execution import ExecutionResult
+
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper", "--no-analysis-logs"]))
+        row = {"event": "tick", "market_slug": "m1"}
+        snap = MarketSnapshot(
+            market_slug="m1",
+            age_sec=130.0,
+            remaining_sec=170.0,
+            s_price=99.0,
+            k_price=100.0,
+            sigma_eff=0.6,
+        )
+        window = _window("m1")
+        state = StrategyState(current_market_slug="m1")
+        entry_decision = StrategyDecision(
+            action="enter",
+            reason="poly_edge",
+            side="up",
+            price=0.42,
+            limit_price=0.50,
+            depth_limit_price=0.42,
+            best_ask=0.42,
+            edge=4.0,
+        )
+
+        class BuyGateway:
+            async def buy(self, *args, **kwargs):
+                return ExecutionResult(True, filled_size=2.5, avg_price=0.42, message="MATCHED")
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_poly_entry", lambda *_args, **_kwargs: entry_decision)
+
+        await handle_flat_tick(
+            row=row,
+            snap=snap,
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=BuyGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=DummyLogger(),
+        )
+
+        assert "analysis" not in row
+        assert row["position_after_entry"]["token_side"] == "up"
+        assert row["position_after_entry"]["entry_avg_price"] == 0.42
+
+        exit_row = {"event": "tick", "market_slug": "m1"}
+        exit_decision = StrategyDecision(
+            action="exit",
+            reason="poly_hold_score_exit",
+            side="up",
+            price=0.61,
+            limit_price=0.60,
+        )
+
+        class SellGateway:
+            async def sell(self, *args, **kwargs):
+                return ExecutionResult(True, filled_size=2.5, avg_price=0.61, message="MATCHED")
+
+        monkeypatch.setattr("new_poly.bot_execution_flow.evaluate_poly_exit", lambda *_args, **_kwargs: exit_decision)
+
+        await handle_open_position_tick(
+            row=exit_row,
+            snap=replace(snap, age_sec=160.0, remaining_sec=140.0),
+            window=window,
+            prices=WindowPrices(k_price=100.0),
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            cfg=options.config,
+            options=options,
+            gateway=SellGateway(),
+            state=state,
+            sigma_eff=0.6,
+            price_analysis={},
+            logger=DummyLogger(),
+        )
+
+        assert "analysis" not in exit_row
+        assert exit_row["position_before_exit"]["token_side"] == "up"
+        assert exit_row["position_after_exit"] is None
+
+    asyncio.run(scenario())
+
+
 def test_poly_source_order_intent_omits_empty_legacy_probability_fields() -> None:
     from new_poly.bot_execution_flow import _order_intent_row
 
@@ -1107,13 +1197,25 @@ def test_window_close_without_position_defers_settlement_until_next_window(monke
     asyncio.run(scenario())
 
 
-def test_final_window_close_without_position_leaves_close_price_blank(monkeypatch) -> None:
+def test_final_window_close_without_position_waits_then_writes_settlement(monkeypatch) -> None:
     async def scenario() -> None:
         options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper", "--windows", "1"]))
         logger = DummyLogger()
         loop = bot_loop.LoopRuntime()
         calls = []
-        monkeypatch.setattr("new_poly.bot_loop.fetch_crypto_price_api", lambda window: calls.append(window.slug))
+        sleeps = []
+        monkeypatch.setattr("new_poly.bot_loop.fetch_crypto_price_api", lambda window: calls.append(window.slug) or {
+            "openPrice": 100.0,
+            "closePrice": 99.0,
+            "completed": True,
+            "incomplete": False,
+            "cached": True,
+        })
+
+        async def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr("new_poly.bot_loop.asyncio.sleep", fake_sleep)
 
         result = await bot_loop._handle_window_close(
             window=_window("m1"),
@@ -1130,8 +1232,11 @@ def test_final_window_close_without_position_leaves_close_price_blank(monkeypatc
         )
 
         assert result.should_stop is True
-        assert calls == []
-        assert logger.rows == []
+        assert sleeps == [90.0]
+        assert calls == ["m1"]
+        assert logger.rows[-1]["event"] == "window_settlement"
+        assert logger.rows[-1]["winning_side"] == "down"
+        assert logger.rows[-1]["settlement_close_price"] == 99.0
 
     asyncio.run(scenario())
 

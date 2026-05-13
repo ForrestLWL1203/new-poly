@@ -40,6 +40,8 @@ from new_poly.strategy.dynamic_params import save_dynamic_state
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.clob_client import prefetch_order_params
 
+FINAL_WINDOW_SETTLEMENT_DELAY_SEC = 90.0
+
 @dataclass
 class FeedContext:
     binance: BinancePriceFeed | None
@@ -487,8 +489,10 @@ async def _handle_window_close(
     if trigger_dynamic_analysis is not None:
         dynamic_task = trigger_dynamic_analysis(loop.completed_windows, window.slug, state.drawdown, cfg)
     if options.windows is not None and loop.completed_windows >= options.windows:
-        if not state.has_position:
-            loop.pending_window_settlement = None
+        loop.pending_window_settlement = None
+        if prices.k_price is not None:
+            await asyncio.sleep(FINAL_WINDOW_SETTLEMENT_DELAY_SEC)
+            await _write_window_settlement_row(window=window, cfg=cfg, options=options, logger=logger)
         return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, True)
 
     next_window = find_following_window(window, series)

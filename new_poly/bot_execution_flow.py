@@ -233,8 +233,7 @@ async def _finish_pending_entry_order(
             row["entry_side"] = decision.side
             row["entry_price"] = _compact(result.avg_price)
             row["entry_shares"] = _compact(result.filled_size)
-            if options.analysis_logs and state.open_position is not None:
-                row["position_after_entry"] = _position_log(state.open_position, compact=False)
+            row["position_after_entry"] = _position_log(state.open_position, compact=not options.analysis_logs)
         elif (
             options.mode == "live"
             and cfg.risk.stop_on_live_insufficient_cash_balance
@@ -330,9 +329,8 @@ async def _finish_pending_exit_order(
                 )
             if closed:
                 _apply_closed_trade_risk(row, state=state, cfg=cfg, pnl=pnl)
-            if options.analysis_logs:
-                row["position_before_exit"] = _position_log(exiting_position, compact=False)
-                row["position_after_exit"] = _position_log(state.open_position, compact=False)
+            row["position_before_exit"] = _position_log(exiting_position, compact=not options.analysis_logs)
+            row["position_after_exit"] = _position_log(state.open_position, compact=not options.analysis_logs)
         elif result.message.startswith("live dust sell skipped"):
             pnl = state.record_exit(0.0, "dust_position", snap.age_sec)
             row["event"] = "dust_position"
@@ -341,9 +339,8 @@ async def _finish_pending_exit_order(
             row["exit_shares"] = _compact(exiting_position.filled_shares)
             row["exit_pnl"] = _compact(pnl, 4)
             row["exit_intent"] = "exit"
-            if options.analysis_logs:
-                row["position_before_exit"] = _position_log(exiting_position, compact=False)
-                row["position_after_exit"] = _position_log(state.open_position, compact=False)
+            row["position_before_exit"] = _position_log(exiting_position, compact=not options.analysis_logs)
+            row["position_after_exit"] = _position_log(state.open_position, compact=not options.analysis_logs)
         else:
             row["event"] = "order_no_fill"
             row["exit_intent"] = "exit"
@@ -576,9 +573,8 @@ async def handle_open_position_tick(
             )
         if closed:
             _apply_closed_trade_risk(row, state=state, cfg=cfg, pnl=pnl)
-        if options.analysis_logs:
-            row["position_before_exit"] = _position_log(exiting_position, compact=False)
-            row["position_after_exit"] = _position_log(state.open_position, compact=False)
+        row["position_before_exit"] = _position_log(exiting_position, compact=not options.analysis_logs)
+        row["position_after_exit"] = _position_log(state.open_position, compact=not options.analysis_logs)
     elif result.message.startswith("live dust sell skipped"):
         pnl = state.record_exit(0.0, "dust_position", snap.age_sec)
         row["event"] = "dust_position"
@@ -587,9 +583,8 @@ async def handle_open_position_tick(
         row["exit_shares"] = _compact(exiting_position.filled_shares)
         row["exit_pnl"] = _compact(pnl, 4)
         row["exit_intent"] = "exit"
-        if options.analysis_logs:
-            row["position_before_exit"] = _position_log(exiting_position, compact=False)
-            row["position_after_exit"] = _position_log(state.open_position, compact=False)
+        row["position_before_exit"] = _position_log(exiting_position, compact=not options.analysis_logs)
+        row["position_after_exit"] = _position_log(state.open_position, compact=not options.analysis_logs)
     else:
         row["event"] = "order_no_fill"
         row["exit_intent"] = "exit"
@@ -708,8 +703,7 @@ async def handle_flat_tick(
         row["entry_side"] = decision.side
         row["entry_price"] = _compact(result.avg_price)
         row["entry_shares"] = _compact(result.filled_size)
-        if options.analysis_logs and state.open_position is not None:
-            row["position_after_entry"] = _position_log(state.open_position, compact=False)
+        row["position_after_entry"] = _position_log(state.open_position, compact=not options.analysis_logs)
     elif (
         options.mode == "live"
         and cfg.risk.stop_on_live_insufficient_cash_balance

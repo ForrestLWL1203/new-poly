@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>New Poly Dashboard</title>
+  <style>
+    :root {
+      --bg: #101214;
+      --panel: #191c20;
+      --panel-2: #20252b;
+      --text: #eef1f3;
+      --muted: #9da7b1;
+      --line: #343a42;
+      --good: #44c27f;
+      --bad: #ff6b6b;
+      --warn: #e6b450;
+      --accent: #7cc7ff;
+      --ink: #050607;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .shell {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 22px 16px 42px;
+    }
+
+    header {
+      display: flex;
+      gap: 16px;
+      align-items: flex-end;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 760;
+    }
+
+    .sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    select, input {
+      min-height: 38px;
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+    }
+
+    input {
+      width: 98px;
+    }
+
+    button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 13px;
+      color: var(--text);
+      background: var(--panel-2);
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+    button:disabled { cursor: wait; opacity: .58; }
+    .primary { background: var(--accent); color: var(--ink); border-color: var(--accent); }
+    .danger { background: #3a1d20; border-color: #7d3339; color: #ffd8dc; }
+
+    .status-line {
+      min-height: 22px;
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      min-width: 0;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 7px;
+    }
+
+    .value {
+      font-size: 22px;
+      font-weight: 720;
+      overflow-wrap: anywhere;
+    }
+
+    .value.small {
+      font-size: 15px;
+      line-height: 1.35;
+      white-space: pre-line;
+    }
+
+    .hint {
+      min-height: 17px;
+      margin-top: 6px;
+      color: var(--warn);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .good { color: var(--good); }
+    .bad { color: var(--bad); }
+    .warn { color: var(--warn); }
+
+    .section {
+      margin-top: 14px;
+    }
+
+    .section h2 {
+      margin: 0 0 9px;
+      font-size: 15px;
+      font-weight: 720;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 9px;
+    }
+
+    .section-head h2 {
+      margin: 0;
+    }
+
+    .section-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 720px;
+    }
+
+    th, td {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      font-size: 13px;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 650;
+      background: #16191d;
+    }
+
+    td input[type="checkbox"] {
+      width: auto;
+      min-height: auto;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: none;
+      place-items: center;
+      background: rgba(16, 18, 20, .64);
+      backdrop-filter: blur(2px);
+    }
+
+    .loading-overlay.is-visible {
+      display: grid;
+    }
+
+    .loading-box {
+      width: min(320px, calc(100vw - 32px));
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, .34);
+    }
+
+    .loading-title {
+      font-size: 16px;
+      font-weight: 760;
+      margin-bottom: 6px;
+    }
+
+    .loading-text {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 780px) {
+      header { display: block; }
+      .toolbar { justify-content: flex-start; margin-top: 14px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .value { font-size: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>New Poly 控制台</h1>
+        <div class="sub">Sweden VPS live / paper 策略运行状态</div>
+      </div>
+      <div class="toolbar">
+        <select id="mode">
+          <option value="paper">paper</option>
+          <option value="live">live</option>
+        </select>
+        <input id="windows" type="text" inputmode="numeric" pattern="[0-9]*" value="1" aria-label="windows" title="轮数必须是正整数">
+        <button id="start" class="primary">启动</button>
+        <button id="refresh" class="primary">刷新</button>
+        <button id="stop" class="danger">停止</button>
+        <button id="logout">退出</button>
+      </div>
+    </header>
+
+    <div id="statusLine" class="status-line">等待刷新。</div>
+
+    <section class="grid">
+      <div class="panel"><div class="label">执行类型</div><div id="runMode" class="value">-</div></div>
+      <div class="panel"><div class="label">执行状态</div><div id="runStatus" class="value">-</div></div>
+      <div class="panel"><div id="remainingLabel" class="label">当前窗口剩余</div><div id="remaining" class="value">-</div><div id="entryHint" class="hint"></div></div>
+      <div class="panel"><div class="label">本次运行总剩余</div><div id="totalRemaining" class="value">-</div></div>
+      <div class="panel"><div class="label">Realized PNL</div><div id="pnl" class="value">-</div></div>
+      <div class="panel"><div class="label">目标窗口</div><div id="window" class="value small">-</div></div>
+      <div class="panel"><div class="label">窗口进度</div><div id="progress" class="value small">-</div></div>
+      <div class="panel"><div class="label">日志</div><div id="logName" class="value small">-</div></div>
+      <div class="panel"><div class="label">持仓</div><div id="position" class="value small">-</div></div>
+    </section>
+
+    <section class="section">
+      <h2>窗口记录</h2>
+      <div class="table-wrap"><table id="windowTable"></table></div>
+    </section>
+
+    <section class="section">
+      <h2>交易记录</h2>
+      <div class="table-wrap"><table id="tradeTable"></table></div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>历史日志</h2>
+        <div class="section-actions">
+          <button id="refreshLogs">刷新日志</button>
+          <button id="analyzeLog" class="primary">分析日志</button>
+          <button id="deleteLogs" class="danger">删除日志</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="logTable"></table></div>
+    </section>
+
+    <section class="section">
+      <h2>错误与警告</h2>
+      <div class="panel"><pre id="messages">-</pre></div>
+    </section>
+  </main>
+  <div id="loadingOverlay" class="loading-overlay" aria-hidden="true">
+    <div class="loading-box" role="status" aria-live="polite">
+      <div class="loading-title">正在确认状态</div>
+      <div id="loadingText" class="loading-text">请稍候。</div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = { loading: false, data: null, countdownTimer: null, pollTimer: null, statusPollMs: 5000, analysisStem: null };
+
+    $("refresh").addEventListener("click", refresh);
+    $("mode").addEventListener("change", () => {
+      stopTimers();
+      state.analysisStem = null;
+      refresh();
+    });
+    $("start").addEventListener("click", startRun);
+    $("stop").addEventListener("click", stopRun);
+    $("logout").addEventListener("click", logout);
+    $("refreshLogs").addEventListener("click", () => refreshLogs());
+    $("analyzeLog").addEventListener("click", analyzeSelectedLog);
+    $("deleteLogs").addEventListener("click", deleteSelectedLogs);
+    $("logTable").addEventListener("change", handleLogSelectionChange);
+
+    async function refresh(options = {}) {
+      const mode = $("mode").value;
+      if (!options.silent) setLoading(true, "正在刷新...");
+      try {
+        let url = `/api/status?mode=${encodeURIComponent(mode)}`;
+        if (state.analysisStem) url += `&stem=${encodeURIComponent(state.analysisStem)}`;
+        const data = await fetchJson(url);
+        render(data);
+        if (!options.silent) $("statusLine").textContent = `已刷新：${new Date().toLocaleString()}`;
+      } catch (err) {
+        $("statusLine").textContent = `刷新失败：${err.message}`;
+      } finally {
+        if (!options.silent) setLoading(false);
+      }
+    }
+
+    async function startRun() {
+      const mode = $("mode").value;
+      const windows = parseWindows();
+      if (windows === null) return;
+      const liveText = mode === "live" ? "实盘 " : "";
+      const text = `确认启动 ${liveText}${mode}，轮数 ${windows}？`;
+      if (!confirm(text)) return;
+      setLoading(true, "正在执行指令...");
+      try {
+      await fetchJson("/api/restart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode, windows }),
+        });
+        $("statusLine").textContent = "启动指令已提交，正在确认脚本状态...";
+        await waitForStatus((data) => data.run_status === "running", "启动确认超时，请手动刷新查看状态。");
+        state.analysisStem = null;
+        await refreshLogs({ silent: true });
+      } catch (err) {
+        $("statusLine").textContent = `指令失败：${err.message}`;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function stopRun() {
+      const mode = $("mode").value;
+      const liveText = mode === "live" ? "实盘 " : "";
+      if (!confirm(`确认停止当前 ${liveText}${mode} 运行？`)) return;
+      setLoading(true, "停止指令已提交，正在确认脚本停止...");
+      try {
+        await fetchJson("/api/stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        });
+        await waitForStatus(
+          (data) => data.run_status === "idle" || data.run_status === "stopped" || data.run_status === "finished",
+          "停止确认超时，请手动刷新查看状态。",
+        );
+      } catch (err) {
+        $("statusLine").textContent = `停止失败：${err.message}`;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function fetchJson(url, options) {
+      const resp = await fetch(url, options);
+      const text = await resp.text();
+      let data = {};
+      if (text) data = JSON.parse(text);
+      if (resp.status === 401) {
+        window.location.href = "/login";
+        throw new Error("请先登录");
+      }
+      if (!resp.ok) throw new Error(data.error || `${resp.status} ${resp.statusText}`);
+      return data;
+    }
+
+    async function logout() {
+      stopTimers();
+      await fetchJson("/api/logout", { method: "POST" });
+      window.location.href = "/login";
+    }
+
+    async function refreshLogs(options = {}) {
+      if (!options.silent) setLoading(true, "正在读取历史日志...");
+      try {
+        const data = await fetchJson("/api/logs?mode=all");
+        renderLogs(data.runs || []);
+        updateControls();
+        if (!options.silent) $("statusLine").textContent = `日志列表已刷新：${new Date().toLocaleString()}`;
+      } catch (err) {
+        $("statusLine").textContent = `日志刷新失败：${err.message}`;
+      } finally {
+        if (!options.silent) setLoading(false);
+      }
+    }
+
+    async function analyzeSelectedLog() {
+      const selected = selectedLogStems();
+      if (selected.length !== 1) {
+        $("statusLine").textContent = "请选择一组历史日志。";
+        return;
+      }
+      state.analysisStem = selected[0];
+      await refresh();
+      $("statusLine").textContent = `已分析：${state.analysisStem}`;
+    }
+
+    async function deleteSelectedLogs() {
+      const stems = selectedLogStems();
+      if (!stems.length) {
+        $("statusLine").textContent = "请先选择要删除的日志。";
+        return;
+      }
+      if (!confirm(`确认删除 ${stems.length} 组日志？文件会先移入 .trash。`)) return;
+      setLoading(true, "正在移动所选日志到回收目录...");
+      try {
+        await fetchJson("/api/logs/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stems }),
+        });
+        await refreshLogs({ silent: true });
+        if (state.analysisStem && stems.includes(state.analysisStem)) {
+          state.analysisStem = null;
+        }
+        await refresh({ silent: true });
+        $("statusLine").textContent = "所选日志已移入 .trash。";
+      } catch (err) {
+        $("statusLine").textContent = `删除日志失败：${err.message}`;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function render(data) {
+      state.data = data;
+      if (historyLocked()) clearLogSelection();
+      $("runMode").textContent = data.mode || "-";
+      $("runStatus").textContent = data.run_status || "-";
+      $("runStatus").className = `value ${data.run_status === "running" ? "good" : data.run_status === "finished" || data.run_status === "stopped" ? "warn" : ""}`;
+      updateControls();
+      updateCountdown();
+      $("pnl").textContent = money(data.realized_pnl);
+      $("pnl").className = `value ${Number(data.realized_pnl) >= 0 ? "good" : "bad"}`;
+      $("window").textContent = data.current_window ? (data.current_window.display_name || data.current_window.market_slug || "-") : "-";
+      $("progress").textContent = progressText(data);
+      $("logName").textContent = data.log_name || data.log_path || "-";
+      $("position").textContent = data.open_position ? JSON.stringify(data.open_position, null, 2) : "无";
+      renderTable(
+        "windowTable",
+        [
+          ["window_index", "窗口序号"],
+          ["window_date", "日期"],
+          ["window_start_time", "开始时间"],
+          ["window_end_time", "结束时间"],
+          ["actual_settlement_side", "实际结算方向"],
+        ],
+        data.window_records || [],
+      );
+      renderTable(
+        "tradeTable",
+        [
+          ["window_index", "窗口序号"],
+          ["direction", "方向"],
+          ["buy_time", "买入时间"],
+          ["buy_price", "买入均价"],
+          ["buy_reason", "买入结果/失败原因"],
+          ["sell_time", "卖出时间"],
+          ["sell_price", "卖出均价"],
+          ["pnl", "单笔 PNL"],
+          ["exit_reason", "退出原因"],
+        ],
+        data.trades || [],
+      );
+      $("messages").textContent = JSON.stringify({
+        fatal_stop_reason: data.fatal_stop_reason,
+        errors: data.errors || [],
+        warnings: data.warnings || [],
+        parse_warnings: data.parse_warnings || [],
+      }, null, 2);
+      reconcileTimers();
+    }
+
+    function selectedLogStems() {
+      return Array.from(document.querySelectorAll(".log-check:checked")).map((node) => node.value);
+    }
+
+    function renderTable(id, columns, rows) {
+      const head = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(Array.isArray(c) ? c[1] : c)}</th>`).join("")}</tr></thead>`;
+      const bodyRows = rows.length ? rows.slice().reverse().map((row) => {
+        return `<tr>${columns.map((c) => {
+          const key = Array.isArray(c) ? c[0] : c;
+          return `<td>${escapeHtml(formatCell(row[key]))}</td>`;
+        }).join("")}</tr>`;
+      }).join("") : `<tr><td colspan="${columns.length}">暂无记录</td></tr>`;
+      $(id).innerHTML = head + `<tbody>${bodyRows}</tbody>`;
+    }
+
+    function renderLogs(rows) {
+      const columns = ["", "类型", "开始时间", "结束时间", "时长", "轮数", "状态", "大小", "文件", "主日志"];
+      const head = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>`;
+      const body = rows.length ? rows.map((row) => {
+        const disabled = row.status === "running" || historyLocked() ? " disabled" : "";
+        const checked = `<input class="log-check" type="checkbox" value="${escapeHtml(row.stem)}" data-running="${row.status === "running" ? "true" : "false"}"${disabled}>`;
+        return `<tr>
+          <td>${checked}</td>
+          <td>${escapeHtml(row.mode || "-")}</td>
+          <td>${escapeHtml(row.started_at_text || row.started_at || "-")}</td>
+          <td>${escapeHtml(row.ended_at_text || row.ended_at || "-")}</td>
+          <td>${escapeHtml(row.duration_text || "-")}</td>
+          <td>${escapeHtml(row.windows ?? "-")}</td>
+          <td>${escapeHtml(row.status || "-")}</td>
+          <td>${escapeHtml(row.total_size_text || "-")}</td>
+          <td>${escapeHtml(row.file_count ?? "-")}</td>
+          <td>${escapeHtml(row.primary_log || row.stem || "-")}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="${columns.length}">暂无日志</td></tr>`;
+      $("logTable").innerHTML = head + `<tbody>${body}</tbody>`;
+      updateControls();
+    }
+
+    function handleLogSelectionChange(event) {
+      if (!event.target.classList || !event.target.classList.contains("log-check")) return;
+      if (historyLocked()) {
+        event.target.checked = false;
+        updateControls();
+        return;
+      }
+      if (event.target.checked) {
+        document.querySelectorAll(".log-check").forEach((node) => {
+          if (node !== event.target) node.checked = false;
+        });
+      }
+      updateControls();
+    }
+
+    function reconcileTimers() {
+      const terminal = state.data && ["finished", "stopped", "idle"].includes(state.data.run_status);
+      if (terminal) {
+        if (state.pollTimer) clearInterval(state.pollTimer);
+        if (state.countdownTimer) clearInterval(state.countdownTimer);
+        state.pollTimer = null;
+        state.countdownTimer = null;
+        return;
+      }
+      if (state.data && state.data.current_window && !state.countdownTimer) {
+        state.countdownTimer = setInterval(updateCountdown, 1000);
+      }
+      if (!state.pollTimer && state.data && !["finished", "stopped", "idle"].includes(state.data.run_status)) {
+        state.pollTimer = setInterval(() => refresh({ silent: true }), state.statusPollMs);
+      }
+    }
+
+    function stopTimers() {
+      if (state.countdownTimer) clearInterval(state.countdownTimer);
+      if (state.pollTimer) clearInterval(state.pollTimer);
+      state.countdownTimer = null;
+      state.pollTimer = null;
+    }
+
+    function updateCountdown() {
+      const windowInfo = state.data && state.data.current_window;
+      if (!windowInfo) {
+        $("remainingLabel").textContent = "当前窗口剩余";
+        $("remaining").textContent = "-";
+        $("totalRemaining").textContent = "-";
+        $("entryHint").textContent = "";
+        return;
+      }
+      $("entryHint").textContent = windowStatusHint(windowInfo);
+      if (state.data.run_status === "finished" || state.data.run_status === "stopped") {
+        $("remaining").textContent = "0:00";
+        $("totalRemaining").textContent = "0:00";
+        return;
+      }
+      const preStart = currentPreStart(windowInfo);
+      const currentDynamic = preStart > 0 ? preStart : currentWindowRemaining(windowInfo.window_end);
+      const totalDynamic = runRemaining(state.data);
+      $("remainingLabel").textContent = preStart > 0 ? "跳过窗口剩余" : "当前窗口剩余";
+      $("remaining").textContent = preStart > 0 ? `等待 ${formatSeconds(currentDynamic)}` : formatSeconds(
+        currentDynamic ?? windowInfo.window_end_remaining_sec ?? windowInfo.remaining_sec
+      );
+      $("totalRemaining").textContent = formatLongSeconds(totalDynamic ?? state.data.run_remaining_sec);
+    }
+
+    function remainingFromEnd(value) {
+      if (!value) return null;
+      const end = Date.parse(value);
+      if (!Number.isFinite(end)) return null;
+      return Math.max(0, Math.floor((end - Date.now()) / 1000));
+    }
+
+    function currentWindowRemaining(endValue) {
+      return remainingFromEnd(endValue);
+    }
+
+    function currentPreStart(windowInfo) {
+      const dynamic = remainingFromEnd(windowInfo.window_start);
+      if (dynamic && dynamic > 0) return dynamic;
+      return Math.max(0, Number(windowInfo.pre_start_sec || 0));
+    }
+
+    function windowStatusHint(windowInfo) {
+      if (windowInfo.entry_window_missed) {
+        return windowInfo.entry_window_message || "错过交易窗口，跳过";
+      }
+      if (state.data && state.data.run_status === "running") {
+        const preStart = currentPreStart(windowInfo);
+        if (preStart > 0) {
+          return "跳过当前窗口，等待目标窗口开始";
+        }
+      }
+      return "";
+    }
+
+    function runRemaining(data) {
+      const windowInfo = data && data.current_window;
+      if (!windowInfo) return null;
+      const currentToEnd = remainingFromEnd(windowInfo.window_end);
+      if (currentToEnd === null) return data.run_remaining_sec ?? null;
+      const completed = Number(data.completed_windows ?? 0);
+      const configured = Number(data.configured_windows);
+      if (!Number.isFinite(configured)) return currentToEnd;
+      const duration = windowDuration(windowInfo) ?? 300;
+      const preStart = currentPreStart(windowInfo);
+      if (preStart > 0) {
+        const activeWindows = Math.max(0, configured - completed);
+        return activeWindows * duration;
+      }
+      const futureWindows = Math.max(0, configured - completed - 1);
+      return currentToEnd + futureWindows * duration;
+    }
+
+    function windowDuration(windowInfo) {
+      const start = Date.parse(windowInfo.window_start || "");
+      const end = Date.parse(windowInfo.window_end || "");
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+      return Math.max(0, Math.floor((end - start) / 1000));
+    }
+
+    function progressText(data) {
+      const completed = data.completed_windows ?? "-";
+      const total = data.configured_windows ?? "?";
+      const pending = data.pending_windows ?? "?";
+      return `已完成 ${completed} / 共 ${total}\n待完成 ${pending}`;
+    }
+
+    function setLoading(value, text) {
+      state.loading = value;
+      $("refresh").disabled = value;
+      $("mode").disabled = value;
+      $("windows").disabled = value;
+      $("logout").disabled = value;
+      $("loadingOverlay").classList.toggle("is-visible", value);
+      $("loadingOverlay").setAttribute("aria-hidden", value ? "false" : "true");
+      $("loadingText").textContent = text || "请稍候。";
+      document.body.setAttribute("aria-busy", value ? "true" : "false");
+      if (text) $("statusLine").textContent = text;
+      updateControls();
+    }
+
+    function updateControls() {
+      const running = state.data && state.data.run_status === "running";
+      $("start").disabled = state.loading || Boolean(running);
+      $("stop").disabled = state.loading || !running;
+      const hasSelectedLog = selectedLogStems().length > 0;
+      $("analyzeLog").disabled = state.loading || running || !hasSelectedLog;
+      $("deleteLogs").disabled = state.loading || running || !hasSelectedLog;
+      document.querySelectorAll(".log-check").forEach((node) => {
+        node.disabled = Boolean(running) || node.dataset.running === "true";
+      });
+    }
+
+    function historyLocked() {
+      return Boolean(state.data && state.data.run_status === "running");
+    }
+
+    function clearLogSelection() {
+      document.querySelectorAll(".log-check:checked").forEach((node) => {
+        node.checked = false;
+      });
+    }
+
+    async function waitForStatus(predicate, timeoutMessage) {
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        const data = await fetchJson(`/api/status?mode=${encodeURIComponent($("mode").value)}`);
+        render(data);
+        reconcileTimers();
+        if (predicate(data)) {
+          $("statusLine").textContent = `状态已确认：${data.run_status}`;
+          return;
+        }
+        await sleep(800);
+      }
+      $("statusLine").textContent = timeoutMessage;
+      await refresh({ silent: true });
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function parseWindows() {
+      const raw = $("windows").value.trim();
+      if (!/^[1-9][0-9]*$/.test(raw)) {
+        $("statusLine").textContent = "轮数必须是正整数。";
+        $("windows").focus();
+        return null;
+      }
+      const windows = Number(raw);
+      if (!Number.isSafeInteger(windows)) {
+        $("statusLine").textContent = "轮数太大，请输入合理的正整数。";
+        $("windows").focus();
+        return null;
+      }
+      return windows;
+    }
+
+    function formatSeconds(value) {
+      if (value === null || value === undefined) return "-";
+      const sec = Math.max(0, Number(value));
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    function formatLongSeconds(value) {
+      if (value === null || value === undefined) return "-";
+      const sec = Math.max(0, Number(value));
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = Math.floor(sec % 60);
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    function money(value) {
+      if (value === null || value === undefined) return "-";
+      return Number(value).toFixed(4);
+    }
+
+    function formatCell(value) {
+      if (value === null || value === undefined) return "";
+      if (typeof value === "number") return Number(value.toFixed(6)).toString();
+      if (typeof value === "object") return JSON.stringify(value);
+      return String(value);
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+
+    refresh();
+    refreshLogs({ silent: true });
+  </script>
+</body>
+</html>
