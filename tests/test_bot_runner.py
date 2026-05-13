@@ -1198,3 +1198,40 @@ def test_switch_to_next_window_resets_state_and_stream(monkeypatch) -> None:
         assert row["ts"]
 
     asyncio.run(scenario())
+
+
+def test_reference_distance_cap_skip_log_is_deduped_per_window_side() -> None:
+    from new_poly.bot_runtime import _should_write_row
+
+    seen: set[tuple[str, str]] = set()
+    row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {
+            "action": "skip",
+            "reason": "poly_reference_distance_too_high",
+            "side": "up",
+        },
+    }
+    same_side = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {
+            "action": "skip",
+            "reason": "poly_reference_distance_too_high",
+            "side": "up",
+        },
+    }
+    other_side = {
+        "event": "tick",
+        "market_slug": "m1",
+        "decision": {
+            "action": "skip",
+            "reason": "poly_reference_distance_too_high",
+            "side": "down",
+        },
+    }
+
+    assert _should_write_row(row, seen) is True
+    assert _should_write_row(same_side, seen) is False
+    assert _should_write_row(other_side, seen) is True

@@ -801,6 +801,7 @@ def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str,
     }
     one_per_window_side_reasons = {
         "poly_ask_too_high",
+        "poly_reference_distance_too_high",
         "poly_reference_not_confirmed",
         "poly_score_too_low",
         "poly_trend_not_confirmed",
