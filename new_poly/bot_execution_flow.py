@@ -24,6 +24,15 @@ from new_poly.trading.clob_client import get_token_balance
 UNKNOWN_ENTRY_SAFETY_REMAINING_SEC = 90.0
 UNKNOWN_ENTRY_SAFETY_MIN_AGE_SEC = 30.0
 
+_ORDER_INTENT_OMIT_IF_NONE = {
+    "model_prob",
+    "phase",
+    "required_edge",
+    "best_ask",
+    "depth_limit_price",
+    "edge",
+}
+
 
 def _order_intent_row(
     *,
@@ -63,7 +72,11 @@ def _order_intent_row(
     if options.analysis_logs:
         strategy_analysis = _entry_analysis(decision, None) if intent == "entry" else _exit_analysis(decision, None)
         out["analysis"] = {"price_sources": price_analysis, **strategy_analysis}
-    return out
+    return {
+        key: value
+        for key, value in out.items()
+        if value is not None or key not in _ORDER_INTENT_OMIT_IF_NONE
+    }
 
 
 def _score_component_log_mode(cfg: BotConfig) -> str:

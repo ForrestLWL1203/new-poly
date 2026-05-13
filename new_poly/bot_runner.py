@@ -10,7 +10,7 @@ from typing import Any
 
 from new_poly.bot_dynamic import DynamicParamController
 from new_poly.bot_execution_flow import handle_flat_tick, handle_open_position_tick
-from new_poly.bot_logging import build_tick_row, write_tick_row
+from new_poly.bot_logging import build_tick_row, compact_high_frequency_row, write_tick_row
 from new_poly.bot_loop import (
     DvolRuntime,
     FeedContext,
@@ -283,7 +283,7 @@ class BotRunner:
             row["reference"] = tick.reference_meta
         if tick.price_analysis:
             row["analysis"] = tick.price_analysis
-        self.logger.write(row)
+        self.logger.write(compact_high_frequency_row(row, options=self.options))
         self.loop.post_exit_observation_last_age_sec = age_sec
 
     async def drain_dynamic_task(self) -> None:

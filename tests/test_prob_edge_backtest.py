@@ -82,6 +82,28 @@ def test_scan_poly_source_configs_returns_ranked_parameter_results() -> None:
     assert results[0]["total_pnl"] >= results[1]["total_pnl"]
 
 
+def test_poly_single_source_backtest_accepts_compact_tick_rows() -> None:
+    rows = [
+        _poly_row("m1", 120, poly_price=100.02, poly_return_3s=0.4, up_ask=0.60, final_s_price=101.0),
+        _poly_row("m1", 299, poly_price=100.10, poly_return_3s=0.1, up_bid=0.90, final_s_price=101.0),
+    ]
+    for row in rows:
+        row.pop("event", None)
+        row.pop("mode", None)
+        row.pop("polymarket_price_age_sec", None)
+        row.pop("lead_polymarket_side", None)
+        for side in ("up", "down"):
+            row[side].pop("ask_avg", None)
+            row[side].pop("ask_limit", None)
+            row[side].pop("bid_age_ms", None)
+            row[side].pop("stable_depth_usd", None)
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=1.0, entry_start_age_sec=120.0))
+
+    assert result.summary["entries"] == 1
+    assert result.trades[0]["entry_side"] == "up"
+
+
 def test_poly_single_source_backtest_computes_configured_lookback_from_history() -> None:
     rows = [
         _poly_row("m1", 100, poly_price=100.00, poly_return_3s=0.0, up_ask=0.60, final_s_price=101.0),

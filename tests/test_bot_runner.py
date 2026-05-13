@@ -139,6 +139,64 @@ def test_entry_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_poly_source_order_intent_omits_empty_legacy_probability_fields() -> None:
+    from new_poly.bot_execution_flow import _order_intent_row
+
+    options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+    decision = StrategyDecision(
+        action="enter",
+        reason="poly_edge",
+        side="down",
+        price=0.37,
+        limit_price=0.75,
+        edge=5.2,
+        poly_reference_distance_bps=2.0,
+        poly_return_bps=1.0,
+        poly_trend_lookback_sec=10.0,
+        poly_entry_score=5.2,
+    )
+
+    row = _order_intent_row(
+        row={"ts": "2026-05-13T00:00:00+00:00", "market_slug": "m1", "age_sec": 130, "remaining_sec": 170},
+        intent="entry",
+        token_id="token",
+        decision=decision,
+        price_analysis={},
+        options=options,
+        extra={"amount_usd": 1.0},
+    )
+
+    assert row["event"] == "order_intent"
+    assert row["reason"] == "poly_edge"
+    assert row["edge"] == 5.2
+    assert "model_prob" not in row
+    assert "required_edge" not in row
+    assert "phase" not in row
+
+
+def test_order_intent_keeps_structural_null_fields() -> None:
+    from new_poly.bot_execution_flow import _order_intent_row
+
+    options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+    decision = StrategyDecision(action="exit", reason="missing_exit_depth")
+
+    row = _order_intent_row(
+        row={"ts": "2026-05-13T00:00:00+00:00", "market_slug": "m1", "age_sec": 130, "remaining_sec": 170},
+        intent="exit",
+        token_id="token",
+        decision=decision,
+        price_analysis={},
+        options=options,
+    )
+
+    assert row["event"] == "exit_intent"
+    assert row["side"] is None
+    assert row["exit_side"] is None
+    assert row["signal_price"] is None
+    assert row["limit_price"] is None
+    assert "model_prob" not in row
+
+
 def test_live_unknown_buy_safety_check_uses_poly_entry_end_age() -> None:
     from new_poly.bot_execution_flow import _unknown_buy_needs_safety_check
 
@@ -232,14 +290,183 @@ def test_post_exit_observation_ticks_are_throttled_and_keep_poly_context() -> No
     assert row["last_exit_side"] == "up"
     assert row["last_exit_age_sec"] == 120.0
     assert row["decision"] == {"action": "observe", "reason": "post_exit_observation"}
-    assert row["reference"]["polymarket_price"] == 100020.0
-    assert row["analysis"]["strategy_price_source"] == "polymarket_reference"
+    assert row["polymarket_price"] == 100020.0
+    assert row["lead_polymarket_return_3s_bps"] == 0.4
+    assert "reference" not in row
+    assert "analysis" not in row
 
     runner.write_post_exit_observation_if_due(replace(due_tick, snap=replace(base_snap, age_sec=135.0, remaining_sec=165.0), row={**base_tick.row, "age_sec": 135, "remaining_sec": 165}))
     assert len(runner.logger.rows) == 1
 
     runner.write_post_exit_observation_if_due(replace(due_tick, snap=replace(base_snap, age_sec=140.0, remaining_sec=160.0), row={**base_tick.row, "age_sec": 140, "remaining_sec": 160}))
     assert len(runner.logger.rows) == 2
+
+
+def test_poly_source_tick_logs_keep_backtest_fields_and_drop_repeated_analysis() -> None:
+    from new_poly.bot_logging import write_tick_row
+
+    options = build_runtime_options(build_arg_parser().parse_args([
+        "--config",
+        "configs/prob_poly_single_source.yaml",
+        "--mode",
+        "paper",
+    ]))
+    logger = DummyLogger()
+    loop = bot_loop.LoopRuntime()
+    state = StrategyState(open_position=PositionSnapshot(
+        market_slug="m1",
+        token_side="up",
+        token_id="up-token",
+        entry_time=130.0,
+        entry_avg_price=0.42,
+        filled_shares=2.0,
+        entry_model_prob=0.0,
+        entry_edge=4.0,
+    ))
+    row = {
+        "ts": "2026-05-12T00:00:00+00:00",
+        "event": "tick",
+        "mode": "paper",
+        "market_slug": "m1",
+        "window_start": "2026-05-12T00:00:00+00:00",
+        "window_end": "2026-05-12T00:05:00+00:00",
+        "age_sec": 150.0,
+        "remaining_sec": 150.0,
+        "k_price": 100000.0,
+        "sigma_source": "not_used",
+        "sigma_eff": None,
+        "volatility_stale": False,
+        "realized_pnl": 0.0,
+        "position": {"token_side": "up", "entry_avg_price": 0.42},
+        "decision": {"action": "skip", "reason": "poly_score_too_low", "poly_entry_score": 5.5},
+        "up": {
+            "ask": 0.43,
+            "bid": 0.41,
+            "ask_avg": 0.431,
+            "ask_limit": 0.44,
+            "bid_avg": 0.409,
+            "bid_limit": 0.40,
+            "bid_depth_ok": True,
+            "book_age_ms": 80,
+            "bid_age_ms": 75,
+            "ask_age_ms": 70,
+            "stable_depth_usd": 100.0,
+        },
+        "down": {
+            "ask": 0.59,
+            "bid": 0.57,
+            "ask_avg": 0.591,
+            "ask_limit": 0.60,
+            "bid_avg": 0.569,
+            "bid_limit": 0.56,
+            "bid_depth_ok": True,
+            "book_age_ms": 90,
+            "bid_age_ms": 85,
+            "stable_depth_usd": 100.0,
+        },
+    }
+
+    write_tick_row(
+        logger=logger,
+        loop=loop,
+        options=options,
+        state=state,
+        row=row,
+        reference_meta={
+            "polymarket_price": 100050.0,
+            "polymarket_price_age_sec": 0.2,
+            "lead_polymarket_return_3s_bps": 0.7,
+            "lead_polymarket_return_10s_bps": 1.4,
+        },
+        decision=StrategyDecision(action="skip", reason="poly_score_too_low"),
+    )
+
+    assert len(logger.rows) == 1
+    compact = logger.rows[0]
+    assert compact["event"] == "tick"
+    assert compact["market_slug"] == "m1"
+    assert compact["k_price"] == 100000.0
+    assert compact["polymarket_price"] == 100050.0
+    assert compact["lead_polymarket_return_10s_bps"] == 1.4
+    assert compact["up"] == {
+        "ask": 0.43,
+        "bid_avg": 0.409,
+        "bid_limit": 0.40,
+        "bid_depth_ok": True,
+        "book_age_ms": 80,
+    }
+    assert "decision" not in compact
+    assert "position" not in compact
+    assert "reference" not in compact
+    assert "mode" not in compact
+    assert "window_start" not in compact
+    assert "stable_depth_usd" not in compact["up"]
+    assert "bid" not in compact["up"]
+    assert "ask_limit" not in compact["up"]
+    assert "bid_age_ms" not in compact["up"]
+
+
+def test_poly_source_live_tick_logs_are_not_compacted() -> None:
+    from new_poly.bot_logging import compact_high_frequency_row
+
+    options = build_runtime_options(build_arg_parser().parse_args([
+        "--config",
+        "configs/prob_poly_single_source.yaml",
+        "--mode",
+        "live",
+        "--i-understand-live-risk",
+    ]))
+    row = {
+        "event": "tick",
+        "mode": "live",
+        "market_slug": "m1",
+        "decision": {"action": "skip", "reason": "test"},
+        "position": {"token_side": "up"},
+        "clob_ws": {"last_depth_update_age_ms": 1500.0},
+        "up": {"ask": 0.51, "ask_avg": 0.52, "bid": 0.49, "stable_depth_usd": 10.0},
+    }
+
+    assert compact_high_frequency_row(row, options=options) is row
+
+
+def test_non_poly_source_tick_logs_are_not_compacted() -> None:
+    from new_poly.bot_logging import compact_high_frequency_row
+
+    options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+    options = replace(options, config=replace(options.config, strategy_mode="prob_edge"))
+    row = {"event": "tick", "mode": "paper", "decision": {"action": "skip"}, "position": {"token_side": "up"}}
+
+    assert compact_high_frequency_row(row, options=options) is row
+
+
+def test_poly_source_compact_tick_keeps_clob_ws_and_prefers_top_level_analysis() -> None:
+    from new_poly.bot_logging import compact_high_frequency_row
+
+    options = build_runtime_options(build_arg_parser().parse_args([
+        "--config",
+        "configs/prob_poly_single_source.yaml",
+        "--mode",
+        "paper",
+    ]))
+    row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "age_sec": 150.0,
+        "remaining_sec": 150.0,
+        "k_price": 100000.0,
+        "clob_ws": {"last_depth_update_age_ms": 1500.0},
+        "analysis": {
+            "polymarket_price": 100020.0,
+            "price_sources": {"polymarket_price": 100010.0, "lead_polymarket_return_10s_bps": 0.4},
+        },
+        "up": {"ask": 0.43, "bid_avg": 0.41, "bid_limit": 0.40, "bid_depth_ok": True, "book_age_ms": 80},
+    }
+
+    compact = compact_high_frequency_row(row, options=options)
+
+    assert compact["clob_ws"] == {"last_depth_update_age_ms": 1500.0}
+    assert compact["polymarket_price"] == 100020.0
+    assert compact["lead_polymarket_return_10s_bps"] == 0.4
 
 
 def test_window_context_reset_clears_post_exit_observation_throttle() -> None:

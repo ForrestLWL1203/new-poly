@@ -1,5 +1,10 @@
 # Probability Edge Backtest
 
+> Obsolete historical note: parts of this document describe the removed
+> dual-source probability-edge strategy. Current replay code supports
+> `poly_single_source`, but use `README.md` and
+> `configs/prob_poly_single_source.yaml` as the runtime source of truth.
+
 `scripts/backtest_prob_edge.py` replays data collected by
 `scripts/collect_prob_edge_data.py` through the current probability-edge
 strategy state machine.

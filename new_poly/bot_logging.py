@@ -16,6 +16,44 @@ from new_poly.bot_runtime import (
 from new_poly.strategy.prob_edge import StrategyDecision
 from new_poly.strategy.state import StrategyState
 
+# Minimal high-frequency paper fields consumed by backtest replay.
+# Keep this in sync with new_poly.backtest.prob_edge_replay.snapshot_from_row.
+_POLY_SOURCE_BACKTEST_FIELDS = {
+    "event",
+    "ts",
+    "market_slug",
+    "age_sec",
+    "remaining_sec",
+    "k_price",
+    "s_price",
+    "polymarket_price",
+    "lead_polymarket_return_1s_bps",
+    "lead_polymarket_return_3s_bps",
+    "lead_polymarket_return_5s_bps",
+    "lead_polymarket_return_10s_bps",
+    "lead_polymarket_return_15s_bps",
+    "warnings",
+    "clob_ws",
+}
+
+# Post-exit observations are compact ticks with a few exit-context fields.
+_POST_EXIT_OBSERVATION_FIELDS = {
+    "decision",
+    "last_exit_reason",
+    "last_exit_side",
+    "last_exit_age_sec",
+    "observation_interval_sec",
+}
+
+# Minimal per-side book fields consumed by backtest replay.
+_BACKTEST_TOKEN_FIELDS = {
+    "ask",
+    "bid_avg",
+    "bid_limit",
+    "bid_depth_ok",
+    "book_age_ms",
+}
+
 
 def build_tick_row(
     meta: dict[str, Any],
@@ -90,4 +128,57 @@ def write_tick_row(
     ):
         row["reference"] = reference_meta
     if _should_write_row(row, loop.seen_repetitive_skips, analysis_logs=options.analysis_logs):
-        logger.write(row)
+        logger.write(compact_high_frequency_row(row, options=options))
+
+
+def compact_high_frequency_row(row: dict[str, Any], *, options: RuntimeOptions) -> dict[str, Any]:
+    if options.config.strategy_mode != "poly_single_source":
+        return row
+    if options.mode == "live":
+        return row
+    if row.get("event") not in {"tick", "post_exit_observation"}:
+        return row
+
+    compacted = {
+        key: value
+        for key in _POLY_SOURCE_BACKTEST_FIELDS
+        if key in row and (value := row.get(key)) is not None and value != "missing"
+    }
+    if row.get("event") == "post_exit_observation":
+        compacted.update({
+            key: value
+            for key in _POST_EXIT_OBSERVATION_FIELDS
+            if key in row and (value := row.get(key)) is not None
+        })
+
+    _merge_price_context(compacted, row.get("reference"))
+    _merge_price_context(compacted, row.get("analysis"))
+    for side in ("up", "down"):
+        token_row = _compact_token_row(row.get(side))
+        if token_row:
+            compacted[side] = token_row
+    return compacted
+
+
+def _merge_price_context(target: dict[str, Any], source: Any) -> None:
+    if not isinstance(source, dict):
+        return
+    for key in _POLY_SOURCE_BACKTEST_FIELDS:
+        if key in target:
+            continue
+        value = source.get(key)
+        if value is not None and value != "missing":
+            target[key] = value
+    price_source = source.get("price_sources")
+    if isinstance(price_source, dict):
+        _merge_price_context(target, price_source)
+
+
+def _compact_token_row(source: Any) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {}
+    return {
+        key: value
+        for key in _BACKTEST_TOKEN_FIELDS
+        if key in source and (value := source.get(key)) is not None
+    }

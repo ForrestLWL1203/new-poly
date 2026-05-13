@@ -1,5 +1,10 @@
 # Probability Edge Strategy Bot
 
+> Obsolete historical note: this document describes the removed dual-source
+> probability-edge strategy and its old aggressive/dynamic profiles. The active
+> runtime strategy is now `poly_single_source`; use `README.md` and
+> `configs/prob_poly_single_source.yaml` as the current source of truth.
+
 `scripts/run_prob_edge_bot.py` runs the first BTC 5-minute probability-edge
 strategy robot.
 

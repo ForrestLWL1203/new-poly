@@ -17,6 +17,27 @@ Do not copy or reintroduce old strategy logic from `paired_window`, `crowd_m1`,
 or any historical BTC 5-minute strategy. Strategy design in this repo starts
 from zero.
 
+## Current Active Strategy Status
+
+The active runtime strategy is now the Polymarket live-data single-source
+strategy:
+
+- Active config: `configs/prob_poly_single_source.yaml`.
+- Active strategy logic: `new_poly/strategy/poly_source.py`.
+- `new_poly/strategy/prob_edge.py` contains shared DTOs only; the old
+  dual-source probability-edge strategy logic has been removed.
+- Runtime entry decisions do not use Binance/Coinbase `S`, `model_prob`,
+  `required_edge`, Black-Scholes probability, aggressive profiles, or dynamic
+  parameter profiles.
+- Binance/Coinbase/proxy helpers remain available for data collection,
+  diagnostics, and strategy-neutral infrastructure.
+
+Any older section below that refers to `configs/prob_edge_aggressive.yaml`,
+`configs/prob_edge_mvp.yaml`, `configs/prob_edge_dynamic.yaml`, `model_prob`,
+`required_edge`, `market_disagrees_exit`, or Binance-as-model strategy behavior
+is historical context only unless explicitly updated to mention
+`poly_single_source`.
+
 ## Clean-Room Strategy Rule
 
 Allowed to reuse:
