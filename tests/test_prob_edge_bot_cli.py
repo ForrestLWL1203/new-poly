@@ -48,5 +48,5 @@ def test_poly_single_source_config_loads() -> None:
     assert cfg.poly_source.poly_reference_distance_bps == 1.5
     assert cfg.poly_source.max_poly_reference_distance_bps == 4.0
     assert cfg.poly_source.reference_distance_exit_remaining_sec == (120.0, 90.0, 70.0, 45.0, 30.0)
-    assert cfg.poly_source.reference_distance_exit_min_bps == (-2.0, -1.0, 0.25, 0.75, 1.0)
+    assert cfg.poly_source.reference_distance_exit_min_bps == (-2.0, -1.0, 1.0, 1.5, 1.75)
     assert cfg.poly_source.hold_to_settlement_min_poly_return_bps == -0.3

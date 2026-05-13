@@ -21,7 +21,7 @@ poly_source:
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2
   reference_distance_exit_remaining_sec: [120.0, 90.0, 70.0, 45.0, 30.0]
-  reference_distance_exit_min_bps: [-2.0, -1.0, 0.25, 0.75, 1.0]
+  reference_distance_exit_min_bps: [-2.0, -1.0, 1.0, 1.5, 1.75]
   exit_min_hold_sec: 3.0
   hold_to_settlement_enabled: true
   hold_to_settlement_min_profit_ratio: 0.0
