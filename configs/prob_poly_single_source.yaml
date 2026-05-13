@@ -1,0 +1,70 @@
+strategy:
+  strategy_mode: poly_single_source
+
+poly_source:
+  entry_start_age_sec: 120
+  entry_end_age_sec: 220
+  final_no_entry_remaining_sec: 30
+  early_to_core_age_sec: 120
+  core_to_late_age_sec: 240
+  max_entries_per_market: 1
+  max_book_age_ms: 1000
+  poly_reference_distance_bps: 1.5
+  poly_trend_lookback_sec: 10.0
+  poly_return_bps: 0.3
+  max_entry_ask: 0.75
+  max_entry_fill_price: 0.75
+  min_poly_entry_score: 4.5
+  min_poly_hold_score: 0.0
+  poly_score_component_logs: compact
+  entry_tick_size: 0.01
+  buy_price_buffer_ticks: 2
+  reference_distance_exit_remaining_sec: [120.0, 90.0, 70.0, 45.0, 30.0]
+  reference_distance_exit_min_bps: [-2.0, -1.0, 0.25, 0.75, 1.0]
+  exit_min_hold_sec: 3.0
+  hold_to_settlement_enabled: true
+  hold_to_settlement_min_profit_ratio: 0.0
+  hold_to_settlement_min_bid_avg: 0.78
+  hold_to_settlement_min_bid_limit: 0.72
+  hold_to_settlement_min_reference_distance_bps: 1.0
+  hold_to_settlement_min_poly_return_bps: -0.3
+
+execution:
+  amount_usd: 1.0
+  depth_notional: 1.0
+  max_book_age_sec: 1.0
+  retry_count: 1
+  buy_price_buffer_ticks: 2
+  buy_retry_price_buffer_ticks: 4
+  buy_dynamic_buffer_enabled: true
+  buy_dynamic_buffer_attempt1_max_ticks: 5
+  buy_dynamic_buffer_attempt2_max_ticks: 8
+  sell_price_buffer_ticks: 5
+  sell_retry_price_buffer_ticks: 8
+  sell_dynamic_buffer_enabled: true
+  sell_profit_exit_buffer_ticks: 5
+  sell_profit_exit_retry_buffer_ticks: 8
+  sell_risk_exit_buffer_ticks: 8
+  sell_risk_exit_retry_buffer_ticks: 12
+  sell_force_exit_buffer_ticks: 10
+  sell_force_exit_retry_buffer_ticks: 15
+  batch_exit_enabled: true
+
+risk:
+  consecutive_loss_limit: 5
+  loss_pause_windows: 3
+  stop_on_live_insufficient_cash_balance: true
+
+runtime:
+  interval_sec: 0.5
+  warmup_timeout_sec: 8.0
+  settlement_boundary_usd: 5
+  post_exit_observation_enabled: true
+  post_exit_observation_interval_sec: 10.0
+
+market_data:
+  polymarket_price_enabled: true
+  max_polymarket_price_age_sec: 4.0
+  polymarket_stale_reconnect_sec: 5.0
+  polymarket_unhealthy_log_after_sec: 10.0
+  coinbase_enabled: false

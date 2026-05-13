@@ -18,7 +18,6 @@ from new_poly.bot_runtime import (
     make_volatility_fetcher,
     volatility_refresh_interval_sec,
 )
-from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.stream import PriceStream
@@ -116,8 +115,6 @@ async def startup_dvol_runtime(*, cfg: BotConfig, options: RuntimeOptions, logge
 
 
 async def start_market_feeds(*, feeds: FeedContext, cfg: BotConfig, options: RuntimeOptions, logger: JsonlLogger, window) -> None:
-    feeds.binance = BinancePriceFeed("btcusdt")
-    await feeds.binance.start()
     if feeds.polymarket is not None:
         await feeds.polymarket.start()
     if cfg.coinbase_enabled and feeds.coinbase is None:
@@ -127,18 +124,7 @@ async def start_market_feeds(*, feeds: FeedContext, cfg: BotConfig, options: Run
 
 
 async def warmup_binance(*, feeds: FeedContext, cfg: BotConfig, options: RuntimeOptions, logger: JsonlLogger, market_slug: str) -> None:
-    warmup_deadline = asyncio.get_running_loop().time() + max(0.0, cfg.warmup_timeout_sec)
-    while asyncio.get_running_loop().time() < warmup_deadline:
-        if feeds.binance is not None and feeds.binance.latest_price is not None:
-            break
-        await asyncio.sleep(0.1)
-    if feeds.binance is None or feeds.binance.latest_price is None:
-        logger.write(_warmup_warning_row(
-            now=dt.datetime.now(dt.timezone.utc),
-            mode=options.mode,
-            market_slug=market_slug,
-            unhealthy_log_after_sec=cfg.polymarket_unhealthy_log_after_sec,
-        ))
+    return None
 
 
 async def close_runtime(*, feeds: FeedContext, dvol_task: asyncio.Task | None, logger: JsonlLogger) -> None:

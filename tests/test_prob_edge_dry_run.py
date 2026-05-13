@@ -29,6 +29,7 @@ def test_extract_crypto_prices_from_api_response() -> None:
 
     assert data == {
         "openPrice": 78409.37,
+        "closePrice": 78379.9,
         "completed": True,
         "incomplete": False,
         "cached": True,

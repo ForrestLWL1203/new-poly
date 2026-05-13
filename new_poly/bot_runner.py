@@ -20,14 +20,13 @@ from new_poly.bot_loop import (
     _handle_window_close,
     _prefetch_live_order_params,
     _refresh_window_inputs,
+    _write_pending_window_settlement_if_due,
 )
-from new_poly.bot_lifecycle import create_feeds, create_gateway, close_runtime, start_market_feeds, warmup_binance
-from new_poly.bot_lifecycle import startup_dvol_runtime
+from new_poly.bot_lifecycle import create_feeds, create_gateway, close_runtime, start_market_feeds
 from new_poly.bot_runtime import (
     JsonlLogger,
     RuntimeOptions,
     WindowPrices,
-    _bot_config_with_edge,
     _config_log_row,
     _price_analysis,
     _reference_meta,
@@ -125,9 +124,6 @@ class BotRunner:
     async def start(self) -> bool:
         self.logger.write(_config_log_row(self.options))
         self.dynamic.write_startup_error(logger=self.logger, options=self.options)
-        self.dvol = await startup_dvol_runtime(cfg=self.cfg, options=self.options, logger=self.logger)
-        if self.dvol is None:
-            return False
         await self.start_first_window()
         return True
 
@@ -181,26 +177,6 @@ class BotRunner:
                         "market_slug": self.active.window.slug,
                         "token_side": token_side,
                     })
-        self.logger.write({
-            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "event": "binance_warmup_started",
-            "mode": self.options.mode,
-            "market_slug": self.active.window.slug,
-        })
-        await warmup_binance(
-            feeds=self.active.feeds,
-            cfg=self.cfg,
-            options=self.options,
-            logger=self.logger,
-            market_slug=self.active.window.slug,
-        )
-        self.logger.write({
-            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "event": "binance_warmup_ready",
-            "mode": self.options.mode,
-            "market_slug": self.active.window.slug,
-            "has_price": self.active.feeds.binance is not None and self.active.feeds.binance.latest_price is not None,
-        })
 
     def set_window_context(self, active: WindowContext) -> None:
         if self.context is None:
@@ -214,6 +190,7 @@ class BotRunner:
             self.context.window = active.window
             self.context.prices = active.prices
         self.state.reset_for_market(self.active.window.slug)
+        self.loop.reset_post_exit_observation()
 
     async def run_loop(self) -> int:
         while True:
@@ -227,6 +204,7 @@ class BotRunner:
                     return 0
 
     async def run_tick(self) -> bool:
+        await _write_pending_window_settlement_if_due(loop=self.loop, logger=self.logger)
         await self.drain_dynamic_task()
         tick = await self.prepare_tick_context()
         decision = await self.handle_strategy_tick(
@@ -236,14 +214,15 @@ class BotRunner:
             price_analysis=tick.price_analysis,
         )
         self.write_tick_context(tick, decision)
+        self.write_post_exit_observation_if_due(tick)
         return self.options.once or self.state.fatal_stop_reason is not None
 
     async def prepare_tick_context(self) -> TickContext:
         await self.refresh_window_inputs()
         sigma_eff, dvol_stale = await self.advance_dvol()
         snap, meta = self.build_snapshot(sigma_eff)
-        price_analysis = _price_analysis(meta)
-        reference_meta = _reference_meta(meta)
+        price_analysis = _price_analysis(meta, strategy_mode=self.cfg.strategy_mode)
+        reference_meta = _reference_meta(meta, strategy_mode=self.cfg.strategy_mode)
         row = build_tick_row(
             meta,
             options=self.options,
@@ -273,6 +252,40 @@ class BotRunner:
             decision=decision,
         )
 
+    def write_post_exit_observation_if_due(self, tick: TickContext) -> None:
+        if not self.options.post_exit_observation_enabled:
+            return
+        if self.state.has_position or self.state.last_exit_age_sec is None:
+            return
+        market_slug = tick.snap.market_slug
+        if self.state.current_market_slug != market_slug:
+            return
+        interval = max(1.0, float(self.options.post_exit_observation_interval_sec))
+        age_sec = float(tick.snap.age_sec)
+        remaining_sec = float(tick.snap.remaining_sec)
+        if remaining_sec <= 0 or age_sec < float(self.state.last_exit_age_sec) + interval:
+            return
+        if self.loop.post_exit_observation_market_slug != market_slug:
+            self.loop.post_exit_observation_market_slug = market_slug
+            self.loop.post_exit_observation_last_age_sec = None
+        last_age = self.loop.post_exit_observation_last_age_sec
+        if last_age is not None and age_sec < last_age + interval:
+            return
+
+        row = {key: value for key, value in tick.row.items() if key != "_clob_ws"}
+        row["event"] = "post_exit_observation"
+        row["decision"] = {"action": "observe", "reason": "post_exit_observation"}
+        row["last_exit_reason"] = self.state.last_exit_reason
+        row["last_exit_side"] = self.state.last_exit_side
+        row["last_exit_age_sec"] = self.state.last_exit_age_sec
+        row["observation_interval_sec"] = interval
+        if tick.reference_meta:
+            row["reference"] = tick.reference_meta
+        if tick.price_analysis:
+            row["analysis"] = tick.price_analysis
+        self.logger.write(row)
+        self.loop.post_exit_observation_last_age_sec = age_sec
+
     async def drain_dynamic_task(self) -> None:
         await self.dynamic.drain(
             logger=self.logger,
@@ -295,6 +308,8 @@ class BotRunner:
         )
 
     async def advance_dvol(self) -> tuple[float | None, bool]:
+        if self.dvol is None:
+            return None, False
         return await _advance_dvol_refresh(
             dvol=self.dvol,
             cfg=self.cfg,
