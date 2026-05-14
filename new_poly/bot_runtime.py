@@ -294,8 +294,18 @@ def load_bot_config(path: Path) -> BotConfig:
         entry_start_age_sec=float(_deep_get(raw, ("poly_source", "entry_start_age_sec"), 100.0)),
         entry_end_age_sec=float(_deep_get(raw, ("poly_source", "entry_end_age_sec"), 240.0)),
         final_no_entry_remaining_sec=float(_deep_get(raw, ("poly_source", "final_no_entry_remaining_sec"), 30.0)),
+        pre_entry_observation_start_age_sec=float(_deep_get(raw, ("poly_source", "pre_entry_observation_start_age_sec"), 0.0)),
         early_to_core_age_sec=float(_deep_get(raw, ("poly_source", "early_to_core_age_sec"), 120.0)),
         core_to_late_age_sec=float(_deep_get(raw, ("poly_source", "core_to_late_age_sec"), 240.0)),
+        early_value_entry_enabled=bool(_deep_get(raw, ("poly_source", "early_value_entry_enabled"), False)),
+        early_value_start_age_sec=float(_deep_get(raw, ("poly_source", "early_value_start_age_sec"), 60.0)),
+        early_value_end_age_sec=float(_deep_get(raw, ("poly_source", "early_value_end_age_sec"), 120.0)),
+        early_value_min_reference_distance_bps=float(_deep_get(raw, ("poly_source", "early_value_min_reference_distance_bps"), 2.5)),
+        early_value_min_poly_return_bps=float(_deep_get(raw, ("poly_source", "early_value_min_poly_return_bps"), 0.5)),
+        early_value_min_entry_score=float(_deep_get(raw, ("poly_source", "early_value_min_entry_score"), 5.5)),
+        early_value_max_entry_ask=float(_deep_get(raw, ("poly_source", "early_value_max_entry_ask"), 0.60)),
+        early_value_max_spread=float(_deep_get(raw, ("poly_source", "early_value_max_spread"), 0.06)),
+        early_value_hold_protection_enabled=bool(_deep_get(raw, ("poly_source", "early_value_hold_protection_enabled"), False)),
         max_entries_per_market=int(_deep_get(raw, ("poly_source", "max_entries_per_market"), 1)),
         max_book_age_ms=float(_deep_get(raw, ("poly_source", "max_book_age_ms"), 1000.0)),
         poly_reference_distance_bps=float(_deep_get(raw, ("poly_source", "poly_reference_distance_bps"), 0.5)),
@@ -783,6 +793,8 @@ def _polymarket_reference_recovered_row(
 
 
 def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str, str]], *, analysis_logs: bool = True) -> bool:
+    if row.get("force_write_tick") is True:
+        return True
     decision = row.get("decision")
     if not isinstance(decision, dict):
         return True
@@ -908,6 +920,16 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         entry_start_age_sec=cfg.poly_source.entry_start_age_sec,
         entry_end_age_sec=cfg.poly_source.entry_end_age_sec,
         final_no_entry_remaining_sec=cfg.poly_source.final_no_entry_remaining_sec,
+        pre_entry_observation_start_age_sec=cfg.poly_source.pre_entry_observation_start_age_sec,
+        early_value_entry_enabled=cfg.poly_source.early_value_entry_enabled,
+        early_value_start_age_sec=cfg.poly_source.early_value_start_age_sec,
+        early_value_end_age_sec=cfg.poly_source.early_value_end_age_sec,
+        early_value_min_reference_distance_bps=cfg.poly_source.early_value_min_reference_distance_bps,
+        early_value_min_poly_return_bps=cfg.poly_source.early_value_min_poly_return_bps,
+        early_value_min_entry_score=cfg.poly_source.early_value_min_entry_score,
+        early_value_max_entry_ask=cfg.poly_source.early_value_max_entry_ask,
+        early_value_max_spread=cfg.poly_source.early_value_max_spread,
+        early_value_hold_protection_enabled=cfg.poly_source.early_value_hold_protection_enabled,
         max_book_age_ms=cfg.poly_source.max_book_age_ms,
         max_entries_per_market=cfg.poly_source.max_entries_per_market,
         buy_slippage_ticks=0.0,

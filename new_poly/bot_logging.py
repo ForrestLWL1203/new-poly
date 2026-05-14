@@ -34,6 +34,7 @@ _POLY_SOURCE_BACKTEST_FIELDS = {
     "lead_polymarket_return_15s_bps",
     "warnings",
     "clob_ws",
+    "observation_reason",
 }
 
 # Post-exit observations are compact ticks with a few exit-context fields.

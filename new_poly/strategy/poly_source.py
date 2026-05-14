@@ -13,8 +13,18 @@ class PolySourceConfig:
     entry_start_age_sec: float = 100.0
     entry_end_age_sec: float = 240.0
     final_no_entry_remaining_sec: float = 30.0
+    pre_entry_observation_start_age_sec: float = 0.0
     early_to_core_age_sec: float = 120.0
     core_to_late_age_sec: float = 240.0
+    early_value_entry_enabled: bool = False
+    early_value_start_age_sec: float = 60.0
+    early_value_end_age_sec: float = 120.0
+    early_value_min_reference_distance_bps: float = 2.5
+    early_value_min_poly_return_bps: float = 0.5
+    early_value_min_entry_score: float = 5.5
+    early_value_max_entry_ask: float = 0.60
+    early_value_max_spread: float = 0.06
+    early_value_hold_protection_enabled: bool = False
     max_entries_per_market: int = 1
     max_book_age_ms: float = 1000.0
     poly_reference_distance_bps: float = 0.5
@@ -150,7 +160,16 @@ def _price_quality_score(ask: float) -> float:
     return -2.0
 
 
-def _hold_orderbook_time_weight(remaining_sec: float) -> float:
+def _hold_orderbook_time_weight(remaining_sec: float, cfg: PolySourceConfig) -> float:
+    if cfg.early_value_hold_protection_enabled:
+        if remaining_sec > 210.0:
+            return 0.0
+        if remaining_sec > 180.0:
+            return (210.0 - remaining_sec) / 30.0 * 0.15
+        if remaining_sec > 150.0:
+            return 0.15 + (180.0 - remaining_sec) / 30.0 * 0.10
+        if remaining_sec > 110.0:
+            return 0.25 + (150.0 - remaining_sec) / 40.0 * 0.20
     if remaining_sec > 110.0:
         return 0.0
     if remaining_sec > 90.0:
@@ -189,6 +208,7 @@ def _hold_score(
     adverse_bid: float | None,
     remaining_sec: float,
     hold_to_settlement: bool,
+    cfg: PolySourceConfig,
 ) -> PolyHoldScore:
     if own_distance is None or reference_floor is None:
         reference_margin = None
@@ -208,7 +228,7 @@ def _hold_score(
         pnl_score = 0.0
     orderbook_score = 0.0
     if position.entry_avg_price > 0 and bid < position.entry_avg_price:
-        time_weight = _hold_orderbook_time_weight(remaining_sec)
+        time_weight = _hold_orderbook_time_weight(remaining_sec, cfg)
         disagreement = max(0.0, (adverse_bid or 0.0) - bid)
         if disagreement > 0.0:
             loss_ratio = (position.entry_avg_price - bid) / position.entry_avg_price
@@ -244,11 +264,13 @@ def _decision(
     profit_now: float | None = None,
     entry_score: PolyEntryScore | None = None,
     hold_score: PolyHoldScore | None = None,
+    phase: str | None = None,
 ) -> StrategyDecision:
     return StrategyDecision(
         action=action,
         reason=reason,
         side=side,
+        phase=phase,
         price=price,
         limit_price=limit_price,
         best_ask=price if action == "enter" else None,
@@ -289,34 +311,48 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
     phase = _entry_phase(snapshot, cfg)
     if not phase.allowed:
         reason = "outside_entry_time" if phase.phase == "outside_window" else phase.phase
-        return _decision("skip", reason, cfg=cfg, snapshot=snapshot)
+        return _decision("skip", reason, cfg=cfg, snapshot=snapshot, phase=phase.phase)
 
     side = _raw_poly_side(snapshot)
     if side is None:
-        return _decision("skip", "missing_poly_reference", cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "missing_poly_reference", cfg=cfg, snapshot=snapshot, phase=phase.phase)
     distance = _distance_bps(snapshot, side)
     if distance is None or distance < cfg.poly_reference_distance_bps:
-        return _decision("skip", "poly_reference_not_confirmed", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "poly_reference_not_confirmed", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot, phase=phase.phase)
     if cfg.max_poly_reference_distance_bps > 0 and distance > cfg.max_poly_reference_distance_bps:
-        return _decision("skip", "poly_reference_distance_too_high", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "poly_reference_distance_too_high", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot, phase=phase.phase)
     trend = _trend_bps(snapshot, cfg.poly_trend_lookback_sec, side)
     if trend is None or trend < cfg.poly_return_bps:
-        return _decision("skip", "poly_trend_not_confirmed", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "poly_trend_not_confirmed", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
     ask = _ask(snapshot, side)
     if ask is None:
-        return _decision("skip", "missing_entry_price", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "missing_entry_price", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
     if not _book_fresh(snapshot, side, cfg):
-        return _decision("skip", "stale_entry_book", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "stale_entry_book", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
     if ask > cfg.max_entry_ask:
-        return _decision("skip", "poly_ask_too_high", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "poly_ask_too_high", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
     max_fill = _max_entry_fill_price(cfg)
     if max_fill is not None and ask > max_fill:
-        return _decision("skip", "poly_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "poly_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
     score = _entry_score(distance, trend, ask, _bid(snapshot, side))
     if score.total < cfg.min_poly_entry_score:
-        return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot)
+        return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+    if phase.phase == "early_value":
+        bid = _bid(snapshot, side)
+        spread = (ask - bid) if bid is not None else None
+        if distance < cfg.early_value_min_reference_distance_bps:
+            return _decision("skip", "early_value_reference_too_weak", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+        if trend < cfg.early_value_min_poly_return_bps:
+            return _decision("skip", "early_value_trend_too_weak", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+        if ask > cfg.early_value_max_entry_ask:
+            return _decision("skip", "early_value_ask_too_high", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+        if cfg.early_value_max_spread > 0 and (spread is None or spread > cfg.early_value_max_spread):
+            return _decision("skip", "early_value_spread_too_wide", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+        if score.total < cfg.early_value_min_entry_score:
+            return _decision("skip", "early_value_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
     limit = min(1.0, max_fill if max_fill is not None else 1.0)
-    return _decision("enter", "poly_edge", side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot)
+    reason = "poly_early_value" if phase.phase == "early_value" else "poly_edge"
+    return _decision("enter", reason, side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
 
 
 def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: PolySourceConfig, state: StrategyState | None = None) -> StrategyDecision:
@@ -344,6 +380,7 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
         adverse_bid=_bid(snapshot, adverse_side),
         remaining_sec=snapshot.remaining_sec,
         hold_to_settlement=hold_to_settlement,
+        cfg=cfg,
     )
     if held_sec >= cfg.exit_min_hold_sec and hold_score.total < cfg.min_poly_hold_score:
         return _decision("exit", "poly_hold_score_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score)
@@ -404,6 +441,11 @@ class _EntryPhase:
 def _entry_phase(snapshot: MarketSnapshot, cfg: PolySourceConfig) -> _EntryPhase:
     if snapshot.remaining_sec <= cfg.final_no_entry_remaining_sec:
         return _EntryPhase("final_no_entry", False)
+    if (
+        cfg.early_value_entry_enabled
+        and cfg.early_value_start_age_sec <= snapshot.age_sec < cfg.early_value_end_age_sec
+    ):
+        return _EntryPhase("early_value", True)
     if snapshot.age_sec < cfg.entry_start_age_sec or snapshot.age_sec > cfg.entry_end_age_sec:
         return _EntryPhase("outside_window", False)
     if snapshot.age_sec < cfg.early_to_core_age_sec:

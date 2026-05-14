@@ -97,8 +97,18 @@ def test_poly_source_config_exposes_only_active_single_source_exit_knobs() -> No
         "entry_start_age_sec",
         "entry_end_age_sec",
         "final_no_entry_remaining_sec",
+        "pre_entry_observation_start_age_sec",
         "early_to_core_age_sec",
         "core_to_late_age_sec",
+        "early_value_entry_enabled",
+        "early_value_start_age_sec",
+        "early_value_end_age_sec",
+        "early_value_min_reference_distance_bps",
+        "early_value_min_poly_return_bps",
+        "early_value_min_entry_score",
+        "early_value_max_entry_ask",
+        "early_value_max_spread",
+        "early_value_hold_protection_enabled",
         "max_entries_per_market",
         "max_book_age_ms",
         "poly_reference_distance_bps",
@@ -216,6 +226,67 @@ def test_poly_source_score_threshold_can_block_entry() -> None:
 
     assert decision.action == "skip"
     assert decision.reason == "poly_score_too_low"
+
+
+def test_poly_source_early_value_entry_allows_strong_cheap_signal_before_normal_window() -> None:
+    cfg = PolySourceConfig(
+        entry_start_age_sec=120.0,
+        entry_end_age_sec=220.0,
+        early_value_entry_enabled=True,
+        early_value_start_age_sec=60.0,
+        early_value_end_age_sec=120.0,
+        early_value_min_reference_distance_bps=2.5,
+        early_value_min_poly_return_bps=0.5,
+        early_value_min_entry_score=5.5,
+        early_value_max_entry_ask=0.60,
+        early_value_max_spread=0.06,
+        poly_reference_distance_bps=1.5,
+        poly_return_bps=0.3,
+        max_entry_ask=0.75,
+    )
+
+    decision = evaluate_poly_entry(
+        _snapshot(poly_price=100.03, return_bps=0.8, up_ask=0.56, up_bid=0.53, age=80.0, remaining=220.0),
+        StrategyState(current_market_slug="m1"),
+        cfg,
+    )
+
+    assert decision.action == "enter"
+    assert decision.reason == "poly_early_value"
+    assert decision.phase == "early_value"
+    assert decision.poly_reference_distance_bps == pytest.approx(3.0)
+    assert decision.poly_entry_score is not None
+    assert decision.poly_entry_score >= 5.5
+
+
+def test_poly_source_early_value_entry_rejects_expensive_or_wide_signal() -> None:
+    cfg = PolySourceConfig(
+        early_value_entry_enabled=True,
+        early_value_min_reference_distance_bps=2.5,
+        early_value_min_poly_return_bps=0.5,
+        early_value_min_entry_score=5.5,
+        early_value_max_entry_ask=0.60,
+        early_value_max_spread=0.06,
+        poly_reference_distance_bps=1.5,
+        poly_return_bps=0.3,
+        max_entry_ask=0.75,
+    )
+
+    expensive = evaluate_poly_entry(
+        _snapshot(poly_price=100.03, return_bps=0.8, up_ask=0.64, up_bid=0.61, age=80.0, remaining=220.0),
+        StrategyState(current_market_slug="m1"),
+        cfg,
+    )
+    wide = evaluate_poly_entry(
+        _snapshot(poly_price=100.03, return_bps=0.8, up_ask=0.56, up_bid=0.48, age=80.0, remaining=220.0),
+        StrategyState(current_market_slug="m1"),
+        cfg,
+    )
+
+    assert expensive.action == "skip"
+    assert expensive.reason == "early_value_ask_too_high"
+    assert wide.action == "skip"
+    assert wide.reason == "early_value_spread_too_wide"
 
 
 def test_poly_source_entry_score_caps_overextended_reference_distance() -> None:
@@ -611,6 +682,43 @@ def test_poly_source_orderbook_pressure_is_ignored_before_120s() -> None:
 
     assert decision.action == "hold"
     assert decision.poly_hold_orderbook_score == pytest.approx(0.0)
+
+
+def test_poly_source_early_value_hold_protection_starts_orderbook_pressure_before_120s() -> None:
+    cfg = PolySourceConfig(
+        early_value_hold_protection_enabled=True,
+        poly_trend_lookback_sec=10.0,
+        reference_distance_exit_remaining_sec=(210.0, 180.0, 150.0, 120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-3.0, -2.0, -1.0, -0.3, -1.0, 1.0, 1.5, 1.75),
+        min_poly_hold_score=0.0,
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        82.0,
+        0.54,
+        1.85,
+        0.0,
+        5.2,
+        entry_reference_distance_bps=2.35,
+    )
+    snap = _snapshot(
+        poly_price=100.0404,
+        return_bps=0.266,
+        lookback=10.0,
+        up_bid=0.36,
+        up_ask=0.40,
+        down_bid=0.60,
+        down_ask=0.64,
+        age=120.0,
+        remaining=180.0,
+    )
+
+    decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
+
+    assert decision.poly_hold_orderbook_score is not None
+    assert decision.poly_hold_orderbook_score < 0.0
 
 
 def test_poly_source_orderbook_pressure_is_light_near_105s() -> None:

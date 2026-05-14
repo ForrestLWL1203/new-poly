@@ -636,6 +636,14 @@ async def handle_flat_tick(
     state.record_reference_baseline(snap)
     decision = evaluate_poly_entry(snap, state, cfg.poly_source)
     row["decision"] = _decision_log(decision, component_logs=_score_component_log_mode(cfg))
+    if (
+        decision.reason == "outside_entry_time"
+        and cfg.poly_source.pre_entry_observation_start_age_sec > 0
+        and snap.age_sec >= cfg.poly_source.pre_entry_observation_start_age_sec
+        and snap.age_sec < cfg.poly_source.entry_start_age_sec
+    ):
+        row["force_write_tick"] = True
+        row["observation_reason"] = "pre_entry_observation"
     if decision.action != "enter":
         return decision
 

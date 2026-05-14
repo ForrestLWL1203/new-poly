@@ -42,6 +42,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-start-age-sec", type=float, default=90.0)
     parser.add_argument("--entry-end-age-sec", type=float, default=270.0)
     parser.add_argument("--final-no-entry-remaining-sec", type=float, default=30.0)
+    parser.add_argument("--pre-entry-observation-start-age-sec", type=float, default=0.0)
+    parser.add_argument("--early-value-entry", dest="early_value_entry_enabled", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--early-value-start-age-sec", type=float, default=60.0)
+    parser.add_argument("--early-value-end-age-sec", type=float, default=120.0)
+    parser.add_argument("--early-value-min-reference-distance-bps", type=float, default=2.5)
+    parser.add_argument("--early-value-min-poly-return-bps", type=float, default=0.5)
+    parser.add_argument("--early-value-min-entry-score", type=float, default=5.5)
+    parser.add_argument("--early-value-max-entry-ask", type=float, default=0.60)
+    parser.add_argument("--early-value-max-spread", type=float, default=0.06)
+    parser.add_argument("--early-value-hold-protection", dest="early_value_hold_protection_enabled", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--max-entries-per-market", type=int, default=2)
     parser.add_argument("--entry-tick-size", type=float, default=0.01)
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
@@ -100,6 +110,16 @@ def main() -> int:
         entry_start_age_sec=args.entry_start_age_sec,
         entry_end_age_sec=args.entry_end_age_sec,
         final_no_entry_remaining_sec=args.final_no_entry_remaining_sec,
+        pre_entry_observation_start_age_sec=args.pre_entry_observation_start_age_sec,
+        early_value_entry_enabled=args.early_value_entry_enabled,
+        early_value_start_age_sec=args.early_value_start_age_sec,
+        early_value_end_age_sec=args.early_value_end_age_sec,
+        early_value_min_reference_distance_bps=args.early_value_min_reference_distance_bps,
+        early_value_min_poly_return_bps=args.early_value_min_poly_return_bps,
+        early_value_min_entry_score=args.early_value_min_entry_score,
+        early_value_max_entry_ask=args.early_value_max_entry_ask,
+        early_value_max_spread=args.early_value_max_spread,
+        early_value_hold_protection_enabled=args.early_value_hold_protection_enabled,
         max_entries_per_market=args.max_entries_per_market,
         buy_slippage_ticks=buy_slippage_ticks,
         sell_slippage_ticks=sell_slippage_ticks,

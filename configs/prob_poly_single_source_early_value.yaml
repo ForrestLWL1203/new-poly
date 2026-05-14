@@ -8,7 +8,7 @@ poly_source:
   pre_entry_observation_start_age_sec: 60
   early_to_core_age_sec: 120
   core_to_late_age_sec: 240
-  early_value_entry_enabled: false
+  early_value_entry_enabled: true
   early_value_start_age_sec: 60
   early_value_end_age_sec: 120
   early_value_min_reference_distance_bps: 2.5
@@ -16,7 +16,7 @@ poly_source:
   early_value_min_entry_score: 5.5
   early_value_max_entry_ask: 0.60
   early_value_max_spread: 0.06
-  early_value_hold_protection_enabled: false
+  early_value_hold_protection_enabled: true
   max_entries_per_market: 1
   max_book_age_ms: 1000
   poly_reference_distance_bps: 1.5
@@ -30,8 +30,8 @@ poly_source:
   poly_score_component_logs: compact
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2
-  reference_distance_exit_remaining_sec: [120.0, 90.0, 70.0, 45.0, 30.0]
-  reference_distance_exit_min_bps: [-2.0, -1.0, 1.0, 1.5, 1.75]
+  reference_distance_exit_remaining_sec: [210.0, 180.0, 150.0, 120.0, 90.0, 70.0, 45.0, 30.0]
+  reference_distance_exit_min_bps: [-3.0, -2.0, -1.0, -0.3, -1.0, 1.0, 1.5, 1.75]
   exit_min_hold_sec: 3.0
   hold_to_settlement_enabled: true
   hold_to_settlement_min_profit_ratio: 0.0

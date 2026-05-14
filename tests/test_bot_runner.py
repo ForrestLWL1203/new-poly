@@ -1467,3 +1467,68 @@ def test_reference_distance_cap_skip_log_is_deduped_per_window_side() -> None:
     assert _should_write_row(row, seen) is True
     assert _should_write_row(same_side, seen) is False
     assert _should_write_row(other_side, seen) is True
+
+
+def test_force_write_tick_bypasses_repetitive_skip_dedupe() -> None:
+    from new_poly.bot_runtime import _should_write_row
+
+    seen: set[tuple[str, str]] = set()
+    row = {
+        "event": "tick",
+        "market_slug": "m1",
+        "force_write_tick": True,
+        "decision": {
+            "action": "skip",
+            "reason": "outside_entry_time",
+        },
+    }
+
+    assert _should_write_row(row, seen) is True
+    assert _should_write_row(row, seen) is True
+
+
+def test_pre_entry_observation_tick_is_marked_for_logging_before_entry_window() -> None:
+    from new_poly.bot_execution_flow import handle_flat_tick
+
+    options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
+    cfg = replace(
+        options.config,
+        poly_source=replace(
+            options.config.poly_source,
+            entry_start_age_sec=120.0,
+            entry_end_age_sec=220.0,
+            pre_entry_observation_start_age_sec=60.0,
+        ),
+    )
+    options = replace(options, config=cfg)
+    state = StrategyState(current_market_slug="m1")
+    window = type("Window", (), {"slug": "m1", "up_token": "up-token", "down_token": "down-token"})()
+    snap = MarketSnapshot(
+        market_slug="m1",
+        age_sec=80.0,
+        remaining_sec=220.0,
+        s_price=None,
+        k_price=100.0,
+        sigma_eff=None,
+        polymarket_price=100.01,
+    )
+    row = {"event": "tick", "market_slug": "m1", "mode": "paper", "age_sec": 80}
+
+    decision = asyncio.run(handle_flat_tick(
+        row=row,
+        snap=snap,
+        window=window,
+        prices=None,
+        feeds=None,
+        cfg=cfg,
+        options=options,
+        gateway=None,
+        state=state,
+        sigma_eff=None,
+        price_analysis={},
+        logger=DummyLogger(),
+    ))
+
+    assert decision.reason == "outside_entry_time"
+    assert row["force_write_tick"] is True
+    assert row["observation_reason"] == "pre_entry_observation"
