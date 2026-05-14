@@ -163,20 +163,41 @@ class StrategyState:
         pnl, _closed = self.record_partial_exit(exit_price, self.open_position.filled_shares, reason, exit_age_sec)
         return pnl
 
-    def record_settlement(self, winning_side: str) -> float:
+    def detach_open_position_for_settlement(self) -> PositionSnapshot | None:
         if self.open_position is None:
-            return 0.0
-        settlement_value = 1.0 if self.open_position.token_side == winning_side else 0.0
-        pnl = (settlement_value - self.open_position.entry_avg_price) * self.open_position.filled_shares
+            return None
+        position = self.open_position
+        position.exit_status = "pending_settlement"
+        self.open_position = None
+        self.prob_history = []
+        return position
+
+    def record_position_settlement(self, position: PositionSnapshot, winning_side: str) -> float:
+        settlement_value = 1.0 if position.token_side == winning_side else 0.0
+        pnl = (settlement_value - position.entry_avg_price) * position.filled_shares
         self.realized_pnl += pnl
         self.peak_pnl = max(self.peak_pnl, self.realized_pnl)
-        self.open_position.exit_status = "settled"
-        self.open_position = None
+        position.exit_status = "settled"
         self.last_exit_reason = "settled"
-        self.last_exit_side = None
+        self.last_exit_side = position.token_side
         self.last_exit_age_sec = None
         self.prob_history = []
         return pnl
+
+    def record_position_unsettled(self, position: PositionSnapshot, reason: str) -> float:
+        position.exit_status = reason
+        self.last_exit_reason = reason
+        self.last_exit_side = position.token_side
+        self.last_exit_age_sec = None
+        self.prob_history = []
+        return 0.0
+
+    def record_settlement(self, winning_side: str) -> float:
+        if self.open_position is None:
+            return 0.0
+        position = self.open_position
+        self.open_position = None
+        return self.record_position_settlement(position, winning_side)
 
     def record_model_prob(self, age_sec: float, model_prob: float, *, retention_sec: float = 5.0) -> None:
         if self.prob_history is None:

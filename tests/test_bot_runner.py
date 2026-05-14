@@ -1197,6 +1197,76 @@ def test_window_close_without_position_defers_settlement_until_next_window(monke
     asyncio.run(scenario())
 
 
+def test_window_close_with_open_position_defers_position_settlement_until_close_price_is_ready(monkeypatch) -> None:
+    async def scenario() -> None:
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper", "--windows", "2"]))
+        logger = DummyLogger()
+        loop = bot_loop.LoopRuntime()
+        stream = DummyStream()
+        calls = []
+        first = _window("m1", offset=0)
+        second = _window("m2", offset=5)
+        state = StrategyState(current_market_slug=first.slug)
+        state.record_entry(PositionSnapshot(
+            market_slug=first.slug,
+            token_side="up",
+            token_id=first.up_token,
+            entry_time=120.0,
+            entry_avg_price=0.40,
+            filled_shares=2.0,
+            entry_model_prob=0.70,
+            entry_edge=0.30,
+        ))
+
+        monkeypatch.setattr("new_poly.bot_loop.find_following_window", lambda window, series: second)
+        monkeypatch.setattr("new_poly.bot_loop.fetch_crypto_price_api", lambda window: calls.append(window.slug) or {
+            "openPrice": 100.0,
+            "closePrice": 101.0,
+            "completed": True,
+            "incomplete": False,
+            "cached": True,
+        })
+
+        result = await bot_loop._handle_window_close(
+            window=first,
+            prices=WindowPrices(k_price=100.0),
+            cfg=options.config,
+            options=options,
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=stream),
+            state=state,
+            loop=loop,
+            logger=logger,
+            series=object(),
+            dynamic_state=None,
+            dynamic_task=None,
+        )
+
+        assert result.should_stop is False
+        assert result.window is second
+        assert calls == []
+        assert state.open_position is None
+        assert state.realized_pnl == 0.0
+        assert [row["event"] for row in logger.rows] == ["window_selected"]
+
+        await bot_loop._write_pending_window_settlement_if_due(
+            loop=loop,
+            logger=logger,
+            now=second.start_time + dt.timedelta(seconds=90),
+        )
+
+        assert calls == ["m1"]
+        assert state.realized_pnl == 1.2
+        assert [row["event"] for row in logger.rows] == ["window_selected", "settlement"]
+        row = logger.rows[-1]
+        assert row["market_slug"] == first.slug
+        assert row["winning_side"] == "up"
+        assert row["settlement_source"] == "polymarket_crypto_price_api_close"
+        assert row["settlement_pnl"] == 1.2
+        assert row["realized_pnl"] == 1.2
+
+    asyncio.run(scenario())
+
+
 def test_final_window_close_without_position_waits_then_writes_settlement(monkeypatch) -> None:
     async def scenario() -> None:
         options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper", "--windows", "1"]))
@@ -1237,6 +1307,63 @@ def test_final_window_close_without_position_waits_then_writes_settlement(monkey
         assert logger.rows[-1]["event"] == "window_settlement"
         assert logger.rows[-1]["winning_side"] == "down"
         assert logger.rows[-1]["settlement_close_price"] == 99.0
+
+    asyncio.run(scenario())
+
+
+def test_final_window_close_with_open_position_waits_then_writes_position_settlement(monkeypatch) -> None:
+    async def scenario() -> None:
+        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper", "--windows", "1"]))
+        logger = DummyLogger()
+        loop = bot_loop.LoopRuntime()
+        state = StrategyState(current_market_slug="m1")
+        state.record_entry(PositionSnapshot(
+            market_slug="m1",
+            token_side="down",
+            token_id="m1-down",
+            entry_time=120.0,
+            entry_avg_price=0.25,
+            filled_shares=4.0,
+            entry_model_prob=0.70,
+            entry_edge=0.30,
+        ))
+        calls = []
+        sleeps = []
+        monkeypatch.setattr("new_poly.bot_loop.fetch_crypto_price_api", lambda window: calls.append(window.slug) or {
+            "openPrice": 100.0,
+            "closePrice": 99.0,
+            "completed": True,
+            "incomplete": False,
+            "cached": True,
+        })
+
+        async def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr("new_poly.bot_loop.asyncio.sleep", fake_sleep)
+
+        result = await bot_loop._handle_window_close(
+            window=_window("m1"),
+            prices=WindowPrices(k_price=100.0),
+            cfg=options.config,
+            options=options,
+            feeds=FeedContext(binance=None, coinbase=None, polymarket=None, stream=DummyStream()),
+            state=state,
+            loop=loop,
+            logger=logger,
+            series=object(),
+            dynamic_state=None,
+            dynamic_task=None,
+        )
+
+        assert result.should_stop is True
+        assert sleeps == [90.0]
+        assert calls == ["m1"]
+        assert logger.rows[-1]["event"] == "settlement"
+        assert logger.rows[-1]["winning_side"] == "down"
+        assert logger.rows[-1]["settlement_pnl"] == 3.0
+        assert logger.rows[-1]["realized_pnl"] == 3.0
+        assert state.realized_pnl == 3.0
 
     asyncio.run(scenario())
 

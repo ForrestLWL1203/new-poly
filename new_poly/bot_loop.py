@@ -37,7 +37,7 @@ from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
 from new_poly.strategy.dynamic_params import DynamicDecision, DynamicState
 from new_poly.strategy.dynamic_params import save_dynamic_state
-from new_poly.strategy.state import StrategyState
+from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.clob_client import prefetch_order_params
 
 FINAL_WINDOW_SETTLEMENT_DELAY_SEC = 90.0
@@ -80,6 +80,9 @@ class PendingWindowSettlement:
     cfg: BotConfig
     options: RuntimeOptions
     due_at: dt.datetime
+    state: StrategyState | None = None
+    position: PositionSnapshot | None = None
+    prices: WindowPrices | None = None
 
 
 @dataclass
@@ -318,6 +321,46 @@ async def _settle_open_position_if_needed(
     logger.write(row)
 
 
+async def _write_position_settlement_row(
+    *,
+    window: Any,
+    prices: WindowPrices,
+    cfg: BotConfig,
+    options: RuntimeOptions,
+    state: StrategyState,
+    position: PositionSnapshot,
+    logger: JsonlLogger,
+) -> None:
+    settlement = await _crypto_close_settlement(window, cfg)
+    if settlement["winning_side"] is not None:
+        pnl = state.record_position_settlement(position, settlement["winning_side"])
+    else:
+        pnl = state.record_position_unsettled(position, "unsettled_missing_price")
+    row = {
+        "ts": dt.datetime.now().astimezone().isoformat(),
+        "mode": options.mode,
+        "event": "settlement",
+        "market_slug": window.slug,
+        **settlement,
+        "settlement_price": _compact(settlement.get("settlement_price"), 2),
+        "settlement_open_price": _compact(settlement.get("settlement_open_price"), 2),
+        "settlement_close_price": _compact(settlement.get("settlement_close_price"), 2),
+        "settlement_proxy_price": None,
+        "k_price": _compact(prices.k_price, 2),
+        "position": position.__dict__,
+        "settlement_pnl": _compact(pnl, 4),
+        "realized_pnl": _compact(state.realized_pnl, 4),
+    }
+    risk_event = state.apply_closed_trade_risk(
+        pnl,
+        loss_limit=cfg.risk.consecutive_loss_limit,
+        pause_windows=cfg.risk.loss_pause_windows,
+    )
+    if risk_event is not None:
+        row["risk_event"] = risk_event
+    logger.write(row)
+
+
 async def _crypto_close_settlement(window: Any, cfg: BotConfig) -> dict[str, Any]:
     close_data = await asyncio.to_thread(fetch_crypto_price_api, window)
     close_price = close_data.get("closePrice") if close_data is not None else None
@@ -378,12 +421,23 @@ async def _write_pending_window_settlement_if_due(
     if now < pending.due_at:
         return
     loop.pending_window_settlement = None
-    await _write_window_settlement_row(
-        window=pending.window,
-        cfg=pending.cfg,
-        options=pending.options,
-        logger=logger,
-    )
+    if pending.position is not None and pending.state is not None and pending.prices is not None:
+        await _write_position_settlement_row(
+            window=pending.window,
+            prices=pending.prices,
+            cfg=pending.cfg,
+            options=pending.options,
+            state=pending.state,
+            position=pending.position,
+            logger=logger,
+        )
+    else:
+        await _write_window_settlement_row(
+            window=pending.window,
+            cfg=pending.cfg,
+            options=pending.options,
+            logger=logger,
+        )
 
 
 def _prune_logs_after_window_if_needed(
@@ -466,16 +520,9 @@ async def _handle_window_close(
     trigger_dynamic_analysis: Callable[[int, str, float, BotConfig], asyncio.Task[tuple[DynamicDecision, DynamicState]] | None] | None = None,
     apply_pending_dynamic_profile: Callable[[str, BotConfig], tuple[BotConfig, DynamicState | None]] | None = None,
 ) -> WindowCloseResult:
+    pending_position = None
     if state.has_position:
-        await _settle_open_position_if_needed(
-            window=window,
-            prices=prices,
-            cfg=cfg,
-            options=options,
-            feeds=feeds,
-            state=state,
-            logger=logger,
-        )
+        pending_position = state.detach_open_position_for_settlement()
     if prices.k_price is not None:
         loop.completed_windows += 1
     pause_event = state.advance_loss_pause_after_window(window.slug)
@@ -492,16 +539,30 @@ async def _handle_window_close(
         loop.pending_window_settlement = None
         if prices.k_price is not None:
             await asyncio.sleep(FINAL_WINDOW_SETTLEMENT_DELAY_SEC)
-            await _write_window_settlement_row(window=window, cfg=cfg, options=options, logger=logger)
+            if pending_position is not None:
+                await _write_position_settlement_row(
+                    window=window,
+                    prices=prices,
+                    cfg=cfg,
+                    options=options,
+                    state=state,
+                    position=pending_position,
+                    logger=logger,
+                )
+            else:
+                await _write_window_settlement_row(window=window, cfg=cfg, options=options, logger=logger)
         return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, True)
 
     next_window = find_following_window(window, series)
-    if not state.has_position and prices.k_price is not None:
+    if prices.k_price is not None:
         loop.pending_window_settlement = PendingWindowSettlement(
             window=window,
             cfg=cfg,
             options=options,
             due_at=next_window.start_time + dt.timedelta(seconds=90),
+            state=state if pending_position is not None else None,
+            position=pending_position,
+            prices=prices if pending_position is not None else None,
         )
     if apply_pending_dynamic_profile is not None:
         cfg, dynamic_state = apply_pending_dynamic_profile(next_window.slug, cfg)
