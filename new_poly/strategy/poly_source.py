@@ -198,6 +198,34 @@ def _entry_score(distance_bps: float, trend_bps: float, ask: float, bid: float |
     )
 
 
+def _contextual_reference_floor(
+    *,
+    reference_floor: float | None,
+    position: PositionSnapshot,
+    own_distance: float | None,
+    bid: float,
+    adverse_bid: float | None,
+    remaining_sec: float,
+) -> float | None:
+    if reference_floor is None or own_distance is None:
+        return reference_floor
+    if not (45.0 < remaining_sec <= 70.0):
+        return reference_floor
+    if reference_floor <= 0.25:
+        return reference_floor
+
+    reference_still_supports = own_distance >= 1.5 or (
+        own_distance >= 1.2 and position.entry_avg_price > 0 and bid >= position.entry_avg_price
+    )
+    if not reference_still_supports:
+        return reference_floor
+    if position.entry_avg_price > 0 and bid < position.entry_avg_price * 0.70:
+        return reference_floor
+    if adverse_bid is not None and adverse_bid - bid > 0.35:
+        return reference_floor
+    return 0.25
+
+
 def _hold_score(
     *,
     position: PositionSnapshot,
@@ -210,11 +238,19 @@ def _hold_score(
     hold_to_settlement: bool,
     cfg: PolySourceConfig,
 ) -> PolyHoldScore:
+    effective_floor = _contextual_reference_floor(
+        reference_floor=reference_floor,
+        position=position,
+        own_distance=own_distance,
+        bid=bid,
+        adverse_bid=adverse_bid,
+        remaining_sec=remaining_sec,
+    )
     if own_distance is None or reference_floor is None:
         reference_margin = None
         reference_score = -2.0
     else:
-        reference_margin = own_distance - reference_floor
+        reference_margin = own_distance - effective_floor
         reference_score = min(reference_margin * 1.2, 3.0) if reference_margin >= 0 else reference_margin * 3.0
 
     trend_score = _clamp((trend_bps or 0.0) * 0.5, -1.0, 1.0)
@@ -237,7 +273,7 @@ def _hold_score(
     total = round(reference_score + trend_score + baseline_score + pnl_score + orderbook_score + settlement_bonus, 6)
     return PolyHoldScore(
         total=total,
-        floor_bps=reference_floor,
+        floor_bps=effective_floor,
         reference_margin_bps=reference_margin,
         reference_margin_score=round(reference_score, 6),
         trend_score=round(trend_score, 6),

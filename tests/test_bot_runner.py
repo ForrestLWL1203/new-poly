@@ -1498,6 +1498,7 @@ def test_pre_entry_observation_tick_is_marked_for_logging_before_entry_window() 
             entry_start_age_sec=120.0,
             entry_end_age_sec=220.0,
             pre_entry_observation_start_age_sec=60.0,
+            early_value_entry_enabled=False,
         ),
     )
     options = replace(options, config=cfg)

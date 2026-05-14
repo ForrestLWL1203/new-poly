@@ -546,6 +546,85 @@ def test_poly_source_hold_score_requires_stronger_late_reference_edge() -> None:
     assert at_30s.poly_hold_floor_bps == pytest.approx(1.0)
 
 
+def test_poly_source_midlate_hold_floor_relaxes_when_reference_and_book_still_support() -> None:
+    cfg = PolySourceConfig(
+        poly_trend_lookback_sec=10.0,
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+        min_poly_hold_score=0.0,
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        150.0,
+        0.60,
+        10.0,
+        0.0,
+        5.5,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(
+            poly_price=100.016,
+            return_bps=-2.0,
+            lookback=10.0,
+            up_bid=0.50,
+            down_bid=0.50,
+            age=243.0,
+            remaining=57.0,
+        ),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "hold"
+    assert decision.poly_hold_floor_bps == pytest.approx(0.25)
+    assert decision.poly_hold_score is not None
+    assert decision.poly_hold_score >= 0.0
+
+
+def test_poly_source_midlate_hold_floor_stays_strict_when_reference_is_weak() -> None:
+    cfg = PolySourceConfig(
+        poly_trend_lookback_sec=10.0,
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+        min_poly_hold_score=0.0,
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        150.0,
+        0.60,
+        10.0,
+        0.0,
+        5.5,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(
+            poly_price=100.010,
+            return_bps=-2.0,
+            lookback=10.0,
+            up_bid=0.50,
+            down_bid=0.50,
+            age=243.0,
+            remaining=57.0,
+        ),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "exit"
+    assert decision.reason == "poly_hold_score_exit"
+    assert decision.poly_hold_floor_bps == pytest.approx(1.26)
+
+
 def test_poly_source_poly_hold_score_exit_is_symmetric_for_down_positions() -> None:
     cfg = PolySourceConfig(
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0),

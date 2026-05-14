@@ -8,15 +8,15 @@ poly_source:
   pre_entry_observation_start_age_sec: 60
   early_to_core_age_sec: 120
   core_to_late_age_sec: 240
-  early_value_entry_enabled: false
+  early_value_entry_enabled: true
   early_value_start_age_sec: 60
   early_value_end_age_sec: 120
-  early_value_min_reference_distance_bps: 2.5
-  early_value_min_poly_return_bps: 0.5
-  early_value_min_entry_score: 5.5
-  early_value_max_entry_ask: 0.60
-  early_value_max_spread: 0.06
-  early_value_hold_protection_enabled: false
+  early_value_min_reference_distance_bps: 2.0
+  early_value_min_poly_return_bps: 0.2
+  early_value_min_entry_score: 5.0
+  early_value_max_entry_ask: 0.65
+  early_value_max_spread: 0.08
+  early_value_hold_protection_enabled: true
   max_entries_per_market: 1
   max_book_age_ms: 1000
   poly_reference_distance_bps: 1.5
