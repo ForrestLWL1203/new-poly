@@ -316,6 +316,7 @@ def test_poly_source_entry_amount_scales_by_score_but_not_high_price() -> None:
     assert entry_amount_usd(1.0, score=6.0, entry_price=0.55, cfg=cfg) == pytest.approx(2.0)
     assert entry_amount_usd(1.0, score=6.5, entry_price=0.55, cfg=cfg) == pytest.approx(3.0)
     assert entry_amount_usd(1.0, score=7.5, entry_price=0.70, cfg=cfg) == pytest.approx(1.0)
+    assert entry_amount_usd(1.0, score=8.0, entry_price=0.55, cfg=cfg, phase="early_value") == pytest.approx(1.0)
 
 
 def test_poly_source_early_value_entry_allows_strong_cheap_signal_before_normal_window() -> None:

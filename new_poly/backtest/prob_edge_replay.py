@@ -653,6 +653,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         score=decision.poly_entry_score,
                         entry_price=fill_price,
                         cfg=poly_cfg,
+                        phase=decision.phase,
                     )
                     shares = entry_amount / fill_price
                     state.record_entry(PositionSnapshot(

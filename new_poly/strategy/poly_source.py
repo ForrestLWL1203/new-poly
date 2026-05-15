@@ -154,9 +154,18 @@ def _clamp(value: float, low: float, high: float) -> float:
     return min(max(value, low), high)
 
 
-def entry_amount_usd(base_amount_usd: float, *, score: float | None, entry_price: float | None, cfg: PolySourceConfig) -> float:
+def entry_amount_usd(
+    base_amount_usd: float,
+    *,
+    score: float | None,
+    entry_price: float | None,
+    cfg: PolySourceConfig,
+    phase: str | None = None,
+) -> float:
     base = max(0.0, float(base_amount_usd))
     if base <= 0.0:
+        return base
+    if phase == "early_value":
         return base
     if entry_price is not None and cfg.entry_size_high_price_cap > 0 and entry_price >= cfg.entry_size_high_price_cap:
         return base
