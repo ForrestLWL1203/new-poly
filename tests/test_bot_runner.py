@@ -195,7 +195,7 @@ def test_compact_trade_events_keep_position_snapshots_without_analysis_logs(monk
         exit_row = {"event": "tick", "market_slug": "m1"}
         exit_decision = StrategyDecision(
             action="exit",
-            reason="poly_hold_score_exit",
+            reason="progressive_stop_exit",
             side="up",
             price=0.61,
             limit_price=0.60,
@@ -334,7 +334,7 @@ def test_post_exit_observation_ticks_are_throttled_and_keep_poly_context() -> No
     runner.state = StrategyState(
         current_market_slug="m1",
         entry_count=1,
-        last_exit_reason="poly_hold_score_exit",
+        last_exit_reason="progressive_stop_exit",
         last_exit_side="up",
         last_exit_age_sec=120.0,
     )
@@ -376,7 +376,7 @@ def test_post_exit_observation_ticks_are_throttled_and_keep_poly_context() -> No
     assert len(runner.logger.rows) == 1
     row = runner.logger.rows[0]
     assert row["event"] == "post_exit_observation"
-    assert row["last_exit_reason"] == "poly_hold_score_exit"
+    assert row["last_exit_reason"] == "progressive_stop_exit"
     assert row["last_exit_side"] == "up"
     assert row["last_exit_age_sec"] == 120.0
     assert row["decision"] == {"action": "observe", "reason": "post_exit_observation"}
@@ -611,7 +611,7 @@ def test_exit_writes_exit_intent_before_gateway_returns(monkeypatch) -> None:
         ))
         decision = StrategyDecision(
             action="exit",
-            reason="poly_hold_score_exit",
+            reason="progressive_stop_exit",
             side="down",
             model_prob=0.30,
             price=0.31,
@@ -649,7 +649,7 @@ def test_exit_writes_exit_intent_before_gateway_returns(monkeypatch) -> None:
         assert logger.rows[0]["event"] == "exit_intent"
         assert logger.rows[0]["exit_intent"] == "exit"
         assert logger.rows[0]["exit_side"] == "down"
-        assert logger.rows[0]["exit_reason"] == "poly_hold_score_exit"
+        assert logger.rows[0]["exit_reason"] == "progressive_stop_exit"
         assert logger.rows[0]["shares"] == 2.0
 
         release_gateway.set()
@@ -687,7 +687,7 @@ def test_dust_sell_result_closes_residual_without_crashing(monkeypatch) -> None:
         ))
         decision = StrategyDecision(
             action="exit",
-            reason="poly_hold_score_exit",
+            reason="progressive_stop_exit",
             side="down",
             model_prob=0.30,
             price=0.64,
@@ -759,7 +759,7 @@ def test_intentional_safe_sell_residual_logs_position_reduce(monkeypatch) -> Non
         ))
         decision = StrategyDecision(
             action="exit",
-            reason="poly_hold_score_exit",
+            reason="progressive_stop_exit",
             side="down",
             model_prob=0.30,
             price=0.31,

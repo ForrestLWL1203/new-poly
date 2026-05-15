@@ -54,10 +54,34 @@ def test_poly_single_source_backtest_uses_poly_direction_and_reports_settle_only
     assert result.summary["direction_accuracy"] == 0.5
     assert result.summary["side_counts"] == {"down": 1, "up": 1}
     assert result.summary["settle_only_total_pnl"] == pytest.approx(0.666667 - 1.0)
-    assert result.summary["exit_reason_counts"]["poly_hold_score_exit"] == 1
+    assert result.summary["exit_reason_counts"]["settlement"] == 2
     assert result.trades[0]["entry_side"] == "down"
     assert result.trades[0]["entry_model_prob"] is None
     assert result.trades[0]["poly_entry_score"] is not None
+
+
+def test_backtest_settlement_prefers_window_close_open_over_last_tick_price() -> None:
+    rows = [
+        _poly_row("m1", 120, poly_price=100.03, poly_return_3s=0.4, up_ask=0.60, final_s_price=99.0),
+        _poly_row("m1", 299, poly_price=100.10, poly_return_3s=0.1, up_bid=0.90, final_s_price=99.0),
+        {
+            "event": "window_settlement",
+            "market_slug": "m1",
+            "age_sec": 300,
+            "settlement_open_price": 100.0,
+            "settlement_close_price": 101.0,
+            "winning_side": "up",
+            "settlement_uncertain": False,
+        },
+    ]
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=1.0, entry_start_age_sec=120.0))
+
+    assert result.summary["settlements"] == 1
+    assert result.summary["direction_accuracy"] == 1.0
+    assert result.trades[0]["winning_side"] == "up"
+    assert result.trades[0]["settlement_price"] == 101.0
+    assert result.trades[0]["settlement_k_price"] == 100.0
 
 
 def test_scan_poly_source_configs_returns_ranked_parameter_results() -> None:

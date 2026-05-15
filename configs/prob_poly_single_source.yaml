@@ -17,7 +17,7 @@ poly_source:
   early_value_max_entry_ask: 0.65
   early_value_max_spread: 0.08
   early_value_hold_protection_enabled: true
-  max_entries_per_market: 1
+  max_entries_per_market: 2
   max_book_age_ms: 1000
   poly_reference_distance_bps: 1.5
   max_poly_reference_distance_bps: 4.0
@@ -26,7 +26,16 @@ poly_source:
   max_entry_ask: 0.75
   max_entry_fill_price: 0.75
   min_poly_entry_score: 4.5
-  min_poly_hold_score: 0.0
+  progressive_stop_warmup_sec: 30
+  progressive_stop_full_sec: 120
+  progressive_stop_initial_loss_ratio: 0.50
+  progressive_stop_final_loss_ratio: 0.40
+  progressive_stop_late_remaining_sec: 80
+  progressive_stop_reference_deterioration_bps: 2.0
+  progressive_stop_extreme_loss_ratio: 0.75
+  reentry_cooldown_sec: 20
+  reentry_min_score_bonus: 0.5
+  reentry_max_entry_fill_price: 0.70
   poly_score_component_logs: compact
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2

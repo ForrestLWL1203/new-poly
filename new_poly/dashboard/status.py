@@ -416,7 +416,8 @@ def translate_reason(value: Any) -> str | None:
     mapping = {
         "poly_edge": "策略信号触发",
         "edge": "策略信号触发",
-        "poly_hold_score_exit": "持仓评分转弱，主动退出",
+        "progressive_stop_exit": "价格回撤且参考信号受损，主动退出",
+        "extreme_loss_exit": "极端价格回撤，主动退出",
         "hold_to_settlement": "接近结算，继续持有",
         "final_force_exit": "临近结束，强制退出",
         "risk_exit": "风控退出",

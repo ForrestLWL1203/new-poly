@@ -92,7 +92,8 @@ def test_poly_source_config_exposes_only_active_single_source_exit_knobs() -> No
 
     assert hasattr(cfg, "reference_distance_exit_remaining_sec")
     assert hasattr(cfg, "reference_distance_exit_min_bps")
-    assert hasattr(cfg, "min_poly_hold_score")
+    assert not hasattr(cfg, "min_poly_hold_score")
+    assert not hasattr(cfg, "progressive_stop_enabled")
     assert fields == {
         "entry_start_age_sec",
         "entry_end_age_sec",
@@ -118,7 +119,16 @@ def test_poly_source_config_exposes_only_active_single_source_exit_knobs() -> No
         "max_entry_ask",
         "max_entry_fill_price",
         "min_poly_entry_score",
-        "min_poly_hold_score",
+        "progressive_stop_warmup_sec",
+        "progressive_stop_full_sec",
+        "progressive_stop_initial_loss_ratio",
+        "progressive_stop_final_loss_ratio",
+        "progressive_stop_late_remaining_sec",
+        "progressive_stop_reference_deterioration_bps",
+        "progressive_stop_extreme_loss_ratio",
+        "reentry_cooldown_sec",
+        "reentry_min_score_bonus",
+        "reentry_max_entry_fill_price",
         "poly_score_component_logs",
         "entry_tick_size",
         "buy_price_buffer_ticks",
@@ -226,6 +236,68 @@ def test_poly_source_score_threshold_can_block_entry() -> None:
 
     assert decision.action == "skip"
     assert decision.reason == "poly_score_too_low"
+
+
+def test_poly_source_reentry_waits_for_cooldown() -> None:
+    cfg = PolySourceConfig(max_entries_per_market=2, reentry_cooldown_sec=20.0)
+    state = StrategyState(current_market_slug="m1", entry_count=1, last_exit_age_sec=110.0)
+
+    decision = evaluate_poly_entry(_snapshot(poly_price=100.04, return_bps=0.4, age=125.0), state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "reentry_cooldown"
+
+
+def test_poly_source_reentry_requires_higher_score() -> None:
+    cfg = PolySourceConfig(
+        max_entries_per_market=2,
+        reentry_cooldown_sec=20.0,
+        reentry_min_score_bonus=1.0,
+        min_poly_entry_score=4.5,
+        poly_reference_distance_bps=0.5,
+        poly_return_bps=0.3,
+    )
+    state = StrategyState(current_market_slug="m1", entry_count=1, last_exit_age_sec=100.0)
+
+    decision = evaluate_poly_entry(_snapshot(poly_price=100.025, return_bps=0.4, up_ask=0.56, age=130.0), state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "reentry_score_too_low"
+
+
+def test_poly_source_reentry_requires_lower_price_cap() -> None:
+    cfg = PolySourceConfig(
+        max_entries_per_market=2,
+        reentry_cooldown_sec=20.0,
+        reentry_max_entry_fill_price=0.65,
+        min_poly_entry_score=4.5,
+        max_entry_ask=0.75,
+        poly_reference_distance_bps=0.5,
+        poly_return_bps=0.3,
+    )
+    state = StrategyState(current_market_slug="m1", entry_count=1, last_exit_age_sec=100.0)
+
+    decision = evaluate_poly_entry(_snapshot(poly_price=100.04, return_bps=1.0, up_ask=0.70, age=130.0), state, cfg)
+
+    assert decision.action == "skip"
+    assert decision.reason == "reentry_fill_cap_exceeded"
+
+
+def test_poly_source_reentry_allows_stronger_signal_after_cooldown() -> None:
+    cfg = PolySourceConfig(
+        max_entries_per_market=2,
+        reentry_cooldown_sec=20.0,
+        reentry_min_score_bonus=1.0,
+        reentry_max_entry_fill_price=0.65,
+        min_poly_entry_score=4.5,
+        poly_reference_distance_bps=0.5,
+        poly_return_bps=0.3,
+    )
+    state = StrategyState(current_market_slug="m1", entry_count=1, last_exit_age_sec=100.0)
+
+    decision = evaluate_poly_entry(_snapshot(poly_price=100.04, return_bps=1.0, up_ask=0.64, age=130.0), state, cfg)
+
+    assert decision.action == "enter"
 
 
 def test_poly_source_early_value_entry_allows_strong_cheap_signal_before_normal_window() -> None:
@@ -409,20 +481,189 @@ def test_poly_source_skips_when_best_ask_exceeds_max_fill_price() -> None:
     assert decision.reason == "poly_fill_cap_exceeded"
 
 
-def test_poly_source_poly_hold_score_exit_replaces_fixed_adverse_exit() -> None:
+def test_poly_source_hold_score_is_diagnostic_and_does_not_exit() -> None:
     cfg = PolySourceConfig()
     position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.60, 10.0, 0.0, 0.0)
     snap = _snapshot(poly_price=99.97, return_bps=-0.2, up_bid=0.45, age=140.0)
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
 
-    assert decision.action == "exit"
-    assert decision.reason == "poly_hold_score_exit"
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
     assert decision.model_prob is None
     assert decision.price == 0.45
+    assert decision.poly_hold_score is not None
+    assert decision.poly_hold_score < 0.0
 
 
-def test_poly_source_poly_hold_score_exit_uses_remaining_time_curve() -> None:
+def test_poly_source_progressive_stop_ignores_price_break_when_reference_intact() -> None:
+    cfg = PolySourceConfig(
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        100.0,
+        0.60,
+        10.0,
+        0.0,
+        0.0,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=100.025, return_bps=0.2, up_bid=0.25, age=160.0, remaining=140.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
+    assert decision.progressive_stop_loss_ratio == pytest.approx((0.60 - 0.25) / 0.60)
+    assert decision.progressive_stop_reference_reason is None
+
+
+def test_poly_source_progressive_stop_ignores_reference_break_before_price_threshold() -> None:
+    cfg = PolySourceConfig(
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        100.0,
+        0.60,
+        10.0,
+        0.0,
+        0.0,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=99.99, return_bps=-0.2, up_bid=0.50, age=160.0, remaining=140.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "hold"
+    assert decision.progressive_stop_reference_reason == "reference_crossed_k"
+
+
+def test_poly_source_progressive_stop_exits_when_price_and_reference_break() -> None:
+    cfg = PolySourceConfig(
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        100.0,
+        0.60,
+        10.0,
+        0.0,
+        0.0,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=99.99, return_bps=-0.2, up_bid=0.25, age=160.0, remaining=140.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "exit"
+    assert decision.reason == "progressive_stop_exit"
+    assert decision.progressive_stop_reference_reason == "reference_crossed_k"
+
+
+def test_poly_source_progressive_stop_exits_when_reference_crosses_k_and_price_breaks() -> None:
+    cfg = PolySourceConfig(
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        100.0,
+        0.60,
+        10.0,
+        0.0,
+        0.0,
+        entry_reference_distance_bps=-3.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=99.999, return_bps=-0.2, up_bid=0.25, age=160.0, remaining=140.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "exit"
+    assert decision.reason == "progressive_stop_exit"
+    assert decision.progressive_stop_reference_reason == "reference_crossed_k"
+
+
+def test_poly_source_extreme_loss_exit_does_not_require_reference_break() -> None:
+    cfg = PolySourceConfig()
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        100.0,
+        0.60,
+        10.0,
+        0.0,
+        0.0,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=100.025, return_bps=0.2, up_bid=0.14, age=140.0, remaining=160.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "exit"
+    assert decision.reason == "extreme_loss_exit"
+
+
+def test_poly_source_progressive_stop_late_window_caps_loss_tolerance() -> None:
+    cfg = PolySourceConfig()
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        245.0,
+        0.60,
+        10.0,
+        0.0,
+        0.0,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=99.99, return_bps=-0.2, up_bid=0.41, age=255.0, remaining=45.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "exit"
+    assert decision.reason == "progressive_stop_exit"
+    assert decision.progressive_stop_allowed_loss_ratio == pytest.approx(0.30)
+
+
+def test_poly_source_hold_score_still_logs_remaining_time_curve_without_exiting() -> None:
     cfg = PolySourceConfig(
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 0.25, 0.75, 1.0),
@@ -443,15 +684,16 @@ def test_poly_source_poly_hold_score_exit_uses_remaining_time_curve() -> None:
     )
 
     assert early.action == "hold"
-    assert late.action == "exit"
-    assert late.reason == "poly_hold_score_exit"
+    assert late.action == "hold"
+    assert late.reason == "poly_edge_intact"
+    assert late.poly_hold_score is not None
+    assert late.poly_hold_score < early.poly_hold_score
 
 
 def test_poly_source_hold_score_allows_90s_light_adverse_margin() -> None:
     cfg = PolySourceConfig(
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 0.25, 0.75, 1.0),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -477,11 +719,10 @@ def test_poly_source_hold_score_allows_90s_light_adverse_margin() -> None:
     assert decision.poly_hold_floor_bps == pytest.approx(-1.0)
 
 
-def test_poly_source_hold_score_exits_70s_light_adverse_margin() -> None:
+def test_poly_source_hold_score_logs_70s_light_adverse_margin_without_exiting() -> None:
     cfg = PolySourceConfig(
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 0.25, 0.75, 1.0),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -501,19 +742,18 @@ def test_poly_source_hold_score_exits_70s_light_adverse_margin() -> None:
         StrategyState(current_market_slug="m1"),
     )
 
-    assert decision.action == "exit"
-    assert decision.reason == "poly_hold_score_exit"
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
     assert decision.poly_hold_floor_bps == pytest.approx(0.25)
     assert decision.poly_hold_reference_margin_bps < 0.0
     assert decision.poly_hold_score is not None
     assert decision.poly_hold_score < 0.0
 
 
-def test_poly_source_hold_score_requires_stronger_late_reference_edge() -> None:
+def test_poly_source_hold_score_logs_stronger_late_reference_edge_without_exiting() -> None:
     cfg = PolySourceConfig(
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 0.25, 0.75, 1.0),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -539,10 +779,10 @@ def test_poly_source_hold_score_requires_stronger_late_reference_edge() -> None:
         StrategyState(current_market_slug="m1"),
     )
 
-    assert at_45s.action == "exit"
-    assert at_45s.reason == "poly_hold_score_exit"
+    assert at_45s.action == "hold"
+    assert at_45s.reason == "poly_edge_intact"
     assert at_45s.poly_hold_floor_bps == pytest.approx(0.75)
-    assert at_30s.action == "exit"
+    assert at_30s.action == "hold"
     assert at_30s.poly_hold_floor_bps == pytest.approx(1.0)
 
 
@@ -551,7 +791,6 @@ def test_poly_source_midlate_hold_floor_relaxes_when_reference_and_book_still_su
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -591,7 +830,6 @@ def test_poly_source_midlate_hold_floor_stays_strict_when_reference_is_weak() ->
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -620,12 +858,12 @@ def test_poly_source_midlate_hold_floor_stays_strict_when_reference_is_weak() ->
         StrategyState(current_market_slug="m1"),
     )
 
-    assert decision.action == "exit"
-    assert decision.reason == "poly_hold_score_exit"
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
     assert decision.poly_hold_floor_bps == pytest.approx(1.26)
 
 
-def test_poly_source_poly_hold_score_exit_is_symmetric_for_down_positions() -> None:
+def test_poly_source_hold_score_diagnostic_is_symmetric_for_down_positions() -> None:
     cfg = PolySourceConfig(
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 0.0, 0.75),
@@ -642,8 +880,10 @@ def test_poly_source_poly_hold_score_exit_is_symmetric_for_down_positions() -> N
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
 
-    assert decision.action == "exit"
-    assert decision.reason == "poly_hold_score_exit"
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
+    assert decision.poly_hold_score is not None
+    assert decision.poly_hold_score < 0.0
 
 
 def test_poly_source_late_reference_distance_requires_positive_edge_even_above_k() -> None:
@@ -656,11 +896,11 @@ def test_poly_source_late_reference_distance_requires_positive_edge_even_above_k
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
 
-    assert decision.action == "exit"
-    assert decision.reason == "poly_hold_score_exit"
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
 
 
-def test_poly_source_hold_to_settlement_does_not_mask_poly_hold_score_exit() -> None:
+def test_poly_source_hold_to_settlement_takes_priority_over_hold_score_exit() -> None:
     cfg = PolySourceConfig(
         hold_to_settlement_enabled=True,
         hold_to_settlement_min_profit_ratio=0.0,
@@ -683,23 +923,23 @@ def test_poly_source_hold_to_settlement_does_not_mask_poly_hold_score_exit() -> 
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
 
-    assert decision.action == "exit"
-    assert decision.reason == "poly_hold_score_exit"
+    assert decision.action == "hold"
+    assert decision.reason == "hold_to_settlement"
 
 
 
-def test_poly_source_hold_score_exit_waits_for_min_hold() -> None:
+def test_poly_source_progressive_exit_waits_for_min_hold() -> None:
     cfg = PolySourceConfig(exit_min_hold_sec=3.0)
     position = PositionSnapshot("m1", "up", "up-token", 120.0, 0.60, 10.0, 0.0, 0.0)
 
     immature = evaluate_poly_exit(
-        _snapshot(poly_price=99.98, return_bps=-0.1, up_bid=0.55, age=122.0),
+        _snapshot(poly_price=99.98, return_bps=-0.1, up_bid=0.14, age=122.0),
         position,
         cfg,
         StrategyState(current_market_slug="m1"),
     )
     mature = evaluate_poly_exit(
-        _snapshot(poly_price=99.98, return_bps=-0.1, up_bid=0.55, age=123.0),
+        _snapshot(poly_price=99.98, return_bps=-0.1, up_bid=0.14, age=123.0),
         position,
         cfg,
         StrategyState(current_market_slug="m1"),
@@ -707,7 +947,7 @@ def test_poly_source_hold_score_exit_waits_for_min_hold() -> None:
 
     assert immature.action == "hold"
     assert mature.action == "exit"
-    assert mature.reason == "poly_hold_score_exit"
+    assert mature.reason == "extreme_loss_exit"
 
 def test_poly_source_hold_to_settlement_allows_high_price_winner() -> None:
     cfg = PolySourceConfig(
@@ -732,7 +972,6 @@ def test_poly_source_orderbook_pressure_is_ignored_before_120s() -> None:
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -769,7 +1008,6 @@ def test_poly_source_early_value_hold_protection_starts_orderbook_pressure_befor
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(210.0, 180.0, 150.0, 120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-3.0, -2.0, -1.0, -0.3, -1.0, 1.0, 1.5, 1.75),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -805,7 +1043,6 @@ def test_poly_source_orderbook_pressure_is_light_near_105s() -> None:
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -842,7 +1079,6 @@ def test_poly_source_orderbook_pressure_is_meaningful_near_85s() -> None:
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -880,7 +1116,6 @@ def test_poly_source_orderbook_pressure_can_override_slow_reference_near_66s() -
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -907,8 +1142,8 @@ def test_poly_source_orderbook_pressure_can_override_slow_reference_near_66s() -
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
 
-    assert decision.action == "exit"
-    assert decision.reason == "poly_hold_score_exit"
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
     assert decision.poly_hold_score is not None
     assert decision.poly_hold_score < 0.0
     assert decision.poly_hold_orderbook_score is not None
@@ -920,7 +1155,6 @@ def test_poly_source_orderbook_pressure_remains_strong_near_30s() -> None:
         poly_trend_lookback_sec=10.0,
         reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
         reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
-        min_poly_hold_score=0.0,
     )
     position = PositionSnapshot(
         "m1",
@@ -947,7 +1181,8 @@ def test_poly_source_orderbook_pressure_remains_strong_near_30s() -> None:
 
     decision = evaluate_poly_exit(snap, position, cfg, StrategyState(current_market_slug="m1"))
 
-    assert decision.action == "exit"
+    assert decision.action == "hold"
+    assert decision.reason == "poly_edge_intact"
     assert decision.poly_hold_orderbook_score is not None
     assert decision.poly_hold_orderbook_score < -1.0
 

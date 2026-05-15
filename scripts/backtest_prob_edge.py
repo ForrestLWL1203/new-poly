@@ -78,7 +78,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-entry-ask", type=float, default=0.65)
     parser.add_argument("--max-entry-fill-price", type=float, default=0.0)
     parser.add_argument("--min-poly-entry-score", type=float, default=0.0)
-    parser.add_argument("--min-poly-hold-score", type=float, default=0.0)
+    parser.add_argument("--progressive-stop-warmup-sec", type=float, default=30.0)
+    parser.add_argument("--progressive-stop-full-sec", type=float, default=120.0)
+    parser.add_argument("--progressive-stop-initial-loss-ratio", type=float, default=0.60)
+    parser.add_argument("--progressive-stop-final-loss-ratio", type=float, default=0.30)
+    parser.add_argument("--progressive-stop-late-remaining-sec", type=float, default=80.0)
+    parser.add_argument("--progressive-stop-reference-deterioration-bps", type=float, default=2.0)
+    parser.add_argument("--progressive-stop-extreme-loss-ratio", type=float, default=0.75)
+    parser.add_argument("--reentry-cooldown-sec", type=float, default=20.0)
+    parser.add_argument("--reentry-min-score-bonus", type=float, default=1.0)
+    parser.add_argument("--reentry-max-entry-fill-price", type=float, default=0.65)
     parser.add_argument("--poly-score-component-logs", choices=("compact", "full"), default="compact")
     parser.add_argument("--reference-distance-exit-remaining-sec", default="120,90,70,45,30")
     parser.add_argument("--reference-distance-exit-min-bps", default="-2,-1,0.25,0.75,1")
@@ -93,7 +102,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poly-return-grid", default="0.0,0.1,0.2,0.3,0.5")
     parser.add_argument("--max-entry-ask-grid", default="0.55,0.65,0.75,0.85")
     parser.add_argument("--min-poly-entry-score-grid", default="0.0,2.0,4.0,4.5,5.0")
-    parser.add_argument("--min-poly-hold-score-grid", default="0.0")
     parser.add_argument("--grid-min-entries", type=int, default=0)
     parser.add_argument("--grid-sort-by", choices=("pnl", "win_rate", "avg_pnl"), default="pnl")
     parser.add_argument("--top-n", type=int, default=10)
@@ -144,7 +152,16 @@ def main() -> int:
         max_entry_ask=args.max_entry_ask,
         max_entry_fill_price=args.max_entry_fill_price,
         min_poly_entry_score=args.min_poly_entry_score,
-        min_poly_hold_score=args.min_poly_hold_score,
+        progressive_stop_warmup_sec=args.progressive_stop_warmup_sec,
+        progressive_stop_full_sec=args.progressive_stop_full_sec,
+        progressive_stop_initial_loss_ratio=args.progressive_stop_initial_loss_ratio,
+        progressive_stop_final_loss_ratio=args.progressive_stop_final_loss_ratio,
+        progressive_stop_late_remaining_sec=args.progressive_stop_late_remaining_sec,
+        progressive_stop_reference_deterioration_bps=args.progressive_stop_reference_deterioration_bps,
+        progressive_stop_extreme_loss_ratio=args.progressive_stop_extreme_loss_ratio,
+        reentry_cooldown_sec=args.reentry_cooldown_sec,
+        reentry_min_score_bonus=args.reentry_min_score_bonus,
+        reentry_max_entry_fill_price=args.reentry_max_entry_fill_price,
         poly_score_component_logs=args.poly_score_component_logs,
         reference_distance_exit_remaining_sec=tuple(_float_list(args.reference_distance_exit_remaining_sec)),
         reference_distance_exit_min_bps=tuple(_float_list(args.reference_distance_exit_min_bps)),
@@ -173,7 +190,6 @@ def main() -> int:
             return_thresholds=_float_list(args.poly_return_grid),
             max_entry_asks=_float_list(args.max_entry_ask_grid),
             min_scores=_float_list(args.min_poly_entry_score_grid),
-            min_hold_scores=_float_list(args.min_poly_hold_score_grid),
             base_config=cfg,
             min_entries=max(0, args.grid_min_entries),
             sort_by=args.grid_sort_by,

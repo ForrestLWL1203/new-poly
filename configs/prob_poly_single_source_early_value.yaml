@@ -26,7 +26,6 @@ poly_source:
   max_entry_ask: 0.75
   max_entry_fill_price: 0.75
   min_poly_entry_score: 4.5
-  min_poly_hold_score: 0.0
   poly_score_component_logs: compact
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2

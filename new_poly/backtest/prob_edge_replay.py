@@ -61,7 +61,16 @@ class BacktestConfig:
     max_entry_ask: float = 0.65
     max_entry_fill_price: float = 0.0
     min_poly_entry_score: float = 0.0
-    min_poly_hold_score: float = 0.0
+    progressive_stop_warmup_sec: float = 30.0
+    progressive_stop_full_sec: float = 120.0
+    progressive_stop_initial_loss_ratio: float = 0.60
+    progressive_stop_final_loss_ratio: float = 0.30
+    progressive_stop_late_remaining_sec: float = 80.0
+    progressive_stop_reference_deterioration_bps: float = 2.0
+    progressive_stop_extreme_loss_ratio: float = 0.75
+    reentry_cooldown_sec: float = 20.0
+    reentry_min_score_bonus: float = 1.0
+    reentry_max_entry_fill_price: float = 0.65
     poly_score_component_logs: str = "compact"
     poly_buy_price_buffer_ticks: float = 2.0
     reference_distance_exit_remaining_sec: tuple[float, ...] = (120.0, 90.0, 70.0, 45.0, 30.0)
@@ -97,7 +106,16 @@ class BacktestConfig:
             max_entry_ask=self.max_entry_ask,
             max_entry_fill_price=self.max_entry_fill_price,
             min_poly_entry_score=self.min_poly_entry_score,
-            min_poly_hold_score=self.min_poly_hold_score,
+            progressive_stop_warmup_sec=self.progressive_stop_warmup_sec,
+            progressive_stop_full_sec=self.progressive_stop_full_sec,
+            progressive_stop_initial_loss_ratio=self.progressive_stop_initial_loss_ratio,
+            progressive_stop_final_loss_ratio=self.progressive_stop_final_loss_ratio,
+            progressive_stop_late_remaining_sec=self.progressive_stop_late_remaining_sec,
+            progressive_stop_reference_deterioration_bps=self.progressive_stop_reference_deterioration_bps,
+            progressive_stop_extreme_loss_ratio=self.progressive_stop_extreme_loss_ratio,
+            reentry_cooldown_sec=self.reentry_cooldown_sec,
+            reentry_min_score_bonus=self.reentry_min_score_bonus,
+            reentry_max_entry_fill_price=self.reentry_max_entry_fill_price,
             poly_score_component_logs=self.poly_score_component_logs,
             entry_tick_size=self.entry_tick_size,
             buy_price_buffer_ticks=self.poly_buy_price_buffer_ticks,
@@ -206,6 +224,26 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
 def _settlement(rows: list[dict[str, Any]], *, boundary_usd: float) -> dict[str, Any]:
     if not rows:
         return {"winning_side": None, "settlement_uncertain": True}
+    for row in reversed(rows):
+        if row.get("event") not in {"window_settlement", "settlement"}:
+            continue
+        close_price = _float(row.get("settlement_close_price"))
+        if close_price is None:
+            close_price = _float(row.get("settlement_price"))
+        open_price = _float(row.get("settlement_open_price"))
+        winning_side = row.get("winning_side")
+        if winning_side not in {"up", "down"} and close_price is not None and open_price is not None:
+            winning_side = "up" if close_price >= open_price else "down"
+        if winning_side in {"up", "down"}:
+            uncertain = bool(row.get("settlement_uncertain"))
+            if open_price is not None and close_price is not None:
+                uncertain = abs(close_price - open_price) < boundary_usd
+            return {
+                "winning_side": winning_side,
+                "settlement_uncertain": uncertain,
+                "settlement_price": close_price,
+                "settlement_k_price": open_price,
+            }
     last = rows[-1]
     s_price = _float(last.get("s_price"))
     k_price = _float(last.get("k_price"))
@@ -561,6 +599,9 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "poly_hold_score": decision.poly_hold_score,
                         "poly_hold_floor_bps": decision.poly_hold_floor_bps,
                         "poly_hold_reference_margin_bps": decision.poly_hold_reference_margin_bps,
+                        "progressive_stop_loss_ratio": decision.progressive_stop_loss_ratio,
+                        "progressive_stop_allowed_loss_ratio": decision.progressive_stop_allowed_loss_ratio,
+                        "progressive_stop_reference_reason": decision.progressive_stop_reference_reason,
                     })
                     _annotate_trade_settlement(active_trade, group_settlement)
                     equity += pnl
@@ -703,7 +744,6 @@ def scan_poly_source_configs(
     return_thresholds: Iterable[float],
     max_entry_asks: Iterable[float],
     min_scores: Iterable[float],
-    min_hold_scores: Iterable[float] = (0.0,),
     base_config: BacktestConfig | None = None,
     min_entries: int = 0,
     sort_by: str = "pnl",
@@ -713,14 +753,13 @@ def scan_poly_source_configs(
     for _slug, group in _group_rows(rows):
         materialized.extend(_with_computed_poly_returns(group, entry_start_age_sec=base.entry_start_age_sec))
     results: list[dict[str, Any]] = []
-    for distance, max_distance, lookback, return_bps, max_ask, min_score, min_hold_score in itertools.product(
+    for distance, max_distance, lookback, return_bps, max_ask, min_score in itertools.product(
         reference_distances,
         max_reference_distances,
         trend_lookbacks,
         return_thresholds,
         max_entry_asks,
         min_scores,
-        min_hold_scores,
     ):
         cfg = replace(
             base,
@@ -731,7 +770,6 @@ def scan_poly_source_configs(
             poly_return_bps=float(return_bps),
             max_entry_ask=float(max_ask),
             min_poly_entry_score=float(min_score),
-            min_poly_hold_score=float(min_hold_score),
         )
         result = run_backtest(materialized, cfg)
         if result.summary["entries"] < min_entries:
@@ -743,7 +781,6 @@ def scan_poly_source_configs(
             "poly_return_bps": return_bps,
             "max_entry_ask": max_ask,
             "min_poly_entry_score": min_score,
-            "min_poly_hold_score": min_hold_score,
             **result.summary,
         })
     if sort_by == "win_rate":

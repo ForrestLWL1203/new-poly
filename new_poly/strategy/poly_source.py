@@ -34,7 +34,16 @@ class PolySourceConfig:
     max_entry_ask: float = 0.65
     max_entry_fill_price: float = 0.0
     min_poly_entry_score: float = 0.0
-    min_poly_hold_score: float = 0.0
+    progressive_stop_warmup_sec: float = 30.0
+    progressive_stop_full_sec: float = 120.0
+    progressive_stop_initial_loss_ratio: float = 0.60
+    progressive_stop_final_loss_ratio: float = 0.30
+    progressive_stop_late_remaining_sec: float = 80.0
+    progressive_stop_reference_deterioration_bps: float = 2.0
+    progressive_stop_extreme_loss_ratio: float = 0.75
+    reentry_cooldown_sec: float = 20.0
+    reentry_min_score_bonus: float = 1.0
+    reentry_max_entry_fill_price: float = 0.65
     poly_score_component_logs: str = "compact"
     entry_tick_size: float = 0.01
     buy_price_buffer_ticks: float = 2.0
@@ -120,6 +129,10 @@ def _book_fresh(snapshot: MarketSnapshot, side: str, cfg: PolySourceConfig) -> b
 
 def _max_entry_fill_price(cfg: PolySourceConfig) -> float | None:
     return cfg.max_entry_fill_price if cfg.max_entry_fill_price > 0 else None
+
+
+def _reentry_max_entry_fill_price(cfg: PolySourceConfig) -> float | None:
+    return cfg.reentry_max_entry_fill_price if cfg.reentry_max_entry_fill_price > 0 else None
 
 
 def _raw_poly_side(snapshot: MarketSnapshot) -> str | None:
@@ -284,6 +297,44 @@ def _hold_score(
     )
 
 
+def _progressive_allowed_loss_ratio(held_sec: float, remaining_sec: float, cfg: PolySourceConfig) -> float:
+    initial = max(0.0, cfg.progressive_stop_initial_loss_ratio)
+    final = max(0.0, cfg.progressive_stop_final_loss_ratio)
+    warmup = max(0.0, cfg.progressive_stop_warmup_sec)
+    full = max(warmup, cfg.progressive_stop_full_sec)
+    if held_sec <= warmup:
+        allowed = initial
+    elif held_sec >= full:
+        allowed = final
+    else:
+        progress = (held_sec - warmup) / (full - warmup) if full > warmup else 1.0
+        allowed = initial + progress * (final - initial)
+    if remaining_sec <= cfg.progressive_stop_late_remaining_sec:
+        allowed = min(allowed, final)
+    return max(0.0, allowed)
+
+
+def _progressive_reference_reason(
+    *,
+    own_distance: float | None,
+    reference_floor: float | None,
+    position: PositionSnapshot,
+    cfg: PolySourceConfig,
+) -> str | None:
+    if own_distance is None:
+        return None
+    if own_distance < 0.0:
+        return "reference_crossed_k"
+    if reference_floor is not None and own_distance < reference_floor:
+        return "reference_floor_broken"
+    if (
+        position.entry_reference_distance_bps is not None
+        and own_distance <= position.entry_reference_distance_bps - cfg.progressive_stop_reference_deterioration_bps
+    ):
+        return "reference_deteriorated"
+    return None
+
+
 def _decision(
     action: str,
     reason: str,
@@ -301,6 +352,9 @@ def _decision(
     entry_score: PolyEntryScore | None = None,
     hold_score: PolyHoldScore | None = None,
     phase: str | None = None,
+    progressive_loss_ratio: float | None = None,
+    progressive_allowed_loss_ratio: float | None = None,
+    progressive_reference_reason: str | None = None,
 ) -> StrategyDecision:
     return StrategyDecision(
         action=action,
@@ -331,6 +385,9 @@ def _decision(
         poly_hold_pnl_context_score=(hold_score.pnl_context_score if hold_score is not None else None),
         poly_hold_orderbook_score=(hold_score.orderbook_score if hold_score is not None else None),
         poly_hold_settlement_bonus=(hold_score.settlement_bonus if hold_score is not None else None),
+        progressive_stop_loss_ratio=progressive_loss_ratio,
+        progressive_stop_allowed_loss_ratio=progressive_allowed_loss_ratio,
+        progressive_stop_reference_reason=progressive_reference_reason,
         market_disagreement=market_disagreement,
         profit_now=profit_now,
     )
@@ -343,6 +400,12 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
         return _decision("skip", "loss_pause", cfg=cfg, snapshot=snapshot)
     if state.entry_count >= cfg.max_entries_per_market:
         return _decision("skip", "max_entries", cfg=cfg, snapshot=snapshot)
+    is_reentry = state.entry_count > 0
+    if is_reentry:
+        if state.last_exit_age_sec is None:
+            return _decision("skip", "reentry_missing_exit_age", cfg=cfg, snapshot=snapshot)
+        if snapshot.age_sec - state.last_exit_age_sec < cfg.reentry_cooldown_sec:
+            return _decision("skip", "reentry_cooldown", cfg=cfg, snapshot=snapshot)
 
     phase = _entry_phase(snapshot, cfg)
     if not phase.allowed:
@@ -370,9 +433,14 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
     max_fill = _max_entry_fill_price(cfg)
     if max_fill is not None and ask > max_fill:
         return _decision("skip", "poly_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+    reentry_max_fill = _reentry_max_entry_fill_price(cfg)
+    if is_reentry and reentry_max_fill is not None and ask > reentry_max_fill:
+        return _decision("skip", "reentry_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
     score = _entry_score(distance, trend, ask, _bid(snapshot, side))
     if score.total < cfg.min_poly_entry_score:
         return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+    if is_reentry and score.total < cfg.min_poly_entry_score + cfg.reentry_min_score_bonus:
+        return _decision("skip", "reentry_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
     if phase.phase == "early_value":
         bid = _bid(snapshot, side)
         spread = (ask - bid) if bid is not None else None
@@ -386,7 +454,12 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
             return _decision("skip", "early_value_spread_too_wide", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
         if score.total < cfg.early_value_min_entry_score:
             return _decision("skip", "early_value_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
-    limit = min(1.0, max_fill if max_fill is not None else 1.0)
+    limit_candidates = [1.0]
+    if max_fill is not None:
+        limit_candidates.append(max_fill)
+    if is_reentry and reentry_max_fill is not None:
+        limit_candidates.append(reentry_max_fill)
+    limit = min(limit_candidates)
     reason = "poly_early_value" if phase.phase == "early_value" else "poly_edge"
     return _decision("enter", reason, side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
 
@@ -418,11 +491,58 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
         hold_to_settlement=hold_to_settlement,
         cfg=cfg,
     )
-    if held_sec >= cfg.exit_min_hold_sec and hold_score.total < cfg.min_poly_hold_score:
-        return _decision("exit", "poly_hold_score_exit", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score)
+    loss_ratio = 0.0
+    if position.entry_avg_price > 0:
+        loss_ratio = max(0.0, (position.entry_avg_price - bid) / position.entry_avg_price)
+    allowed_loss_ratio = _progressive_allowed_loss_ratio(held_sec, snapshot.remaining_sec, cfg)
+    reference_reason = _progressive_reference_reason(
+        own_distance=own_distance,
+        reference_floor=reference_floor,
+        position=position,
+        cfg=cfg,
+    )
+    if held_sec >= cfg.exit_min_hold_sec and loss_ratio >= cfg.progressive_stop_extreme_loss_ratio:
+        return _decision(
+            "exit",
+            "extreme_loss_exit",
+            side=side,
+            price=bid,
+            limit_price=bid_limit,
+            distance_bps=own_distance,
+            trend_bps=trend,
+            cfg=cfg,
+            snapshot=snapshot,
+            profit_now=profit_now,
+            hold_score=hold_score,
+            progressive_loss_ratio=loss_ratio,
+            progressive_allowed_loss_ratio=allowed_loss_ratio,
+            progressive_reference_reason=reference_reason,
+        )
+    if (
+        not hold_to_settlement
+        and held_sec >= cfg.exit_min_hold_sec
+        and loss_ratio >= allowed_loss_ratio
+        and reference_reason is not None
+    ):
+        return _decision(
+            "exit",
+            "progressive_stop_exit",
+            side=side,
+            price=bid,
+            limit_price=bid_limit,
+            distance_bps=own_distance,
+            trend_bps=trend,
+            cfg=cfg,
+            snapshot=snapshot,
+            profit_now=profit_now,
+            hold_score=hold_score,
+            progressive_loss_ratio=loss_ratio,
+            progressive_allowed_loss_ratio=allowed_loss_ratio,
+            progressive_reference_reason=reference_reason,
+        )
     if hold_to_settlement:
-        return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score)
-    return _decision("hold", "poly_edge_intact", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score)
+        return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score, progressive_loss_ratio=loss_ratio, progressive_allowed_loss_ratio=allowed_loss_ratio, progressive_reference_reason=reference_reason)
+    return _decision("hold", "poly_edge_intact", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score, progressive_loss_ratio=loss_ratio, progressive_allowed_loss_ratio=allowed_loss_ratio, progressive_reference_reason=reference_reason)
 
 
 def _reference_distance_exit_floor(remaining_sec: float, cfg: PolySourceConfig) -> float | None:

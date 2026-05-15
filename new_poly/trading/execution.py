@@ -285,7 +285,8 @@ PROFIT_SELL_EXIT_REASONS = frozenset({
 
 RISK_SELL_EXIT_REASONS = frozenset({
     "risk_exit",
-    "poly_hold_score_exit",
+    "progressive_stop_exit",
+    "extreme_loss_exit",
 })
 
 
