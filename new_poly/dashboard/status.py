@@ -122,6 +122,8 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
     warnings: list[str] = []
     errors: list[dict[str, Any]] = []
     window_records: list[dict[str, Any]] = []
+    window_record_by_slug: dict[str, dict[str, Any]] = {}
+    selected_window_record_by_slug: dict[str, dict[str, Any]] = {}
     window_index_by_slug: dict[str, int] = {}
     pnl_events: list[float] = []
     latest_realized_pnl: float | None = None
@@ -152,9 +154,8 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
             window_index = int(row.get("completed_windows") or 0) + 1
             record = _window_record(row, window_index=window_index)
             slug = str(record["market_slug"])
-            if slug not in window_index_by_slug:
-                window_index_by_slug[slug] = window_index
-                window_records.append(record)
+            selected_window_record_by_slug[slug] = record
+            window_index_by_slug.setdefault(slug, window_index)
         elif event == "tick":
             latest_tick = _latest_tick(row)
             current_window.setdefault("market_slug", row.get("market_slug"))
@@ -168,6 +169,13 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
             _attach_cashflow(row, item, kind="buy")
             entries.append(item)
             cashflows.append(_cashflow_item(row, item, kind="buy"))
+            _ensure_window_record(
+                row,
+                window_records=window_records,
+                window_record_by_slug=window_record_by_slug,
+                selected_window_record_by_slug=selected_window_record_by_slug,
+                window_index_by_slug=window_index_by_slug,
+            )
             if isinstance(row.get("position_after_entry"), dict):
                 open_position = row["position_after_entry"]
             elif item.get("status") == "filled":
@@ -204,6 +212,14 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
             item["status"] = "failed"
             item["failure_reason"] = _failure_reason(row)
             (exits if intent == "exit" else entries).append(item)
+            if intent == "entry":
+                _ensure_window_record(
+                    row,
+                    window_records=window_records,
+                    window_record_by_slug=window_record_by_slug,
+                    selected_window_record_by_slug=selected_window_record_by_slug,
+                    window_index_by_slug=window_index_by_slug,
+                )
         elif event in {"settlement", "window_settlement"}:
             _apply_window_settlement(window_records, row)
             if event == "settlement" and row.get("settlement_pnl") is not None:
@@ -534,6 +550,26 @@ def _window_record(row: dict[str, Any], *, window_index: int) -> dict[str, Any]:
         "window_end_time": _format_bj_time(end),
         "actual_settlement_side": "未知",
     }
+
+
+def _ensure_window_record(
+    row: dict[str, Any],
+    *,
+    window_records: list[dict[str, Any]],
+    window_record_by_slug: dict[str, dict[str, Any]],
+    selected_window_record_by_slug: dict[str, dict[str, Any]],
+    window_index_by_slug: dict[str, int],
+) -> None:
+    slug = str(row.get("market_slug") or "")
+    if not slug or slug in window_record_by_slug:
+        return
+    record = selected_window_record_by_slug.get(slug)
+    if record is None:
+        window_index = window_index_by_slug.get(slug) or len(window_records) + 1
+        record = _window_record(row, window_index=window_index)
+    window_record_by_slug[slug] = record
+    window_index_by_slug.setdefault(slug, int(record.get("window_index") or len(window_records) + 1))
+    window_records.append(record)
 
 
 def _apply_window_settlement(window_records: list[dict[str, Any]], row: dict[str, Any]) -> None:
