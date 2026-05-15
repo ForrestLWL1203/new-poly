@@ -49,6 +49,7 @@ def build_dashboard_status(
             "trades": [],
             "window_records": [],
             "cashflows": [],
+            "trade_direction_accuracy": _trade_direction_accuracy({}, {}),
             "realized_pnl": 0.0,
             "open_position": None,
             "warnings": [],
@@ -123,6 +124,9 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
     errors: list[dict[str, Any]] = []
     window_records: list[dict[str, Any]] = []
     window_index_by_slug: dict[str, int] = {}
+    action_market_slugs: set[str] = set()
+    trade_side_by_slug: dict[str, str] = {}
+    settlement_side_by_slug: dict[str, str] = {}
     pnl_events: list[float] = []
     latest_realized_pnl: float | None = None
     open_position = None
@@ -164,6 +168,8 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
                 open_position = None
             realized_pnl = _float_or(realized_pnl, row.get("realized_pnl"))
         elif event == "entry":
+            _mark_action_window(action_market_slugs, row)
+            _mark_trade_side(trade_side_by_slug, row.get("market_slug"), row.get("entry_side") or row.get("side"))
             item = _trade_item(row, intent="entry", success_default=True)
             _attach_cashflow(row, item, kind="buy")
             entries.append(item)
@@ -174,6 +180,7 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
                 open_position = _position_from_entry(row)
             realized_pnl = _float_or(realized_pnl, row.get("realized_pnl"))
         elif event == "exit":
+            _mark_action_window(action_market_slugs, row)
             item = _trade_item(row, intent="exit", success_default=True)
             _attach_cashflow(row, item, kind="sell")
             exits.append(item)
@@ -186,6 +193,7 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
             if row.get("exit_pnl") is not None and row.get("realized_pnl") is None:
                 realized_pnl = round(realized_pnl + float(row["exit_pnl"]), 6)
         elif event == "position_reduce":
+            _mark_action_window(action_market_slugs, row)
             item = _trade_item(row, intent="exit", success_default=True)
             item["status"] = "partial"
             _attach_cashflow(row, item, kind="sell")
@@ -197,14 +205,22 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
                 pnl_events.append(float(row["exit_pnl"]))
             realized_pnl = _float_or(realized_pnl, row.get("realized_pnl"))
         elif event == "order_no_fill":
+            _mark_action_window(action_market_slugs, row)
             intent = "exit" if row.get("exit_intent") == "exit" or row.get("order_intent") == "exit" else "entry"
+            if intent == "entry":
+                _mark_trade_side(trade_side_by_slug, row.get("market_slug"), row.get("entry_side") or row.get("side"))
             item = _trade_item(row, intent=intent, success_default=False)
             item["status"] = "failed"
             item["failure_reason"] = _failure_reason(row)
             (exits if intent == "exit" else entries).append(item)
         elif event in {"settlement", "window_settlement"}:
             _apply_window_settlement(window_records, row)
+            _mark_settlement_side(settlement_side_by_slug, row)
             if event == "settlement" and row.get("settlement_pnl") is not None:
+                item = _settlement_trade_item(row)
+                if item is not None:
+                    _mark_action_window(action_market_slugs, row)
+                    exits.append(item)
                 pnl_events.append(float(row["settlement_pnl"]))
         elif event == "fatal_stop":
             fatal_stop_reason = row.get("fatal_stop_reason") or row.get("reason")
@@ -253,9 +269,10 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
         "latest_tick": latest_tick,
         "entries": entries[-25:],
         "exits": exits[-25:],
-        "trades": _merge_trades(entries, exits, window_index_by_slug=window_index_by_slug)[-25:],
-        "window_records": window_records[-50:],
+        "trades": _merge_trades(entries, exits, window_index_by_slug=window_index_by_slug),
+        "window_records": _action_window_records(window_records, action_market_slugs),
         "cashflows": [item for item in cashflows if item is not None][-50:],
+        "trade_direction_accuracy": _trade_direction_accuracy(trade_side_by_slug, settlement_side_by_slug),
         "realized_pnl": round(realized_pnl, 6),
         "open_position": open_position,
         "warnings": warnings[-20:],
@@ -331,6 +348,77 @@ def _position_after_reduce(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _settlement_trade_item(row: dict[str, Any]) -> dict[str, Any] | None:
+    position = row.get("position") if isinstance(row.get("position"), dict) else {}
+    side = position.get("token_side")
+    shares = position.get("filled_shares")
+    winning_side = row.get("winning_side")
+    if not side or shares is None or winning_side is None:
+        return None
+    price = 1.0 if str(side).lower() == str(winning_side).lower() else 0.0
+    return {
+        "ts": row.get("ts"),
+        "mode": row.get("mode"),
+        "market_slug": row.get("market_slug") or position.get("market_slug"),
+        "side": side,
+        "status": "filled",
+        "price": price,
+        "shares": _round_or_none(shares),
+        "reason": "settlement",
+        "reason_text": "结算",
+        "message": "settlement",
+        "order_result_text": "结算",
+        "pnl": _round_or_none(row.get("settlement_pnl")),
+        "settlement": True,
+    }
+
+
+def _mark_action_window(action_market_slugs: set[str], row: dict[str, Any]) -> None:
+    slug = row.get("market_slug")
+    if slug:
+        action_market_slugs.add(str(slug))
+
+
+def _mark_trade_side(trade_side_by_slug: dict[str, str], slug: Any, side: Any) -> None:
+    if not slug or not side or str(slug) in trade_side_by_slug:
+        return
+    display = _display_side(side)
+    if display in {"UP", "DOWN"}:
+        trade_side_by_slug[str(slug)] = display
+
+
+def _mark_settlement_side(settlement_side_by_slug: dict[str, str], row: dict[str, Any]) -> None:
+    slug = row.get("market_slug")
+    side = _display_side(row.get("winning_side"))
+    if slug and side in {"UP", "DOWN"}:
+        settlement_side_by_slug[str(slug)] = side
+
+
+def _trade_direction_accuracy(trade_side_by_slug: dict[str, str], settlement_side_by_slug: dict[str, str]) -> dict[str, Any]:
+    total = 0
+    correct = 0
+    for slug, side in trade_side_by_slug.items():
+        settlement_side = settlement_side_by_slug.get(slug)
+        if settlement_side not in {"UP", "DOWN"}:
+            continue
+        total += 1
+        if side == settlement_side:
+            correct += 1
+    rate = round(correct / total, 6) if total else None
+    return {
+        "correct": correct,
+        "total": total,
+        "rate": rate,
+        "label": f"{correct}/{total} ({rate * 100:.1f}%)" if rate is not None else "-",
+    }
+
+
+def _action_window_records(window_records: list[dict[str, Any]], action_market_slugs: set[str]) -> list[dict[str, Any]]:
+    if not action_market_slugs:
+        return []
+    return [record for record in window_records if str(record.get("market_slug") or "") in action_market_slugs]
+
+
 def _merge_trades(
     entries: list[dict[str, Any]],
     exits: list[dict[str, Any]],
@@ -385,7 +473,7 @@ def _trade_record(
         "buy_price": entry.get("price") if entry else None,
         "buy_status": entry.get("status") if entry else None,
         "buy_reason": _trade_buy_reason(entry),
-        "sell_time": _format_bj(_parse_ts(exit_row.get("ts"))) if exit_row else None,
+        "sell_time": "settlement" if exit_row and exit_row.get("settlement") else (_format_bj(_parse_ts(exit_row.get("ts"))) if exit_row else None),
         "sell_price": exit_row.get("price") if exit_row else None,
         "pnl": exit_row.get("pnl") if exit_row else None,
         "exit_reason": _trade_exit_reason(exit_row),
@@ -422,6 +510,7 @@ def translate_reason(value: Any) -> str | None:
         "risk_exit": "风控退出",
         "market_disagrees_exit": "盘口走势转弱，风控退出",
         "polymarket_divergence_exit": "参考价格背离，风控退出",
+        "settlement": "结算",
         "order_no_fill": "未成交，盘口流动性不足或价格未触达",
         "no_fill": "未成交，盘口流动性不足或价格未触达",
         "no_liquidity": "未成交，盘口流动性不足或价格未触达",

@@ -94,6 +94,12 @@
     button:disabled { cursor: wait; opacity: .58; }
     .primary { background: var(--accent); color: var(--ink); border-color: var(--accent); }
     .danger { background: #3a1d20; border-color: #7d3339; color: #ffd8dc; }
+    .icon-button {
+      width: 30px;
+      min-height: 30px;
+      padding: 0;
+      line-height: 1;
+    }
 
     .status-line {
       min-height: 22px;
@@ -209,6 +215,22 @@
 
     tr:last-child td { border-bottom: 0; }
 
+    .pager {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-bottom: 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pager button {
+      min-height: 30px;
+      padding: 0 9px;
+      font-size: 12px;
+    }
+
     pre {
       white-space: pre-wrap;
       word-break: break-word;
@@ -288,6 +310,7 @@
       <div class="panel"><div id="remainingLabel" class="label">当前窗口剩余</div><div id="remaining" class="value">-</div><div id="entryHint" class="hint"></div></div>
       <div class="panel"><div class="label">本次运行总剩余</div><div id="totalRemaining" class="value">-</div></div>
       <div class="panel"><div class="label">Realized PNL</div><div id="pnl" class="value">-</div></div>
+      <div class="panel"><div class="label">方向判断正确率</div><div id="directionAccuracy" class="value small">-</div></div>
       <div class="panel"><div class="label">目标窗口</div><div id="window" class="value small">-</div></div>
       <div class="panel"><div class="label">窗口进度</div><div id="progress" class="value small">-</div></div>
       <div class="panel"><div class="label">日志</div><div id="logName" class="value small">-</div></div>
@@ -296,11 +319,13 @@
 
     <section class="section">
       <h2>窗口记录</h2>
+      <div id="windowPager" class="pager"></div>
       <div class="table-wrap"><table id="windowTable"></table></div>
     </section>
 
     <section class="section">
       <h2>交易记录</h2>
+      <div id="tradePager" class="pager"></div>
       <div class="table-wrap"><table id="tradeTable"></table></div>
     </section>
 
@@ -310,7 +335,6 @@
         <div class="section-actions">
           <button id="refreshLogs">刷新日志</button>
           <button id="analyzeLog" class="primary">分析日志</button>
-          <button id="deleteLogs" class="danger">删除日志</button>
         </div>
       </div>
       <div class="table-wrap"><table id="logTable"></table></div>
@@ -330,7 +354,18 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const state = { loading: false, data: null, countdownTimer: null, pollTimer: null, statusPollMs: 5000, analysisStem: null };
+    const state = {
+      loading: false,
+      data: null,
+      countdownTimer: null,
+      pollTimer: null,
+      statusPollMs: 5000,
+      analysisStem: null,
+      windowPage: 1,
+      windowPageSize: 10,
+      tradePage: 1,
+      tradePageSize: 20,
+    };
 
     $("refresh").addEventListener("click", refresh);
     $("mode").addEventListener("change", () => {
@@ -343,8 +378,8 @@
     $("logout").addEventListener("click", logout);
     $("refreshLogs").addEventListener("click", () => refreshLogs());
     $("analyzeLog").addEventListener("click", analyzeSelectedLog);
-    $("deleteLogs").addEventListener("click", deleteSelectedLogs);
     $("logTable").addEventListener("change", handleLogSelectionChange);
+    $("logTable").addEventListener("click", handleLogDeleteClick);
 
     async function refresh(options = {}) {
       const mode = $("mode").value;
@@ -453,26 +488,25 @@
       $("statusLine").textContent = `已分析：${state.analysisStem}`;
     }
 
-    async function deleteSelectedLogs() {
-      const stems = selectedLogStems();
-      if (!stems.length) {
-        $("statusLine").textContent = "请先选择要删除的日志。";
+    async function deleteLogStem(stem) {
+      if (!stem) {
+        $("statusLine").textContent = "日志标识缺失，无法删除。";
         return;
       }
-      if (!confirm(`确认删除 ${stems.length} 组日志？文件会先移入 .trash。`)) return;
+      if (!confirm(`确认删除日志 ${stem}？文件会先移入 .trash。`)) return;
       setLoading(true, "正在移动所选日志到回收目录...");
       try {
         await fetchJson("/api/logs/delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stems }),
+          body: JSON.stringify({ stems: [stem] }),
         });
         await refreshLogs({ silent: true });
-        if (state.analysisStem && stems.includes(state.analysisStem)) {
+        if (state.analysisStem === stem) {
           state.analysisStem = null;
         }
         await refresh({ silent: true });
-        $("statusLine").textContent = "所选日志已移入 .trash。";
+        $("statusLine").textContent = "日志已移入 .trash。";
       } catch (err) {
         $("statusLine").textContent = `删除日志失败：${err.message}`;
       } finally {
@@ -490,10 +524,17 @@
       updateCountdown();
       $("pnl").textContent = money(data.realized_pnl);
       $("pnl").className = `value ${Number(data.realized_pnl) >= 0 ? "good" : "bad"}`;
+      $("directionAccuracy").textContent = accuracyText(data.trade_direction_accuracy);
       $("window").textContent = data.current_window ? (data.current_window.display_name || data.current_window.market_slug || "-") : "-";
       $("progress").textContent = progressText(data);
       $("logName").textContent = data.log_name || data.log_path || "-";
       $("position").textContent = data.open_position ? JSON.stringify(data.open_position, null, 2) : "无";
+      const windowPage = paginateRows(orderedRows(data.window_records || [], { reverse: false }), state.windowPage, state.windowPageSize);
+      state.windowPage = windowPage.page;
+      const tradePage = paginateRows(orderedRows(data.trades || [], { reverse: false }), state.tradePage, state.tradePageSize);
+      state.tradePage = tradePage.page;
+      renderPager("windowPager", windowPage, "window");
+      renderPager("tradePager", tradePage, "trade");
       renderTable(
         "windowTable",
         [
@@ -503,7 +544,7 @@
           ["window_end_time", "结束时间"],
           ["actual_settlement_side", "实际结算方向"],
         ],
-        data.window_records || [],
+        windowPage.rows,
       );
       renderTable(
         "tradeTable",
@@ -518,7 +559,7 @@
           ["pnl", "单笔 PNL"],
           ["exit_reason", "退出原因"],
         ],
-        data.trades || [],
+        tradePage.rows,
       );
       $("messages").textContent = JSON.stringify({
         fatal_stop_reason: data.fatal_stop_reason,
@@ -535,7 +576,7 @@
 
     function renderTable(id, columns, rows) {
       const head = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(Array.isArray(c) ? c[1] : c)}</th>`).join("")}</tr></thead>`;
-      const bodyRows = rows.length ? rows.slice().reverse().map((row) => {
+      const bodyRows = rows.length ? rows.map((row) => {
         return `<tr>${columns.map((c) => {
           const key = Array.isArray(c) ? c[0] : c;
           return `<td>${escapeHtml(formatCell(row[key]))}</td>`;
@@ -544,12 +585,56 @@
       $(id).innerHTML = head + `<tbody>${bodyRows}</tbody>`;
     }
 
+    function orderedRows(rows, options = {}) {
+      return options.reverse ? rows.slice().reverse() : rows.slice();
+    }
+
+    function paginateRows(rows, page, pageSize) {
+      const totalRows = rows.length;
+      const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+      const safePage = Math.min(Math.max(1, Number(page) || 1), totalPages);
+      const start = (safePage - 1) * pageSize;
+      return {
+        rows: rows.slice(start, start + pageSize),
+        page: safePage,
+        pageSize,
+        totalPages,
+        totalRows,
+      };
+    }
+
+    function renderPager(id, pageInfo, kind) {
+      const prevDisabled = pageInfo.page <= 1 ? " disabled" : "";
+      const nextDisabled = pageInfo.page >= pageInfo.totalPages ? " disabled" : "";
+      $(id).innerHTML = `
+        <span>${escapeHtml(pageInfo.totalRows)} 条 · 第 ${escapeHtml(pageInfo.page)} / ${escapeHtml(pageInfo.totalPages)} 页</span>
+        <button type="button" data-page-kind="${kind}" data-page-delta="-1"${prevDisabled}>上一页</button>
+        <button type="button" data-page-kind="${kind}" data-page-delta="1"${nextDisabled}>下一页</button>
+      `;
+      $(id).querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", handlePageClick);
+      });
+    }
+
+    function handlePageClick(event) {
+      const button = event.currentTarget;
+      const delta = Number(button.dataset.pageDelta || 0);
+      if (button.dataset.pageKind === "window") {
+        state.windowPage += delta;
+      } else if (button.dataset.pageKind === "trade") {
+        state.tradePage += delta;
+      }
+      if (state.data) render(state.data);
+    }
+
     function renderLogs(rows) {
-      const columns = ["", "类型", "开始时间", "结束时间", "时长", "轮数", "状态", "大小", "文件", "主日志"];
+      const columns = ["", "类型", "开始时间", "结束时间", "时长", "计划窗口数", "实际完成窗口数", "状态", "大小", ""];
       const head = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>`;
       const body = rows.length ? rows.map((row) => {
         const disabled = row.status === "running" || historyLocked() ? " disabled" : "";
         const checked = `<input class="log-check" type="checkbox" value="${escapeHtml(row.stem)}" data-running="${row.status === "running" ? "true" : "false"}"${disabled}>`;
+        const deleteDisabled = row.status === "running" || historyLocked() ? " disabled" : "";
+        const deleteButton = `<button class="log-delete icon-button danger" type="button" title="删除日志" aria-label="删除日志" data-stem="${escapeHtml(row.stem || "")}"${deleteDisabled}>🗑</button>`;
         return `<tr>
           <td>${checked}</td>
           <td>${escapeHtml(row.mode || "-")}</td>
@@ -557,10 +642,10 @@
           <td>${escapeHtml(row.ended_at_text || row.ended_at || "-")}</td>
           <td>${escapeHtml(row.duration_text || "-")}</td>
           <td>${escapeHtml(row.windows ?? "-")}</td>
+          <td>${escapeHtml(row.completed_windows ?? "-")}</td>
           <td>${escapeHtml(row.status || "-")}</td>
           <td>${escapeHtml(row.total_size_text || "-")}</td>
-          <td>${escapeHtml(row.file_count ?? "-")}</td>
-          <td>${escapeHtml(row.primary_log || row.stem || "-")}</td>
+          <td>${deleteButton}</td>
         </tr>`;
       }).join("") : `<tr><td colspan="${columns.length}">暂无日志</td></tr>`;
       $("logTable").innerHTML = head + `<tbody>${body}</tbody>`;
@@ -580,6 +665,12 @@
         });
       }
       updateControls();
+    }
+
+    function handleLogDeleteClick(event) {
+      const button = event.target.closest && event.target.closest(".log-delete");
+      if (!button || button.disabled) return;
+      deleteLogStem(button.dataset.stem);
     }
 
     function reconcileTimers() {
@@ -693,6 +784,11 @@
       return `已完成 ${completed} / 共 ${total}\n待完成 ${pending}`;
     }
 
+    function accuracyText(value) {
+      if (!value || !Number(value.total)) return "-";
+      return value.label || `${value.correct}/${value.total}`;
+    }
+
     function setLoading(value, text) {
       state.loading = value;
       $("refresh").disabled = value;
@@ -713,9 +809,11 @@
       $("stop").disabled = state.loading || !running;
       const hasSelectedLog = selectedLogStems().length > 0;
       $("analyzeLog").disabled = state.loading || running || !hasSelectedLog;
-      $("deleteLogs").disabled = state.loading || running || !hasSelectedLog;
       document.querySelectorAll(".log-check").forEach((node) => {
         node.disabled = Boolean(running) || node.dataset.running === "true";
+      });
+      document.querySelectorAll(".log-delete").forEach((node) => {
+        node.disabled = state.loading || Boolean(running);
       });
     }
 

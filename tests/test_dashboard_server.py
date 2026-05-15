@@ -269,7 +269,6 @@ def test_static_log_actions_are_single_select_and_disabled_without_selection() -
     assert "node.checked = false" in html
     assert "hasSelectedLog" in controls
     assert "analyzeLog" in controls
-    assert "deleteLogs" in controls
 
 
 def test_static_log_actions_are_locked_while_running() -> None:
@@ -289,6 +288,36 @@ def test_static_log_actions_are_locked_while_running() -> None:
     assert "running || !hasSelectedLog" in controls
 
 
+def test_static_log_table_deletes_rows_with_inline_trash_button() -> None:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    logs_start = html.index("function renderLogs")
+    logs_end = html.index("function handleLogSelectionChange", logs_start)
+    logs_block = html[logs_start:logs_end]
+
+    assert 'class="log-delete icon-button danger"' in logs_block
+    assert 'title="删除日志"' in logs_block
+    assert "🗑" in logs_block
+    assert "handleLogDeleteClick" in html
+    assert '$("logTable").addEventListener("click", handleLogDeleteClick);' in html
+    assert "deleteSelectedLogs" not in html
+    assert 'id="deleteLogs"' not in html
+
+
+def test_static_log_table_shows_planned_and_completed_windows_without_file_details() -> None:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    logs_start = html.index("function renderLogs")
+    logs_end = html.index("function handleLogSelectionChange", logs_start)
+    logs_block = html[logs_start:logs_end]
+
+    assert "计划窗口数" in logs_block
+    assert "实际完成窗口数" in logs_block
+    assert "文件数" not in logs_block
+    assert "主日志" not in logs_block
+    assert "primary_log" not in logs_block
+    assert "file_count" not in logs_block
+    assert "row.completed_windows" in logs_block
+
+
 def test_static_dashboard_renders_window_records_and_trade_window_index() -> None:
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     render_start = html.index("function render(data)")
@@ -303,3 +332,30 @@ def test_static_dashboard_renders_window_records_and_trade_window_index() -> Non
     assert '["window_start_time", "开始时间"]' in render_block
     assert '["window_end_time", "结束时间"]' in render_block
     assert '["actual_settlement_side", "实际结算方向"]' in render_block
+
+
+def test_static_dashboard_paginates_window_and_trade_records_with_expected_sorting() -> None:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    render_start = html.index("function render(data)")
+    render_end = html.index("function selectedLogStems", render_start)
+    render_block = html[render_start:render_end]
+
+    assert "windowPageSize: 10" in html
+    assert "tradePageSize: 20" in html
+    assert 'id="windowPager"' in html
+    assert 'id="tradePager"' in html
+    assert 'paginateRows(orderedRows(data.window_records || [], { reverse: false }), state.windowPage, state.windowPageSize)' in render_block
+    assert 'paginateRows(orderedRows(data.trades || [], { reverse: false }), state.tradePage, state.tradePageSize)' in render_block
+    assert '"windowTable"' in render_block
+    assert '"tradeTable"' in render_block
+
+
+def test_static_dashboard_renders_trade_direction_accuracy_panel() -> None:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    render_start = html.index("function render(data)")
+    render_end = html.index("function selectedLogStems", render_start)
+    render_block = html[render_start:render_end]
+
+    assert "方向判断正确率" in html
+    assert 'id="directionAccuracy"' in html
+    assert 'data.trade_direction_accuracy' in render_block

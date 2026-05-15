@@ -515,17 +515,140 @@ def test_dashboard_status_builds_window_records_and_trade_window_index(tmp_path:
             "window_end_time": "09:10:00",
             "actual_settlement_side": "UP",
         },
-        {
-            "window_index": 2,
-            "market_slug": "btc-updown-5m-2",
-            "event_type": "BTC 5min Up/Down",
-            "window_date": "2026-05-13",
-            "window_start_time": "09:10:00",
-            "window_end_time": "09:15:00",
-            "actual_settlement_side": "未知",
-        },
     ]
     assert status["trades"][0]["window_index"] == 1
+
+
+def test_dashboard_status_returns_action_window_and_trade_history_for_pagination(tmp_path: Path) -> None:
+    log = tmp_path / "paper-sweden-60w-20260513T010000Z.jsonl"
+    rows = [{"ts": "2026-05-13T01:00:00+00:00", "event": "config", "mode": "paper", "windows": 60}]
+    base = dt.datetime(2026, 5, 13, 1, 0, tzinfo=dt.timezone.utc)
+    for index in range(60):
+        start = base + dt.timedelta(minutes=5 * index)
+        end = start + dt.timedelta(minutes=5)
+        slug = f"btc-updown-5m-{index + 1}"
+        rows.append(
+            {
+                "ts": start.isoformat(),
+                "event": "window_selected",
+                "mode": "paper",
+                "market_slug": slug,
+                "window_start": start.isoformat(),
+                "window_end": end.isoformat(),
+                "completed_windows": index,
+            }
+        )
+        if index in {0, 9, 59}:
+            rows.append(
+                {
+                    "ts": (start + dt.timedelta(minutes=2)).isoformat(),
+                    "event": "entry",
+                    "mode": "paper",
+                    "market_slug": slug,
+                    "entry_side": "up",
+                    "entry_price": 0.5,
+                    "entry_shares": 2,
+                    "order": {"success": True, "message": "paper buy filled"},
+                }
+            )
+    _write_jsonl(log, rows)
+
+    status = build_dashboard_status("paper", tmp_path, running_pids=[])
+
+    assert len(status["window_records"]) == 3
+    assert status["window_records"][0]["window_index"] == 1
+    assert status["window_records"][1]["window_index"] == 10
+    assert status["window_records"][2]["window_index"] == 60
+    assert len(status["trades"]) == 3
+
+
+def test_dashboard_status_reports_trade_direction_accuracy_for_settled_action_windows(tmp_path: Path) -> None:
+    log = tmp_path / "paper-sweden-3w-20260513T010000Z.jsonl"
+    _write_jsonl(
+        log,
+        [
+            {"ts": "2026-05-13T01:00:00+00:00", "event": "config", "mode": "paper", "windows": 3},
+            {
+                "ts": "2026-05-13T01:00:01+00:00",
+                "event": "window_selected",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-1",
+                "window_start": "2026-05-13T01:00:00+00:00",
+                "window_end": "2026-05-13T01:05:00+00:00",
+                "completed_windows": 0,
+            },
+            {
+                "ts": "2026-05-13T01:02:00+00:00",
+                "event": "entry",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-1",
+                "entry_side": "up",
+                "entry_price": 0.5,
+                "entry_shares": 2,
+                "order": {"success": True},
+            },
+            {
+                "ts": "2026-05-13T01:05:30+00:00",
+                "event": "window_settlement",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-1",
+                "winning_side": "up",
+            },
+            {
+                "ts": "2026-05-13T01:05:01+00:00",
+                "event": "window_selected",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-2",
+                "window_start": "2026-05-13T01:05:00+00:00",
+                "window_end": "2026-05-13T01:10:00+00:00",
+                "completed_windows": 1,
+            },
+            {
+                "ts": "2026-05-13T01:07:00+00:00",
+                "event": "order_no_fill",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-2",
+                "order_intent": "entry",
+                "entry_side": "down",
+                "order": {"success": False},
+            },
+            {
+                "ts": "2026-05-13T01:10:30+00:00",
+                "event": "window_settlement",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-2",
+                "winning_side": "up",
+            },
+            {
+                "ts": "2026-05-13T01:10:01+00:00",
+                "event": "window_selected",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-3",
+                "window_start": "2026-05-13T01:10:00+00:00",
+                "window_end": "2026-05-13T01:15:00+00:00",
+                "completed_windows": 2,
+            },
+            {
+                "ts": "2026-05-13T01:12:00+00:00",
+                "event": "entry",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-3",
+                "entry_side": "down",
+                "entry_price": 0.5,
+                "entry_shares": 2,
+                "order": {"success": True},
+            },
+        ],
+    )
+
+    status = build_dashboard_status("paper", tmp_path, running_pids=[])
+
+    assert status["trade_direction_accuracy"] == {
+        "correct": 1,
+        "total": 2,
+        "rate": 0.5,
+        "label": "1/2 (50.0%)",
+    }
 
 
 def test_dashboard_status_sums_exit_pnl_when_exit_rows_have_stale_realized_pnl(tmp_path: Path) -> None:
@@ -615,6 +738,49 @@ def test_dashboard_status_merges_entry_and_exit_into_trade_record(tmp_path: Path
             "exit_reason": "持仓评分转弱，主动退出",
         }
     ]
+
+
+def test_dashboard_status_merges_entry_and_settlement_into_trade_record(tmp_path: Path) -> None:
+    log = tmp_path / "paper-sweden-1w-20260513T010000Z.jsonl"
+    _write_jsonl(
+        log,
+        [
+            {"ts": "2026-05-13T01:00:00+00:00", "event": "config", "mode": "paper", "windows": 1},
+            {
+                "ts": "2026-05-13T01:02:00+00:00",
+                "event": "entry",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-1",
+                "entry_side": "up",
+                "entry_price": 0.42,
+                "entry_shares": 2.5,
+                "order": {"success": True, "message": "paper buy filled"},
+            },
+            {
+                "ts": "2026-05-13T01:05:00+00:00",
+                "event": "settlement",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-1",
+                "winning_side": "up",
+                "position": {
+                    "market_slug": "btc-updown-5m-1",
+                    "token_side": "up",
+                    "entry_avg_price": 0.42,
+                    "filled_shares": 2.5,
+                    "exit_status": "settled",
+                },
+                "settlement_pnl": 1.45,
+                "realized_pnl": 1.45,
+            },
+        ],
+    )
+
+    status = build_dashboard_status("paper", tmp_path, running_pids=[])
+
+    assert status["trades"][0]["sell_time"] == "settlement"
+    assert status["trades"][0]["sell_price"] == 1.0
+    assert status["trades"][0]["pnl"] == 1.45
+    assert status["trades"][0]["exit_reason"] == "结算"
 
 
 def test_dashboard_status_trade_record_keeps_failed_entry_readable(tmp_path: Path) -> None:

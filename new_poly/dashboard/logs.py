@@ -84,7 +84,8 @@ def _log_run_item(stem: str, paths: list[Path], running: bool) -> dict[str, Any]
     ts_raw = match.group("ts")
     files = sorted(paths, key=lambda path: path.name)
     jsonl = next((path for path in files if path.name == f"{stem}.jsonl"), None)
-    first_ts, last_ts = _jsonl_first_last_ts(jsonl) if jsonl is not None else (None, None)
+    meta = _jsonl_meta(jsonl)
+    first_ts, last_ts = meta["first_ts"], meta["last_ts"]
     filename_start = _filename_timestamp(ts_raw)
     started_at = first_ts or filename_start
     ended_at = last_ts
@@ -94,6 +95,7 @@ def _log_run_item(stem: str, paths: list[Path], running: bool) -> dict[str, Any]
         "mode": mode,
         "region": region,
         "windows": int(windows_raw),
+        "completed_windows": meta["completed_windows"],
         "started_at": _iso(started_at),
         "started_at_text": _display_timestamp(started_at),
         "ended_at": _iso(ended_at),
@@ -126,20 +128,47 @@ def _companion_files(log_dir: Path, stem: str) -> list[Path]:
     return [path for suffix in LOG_SUFFIXES if (path := log_dir / f"{stem}{suffix}").exists() and path.is_file()]
 
 
-def _jsonl_first_last_ts(path: Path | None) -> tuple[dt.datetime | None, dt.datetime | None]:
+def _jsonl_meta(path: Path | None) -> dict[str, Any]:
+    meta = {"first_ts": None, "last_ts": None, "completed_windows": None}
     if path is None or not path.exists():
-        return None, None
+        return meta
     first = None
     last = None
+    completed_windows = 0
+    settled_slugs: set[str] = set()
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             ts = _extract_ts(line)
             if ts is None:
-                continue
-            if first is None:
-                first = ts
-            last = ts
-    return first, last
+                row = None
+            else:
+                if first is None:
+                    first = ts
+                last = ts
+                row = _extract_json_object(line)
+            if isinstance(row, dict):
+                raw = row.get("completed_windows")
+                if raw is not None:
+                    try:
+                        completed_windows = max(completed_windows, int(raw))
+                    except (TypeError, ValueError):
+                        pass
+                if row.get("event") in {"window_settlement", "settlement"} and row.get("market_slug"):
+                    settled_slugs.add(str(row["market_slug"]))
+    meta["first_ts"] = first
+    meta["last_ts"] = last
+    meta["completed_windows"] = max(completed_windows, len(settled_slugs))
+    return meta
+
+
+def _extract_json_object(line: str) -> dict[str, Any] | None:
+    import json
+
+    try:
+        value = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _extract_ts(line: str) -> dt.datetime | None:

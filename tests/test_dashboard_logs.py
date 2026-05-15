@@ -25,8 +25,12 @@ def test_list_log_runs_groups_companions_and_sorts_newest_first(tmp_path: Path) 
     _write_jsonl(
         long,
         [
-            {"ts": "2026-05-13T02:00:00+00:00", "event": "config"},
-            {"ts": "2026-05-13T02:10:00+00:00", "event": "tick"},
+            {"ts": "2026-05-13T02:00:00+00:00", "event": "config", "windows": 12},
+            {"ts": "2026-05-13T02:05:00+00:00", "event": "window_selected", "completed_windows": 1},
+            {"ts": "2026-05-13T02:10:00+00:00", "event": "window_selected", "completed_windows": 2},
+            {"ts": "2026-05-13T02:12:00+00:00", "event": "window_settlement", "market_slug": "btc-updown-5m-1"},
+            {"ts": "2026-05-13T02:13:00+00:00", "event": "window_settlement", "market_slug": "btc-updown-5m-2"},
+            {"ts": "2026-05-13T02:15:00+00:00", "event": "window_settlement", "market_slug": "btc-updown-5m-3"},
         ],
     )
     (tmp_path / "paper-sweden-1w-20260513T010000Z.out").write_text("out\n", encoding="utf-8")
@@ -43,6 +47,8 @@ def test_list_log_runs_groups_companions_and_sorts_newest_first(tmp_path: Path) 
     assert result["runs"][1]["ended_at_text"] == "2026-05-13 09:00:12"
     assert result["runs"][1]["file_count"] == 3
     assert result["runs"][1]["status"] == "archived"
+    assert result["runs"][0]["windows"] == 12
+    assert result["runs"][0]["completed_windows"] == 3
 
 
 def test_list_log_runs_marks_running_stem(tmp_path: Path) -> None:
