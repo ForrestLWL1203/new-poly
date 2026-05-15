@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from new_poly.strategy.prob_edge import MarketSnapshot
-from new_poly.strategy.poly_source import PolySourceConfig, evaluate_poly_entry, evaluate_poly_exit
+from new_poly.strategy.poly_source import PolySourceConfig, entry_amount_usd, evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.execution import sell_aggression_ticks
 
@@ -71,6 +71,11 @@ class BacktestConfig:
     reentry_cooldown_sec: float = 20.0
     reentry_min_score_bonus: float = 1.0
     reentry_max_entry_fill_price: float = 0.65
+    entry_size_score_mid: float = 6.0
+    entry_size_score_full: float = 6.5
+    entry_size_high_price_cap: float = 0.70
+    entry_size_mid_multiplier: float = 2.0
+    entry_size_full_multiplier: float = 3.0
     poly_score_component_logs: str = "compact"
     poly_buy_price_buffer_ticks: float = 2.0
     reference_distance_exit_remaining_sec: tuple[float, ...] = (120.0, 90.0, 70.0, 45.0, 30.0)
@@ -116,6 +121,11 @@ class BacktestConfig:
             reentry_cooldown_sec=self.reentry_cooldown_sec,
             reentry_min_score_bonus=self.reentry_min_score_bonus,
             reentry_max_entry_fill_price=self.reentry_max_entry_fill_price,
+            entry_size_score_mid=self.entry_size_score_mid,
+            entry_size_score_full=self.entry_size_score_full,
+            entry_size_high_price_cap=self.entry_size_high_price_cap,
+            entry_size_mid_multiplier=self.entry_size_mid_multiplier,
+            entry_size_full_multiplier=self.entry_size_full_multiplier,
             poly_score_component_logs=self.poly_score_component_logs,
             entry_tick_size=self.entry_tick_size,
             buy_price_buffer_ticks=self.poly_buy_price_buffer_ticks,
@@ -628,7 +638,13 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         if fill_price is None:
                             skip_reasons["entry_no_fill"] += 1
                             continue
-                    shares = cfg.amount_usd / fill_price
+                    entry_amount = entry_amount_usd(
+                        cfg.amount_usd,
+                        score=decision.poly_entry_score,
+                        entry_price=fill_price,
+                        cfg=poly_cfg,
+                    )
+                    shares = entry_amount / fill_price
                     state.record_entry(PositionSnapshot(
                         market_slug=slug,
                         token_side=decision.side,
@@ -648,6 +664,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "entry_phase": decision.phase,
                         "entry_age_sec": fill_snap.age_sec,
                         "entry_price": fill_price,
+                        "entry_amount_usd": entry_amount,
                         "entry_model_prob": decision.model_prob,
                         "entry_edge": decision.edge,
                         "entry_edge_at_fill": (decision.model_prob - fill_price) if decision.model_prob is not None else None,

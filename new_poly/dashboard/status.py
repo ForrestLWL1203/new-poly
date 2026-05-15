@@ -278,6 +278,11 @@ def _trade_item(row: dict[str, Any], *, intent: str, success_default: bool) -> d
         price = row.get("avg_price")
     if shares is None:
         shares = order.get("filled_size") or row.get("shares")
+    amount = row.get("amount_usd")
+    if amount is None and intent == "entry":
+        amount = row.get("entry_amount_usd")
+    if amount is None and intent == "entry" and price is not None and shares is not None:
+        amount = float(price) * float(shares)
     success = bool(order.get("success", success_default))
     return {
         "ts": row.get("ts"),
@@ -287,6 +292,7 @@ def _trade_item(row: dict[str, Any], *, intent: str, success_default: bool) -> d
         "status": "filled" if success else "failed",
         "price": _round_or_none(price),
         "shares": _round_or_none(shares),
+        "amount_usd": _round_or_none(amount),
         "reason": row.get("reason") or row.get(f"{intent}_reason") or decision.get("reason"),
         "reason_text": translate_reason(
             row.get("reason")
@@ -383,6 +389,7 @@ def _trade_record(
         "market_slug": source.get("market_slug"),
         "buy_time": _format_bj(_parse_ts(entry.get("ts"))) if entry else None,
         "buy_price": entry.get("price") if entry else None,
+        "buy_amount_usd": entry.get("amount_usd") if entry else None,
         "buy_status": entry.get("status") if entry else None,
         "buy_reason": _trade_buy_reason(entry),
         "sell_time": _format_bj(_parse_ts(exit_row.get("ts"))) if exit_row else None,

@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.strategy.poly_source import PolySourceConfig, evaluate_poly_entry, evaluate_poly_exit
+from new_poly.strategy.poly_source import PolySourceConfig, entry_amount_usd, evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.prob_edge import MarketSnapshot
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 
@@ -129,6 +129,11 @@ def test_poly_source_config_exposes_only_active_single_source_exit_knobs() -> No
         "reentry_cooldown_sec",
         "reentry_min_score_bonus",
         "reentry_max_entry_fill_price",
+        "entry_size_score_mid",
+        "entry_size_score_full",
+        "entry_size_high_price_cap",
+        "entry_size_mid_multiplier",
+        "entry_size_full_multiplier",
         "poly_score_component_logs",
         "entry_tick_size",
         "buy_price_buffer_ticks",
@@ -298,6 +303,19 @@ def test_poly_source_reentry_allows_stronger_signal_after_cooldown() -> None:
     decision = evaluate_poly_entry(_snapshot(poly_price=100.04, return_bps=1.0, up_ask=0.64, age=130.0), state, cfg)
 
     assert decision.action == "enter"
+
+
+def test_poly_source_entry_amount_scales_by_score_but_not_high_price() -> None:
+    cfg = PolySourceConfig(
+        entry_size_score_mid=6.0,
+        entry_size_score_full=6.5,
+        entry_size_high_price_cap=0.70,
+    )
+
+    assert entry_amount_usd(1.0, score=5.99, entry_price=0.55, cfg=cfg) == pytest.approx(1.0)
+    assert entry_amount_usd(1.0, score=6.0, entry_price=0.55, cfg=cfg) == pytest.approx(2.0)
+    assert entry_amount_usd(1.0, score=6.5, entry_price=0.55, cfg=cfg) == pytest.approx(3.0)
+    assert entry_amount_usd(1.0, score=7.5, entry_price=0.70, cfg=cfg) == pytest.approx(1.0)
 
 
 def test_poly_source_early_value_entry_allows_strong_cheap_signal_before_normal_window() -> None:

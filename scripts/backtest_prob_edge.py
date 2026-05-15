@@ -88,6 +88,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reentry-cooldown-sec", type=float, default=20.0)
     parser.add_argument("--reentry-min-score-bonus", type=float, default=1.0)
     parser.add_argument("--reentry-max-entry-fill-price", type=float, default=0.65)
+    parser.add_argument("--entry-size-score-mid", type=float, default=6.0)
+    parser.add_argument("--entry-size-score-full", type=float, default=6.5)
+    parser.add_argument("--entry-size-high-price-cap", type=float, default=0.70)
+    parser.add_argument("--entry-size-mid-multiplier", type=float, default=2.0)
+    parser.add_argument("--entry-size-full-multiplier", type=float, default=3.0)
     parser.add_argument("--poly-score-component-logs", choices=("compact", "full"), default="compact")
     parser.add_argument("--reference-distance-exit-remaining-sec", default="120,90,70,45,30")
     parser.add_argument("--reference-distance-exit-min-bps", default="-2,-1,0.25,0.75,1")
@@ -162,6 +167,11 @@ def main() -> int:
         reentry_cooldown_sec=args.reentry_cooldown_sec,
         reentry_min_score_bonus=args.reentry_min_score_bonus,
         reentry_max_entry_fill_price=args.reentry_max_entry_fill_price,
+        entry_size_score_mid=args.entry_size_score_mid,
+        entry_size_score_full=args.entry_size_score_full,
+        entry_size_high_price_cap=args.entry_size_high_price_cap,
+        entry_size_mid_multiplier=args.entry_size_mid_multiplier,
+        entry_size_full_multiplier=args.entry_size_full_multiplier,
         poly_score_component_logs=args.poly_score_component_logs,
         reference_distance_exit_remaining_sec=tuple(_float_list(args.reference_distance_exit_remaining_sec)),
         reference_distance_exit_min_bps=tuple(_float_list(args.reference_distance_exit_min_bps)),

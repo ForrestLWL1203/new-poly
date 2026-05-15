@@ -44,6 +44,11 @@ class PolySourceConfig:
     reentry_cooldown_sec: float = 20.0
     reentry_min_score_bonus: float = 1.0
     reentry_max_entry_fill_price: float = 0.65
+    entry_size_score_mid: float = 6.0
+    entry_size_score_full: float = 6.5
+    entry_size_high_price_cap: float = 0.70
+    entry_size_mid_multiplier: float = 2.0
+    entry_size_full_multiplier: float = 3.0
     poly_score_component_logs: str = "compact"
     entry_tick_size: float = 0.01
     buy_price_buffer_ticks: float = 2.0
@@ -147,6 +152,21 @@ def _raw_poly_side(snapshot: MarketSnapshot) -> str | None:
 
 def _clamp(value: float, low: float, high: float) -> float:
     return min(max(value, low), high)
+
+
+def entry_amount_usd(base_amount_usd: float, *, score: float | None, entry_price: float | None, cfg: PolySourceConfig) -> float:
+    base = max(0.0, float(base_amount_usd))
+    if base <= 0.0:
+        return base
+    if entry_price is not None and cfg.entry_size_high_price_cap > 0 and entry_price >= cfg.entry_size_high_price_cap:
+        return base
+    if score is None:
+        return base
+    if score >= cfg.entry_size_score_full:
+        return round(base * max(1.0, cfg.entry_size_full_multiplier), 6)
+    if score >= cfg.entry_size_score_mid:
+        return round(base * max(1.0, cfg.entry_size_mid_multiplier), 6)
+    return base
 
 
 def _distance_score(distance_bps: float) -> tuple[float, bool]:

@@ -16,7 +16,7 @@ from new_poly.bot_runtime import (
     _refresh_exit_retry_params,
 )
 from new_poly.strategy.prob_edge import StrategyDecision
-from new_poly.strategy.poly_source import evaluate_poly_entry, evaluate_poly_exit
+from new_poly.strategy.poly_source import entry_amount_usd, evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState, UnknownEntryOrder
 from new_poly.trading.clob_client import get_token_balance
 
@@ -124,11 +124,17 @@ def _record_unknown_entry_candidate(
         return
     timing = result.timing if isinstance(result.timing, dict) else {}
     created_at = timing.get("sent_at_epoch_ms")
+    amount_usd = entry_amount_usd(
+        cfg.amount_usd,
+        score=decision.poly_entry_score,
+        entry_price=decision.best_ask or decision.price or decision.limit_price,
+        cfg=cfg.poly_source,
+    )
     state.record_unresolved_unknown_entry(UnknownEntryOrder(
         market_slug=window.slug,
         token_side=decision.side,
         token_id=token_id,
-        amount_usd=cfg.amount_usd,
+        amount_usd=amount_usd,
         entry_time=snap.age_sec,
         entry_avg_price=decision.best_ask or decision.price or decision.limit_price or 0.0,
         entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
@@ -648,6 +654,12 @@ async def handle_flat_tick(
         return decision
 
     token_id = window.up_token if decision.side == "up" else window.down_token
+    amount_usd = entry_amount_usd(
+        cfg.amount_usd,
+        score=decision.poly_entry_score,
+        entry_price=decision.best_ask or decision.price or decision.limit_price,
+        cfg=cfg.poly_source,
+    )
     if logger is not None:
         logger.write(_order_intent_row(
             row=row,
@@ -656,11 +668,11 @@ async def handle_flat_tick(
             decision=decision,
             price_analysis=price_analysis,
             options=options,
-            extra={"amount_usd": _compact(cfg.amount_usd)},
+            extra={"amount_usd": _compact(amount_usd)},
         ))
     order_coro = gateway.buy(
         token_id,
-        cfg.amount_usd,
+        amount_usd,
         max_price=decision.limit_price,
         best_ask=decision.best_ask,
         price_hint_base=decision.depth_limit_price,

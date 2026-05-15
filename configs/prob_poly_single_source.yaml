@@ -36,6 +36,11 @@ poly_source:
   reentry_cooldown_sec: 20
   reentry_min_score_bonus: 0.5
   reentry_max_entry_fill_price: 0.70
+  entry_size_score_mid: 6.0
+  entry_size_score_full: 6.5
+  entry_size_high_price_cap: 0.70
+  entry_size_mid_multiplier: 2.0
+  entry_size_full_multiplier: 3.0
   poly_score_component_logs: compact
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2
