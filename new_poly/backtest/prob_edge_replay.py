@@ -459,7 +459,15 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
     entry_reference_distance_bps = _float(analysis.get("entry_reference_distance_bps"))
     if side not in {"up", "down"} or entry_price is None or model_prob is None:
         return None
-    shares = _float(order.get("filled_size")) or cfg.amount_usd / entry_price
+    entry_amount = (
+        _float(row.get("amount_usd"))
+        or _float(row.get("entry_amount_usd"))
+        or _float(analysis.get("amount_usd"))
+        or _float(analysis.get("entry_amount_usd"))
+    )
+    shares = _float(order.get("filled_size")) or (entry_amount / entry_price if entry_amount is not None else cfg.amount_usd / entry_price)
+    if entry_amount is None:
+        entry_amount = entry_price * shares
     age_sec = float(row.get("age_sec") or 0.0)
     position = PositionSnapshot(
         market_slug=slug,
@@ -470,6 +478,7 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
         filled_shares=shares,
         entry_model_prob=model_prob,
         entry_edge=edge,
+        entry_amount_usd=entry_amount,
         entry_polymarket_divergence_bps=entry_polymarket_divergence_bps,
         entry_favorable_gap_bps=entry_favorable_gap_bps,
         entry_reference_distance_bps=entry_reference_distance_bps,
@@ -480,6 +489,7 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
         "entry_phase": analysis.get("entry_phase"),
         "entry_age_sec": age_sec,
         "entry_price": entry_price,
+        "entry_amount_usd": entry_amount,
         "entry_model_prob": model_prob,
         "entry_edge": edge,
         "entry_edge_at_fill": model_prob - entry_price,
@@ -654,6 +664,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         filled_shares=shares,
                         entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
                         entry_edge=decision.edge if decision.edge is not None else 0.0,
+                        entry_amount_usd=entry_amount,
                         entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
                         entry_favorable_gap_bps=decision.favorable_gap_bps,
                         entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,

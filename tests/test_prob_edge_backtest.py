@@ -187,3 +187,37 @@ def test_backtest_entry_phase_uses_poly_entry_phase() -> None:
     assert result.summary["entries"] == 1
     assert result.trades[0]["entry_age_sec"] == 120
     assert result.summary["skip_reason_counts"]["outside_entry_time"] == 1
+
+
+def test_backtest_honored_entry_events_use_logged_amount_when_size_missing() -> None:
+    rows = [
+        {
+            "event": "entry",
+            "market_slug": "m1",
+            "age_sec": 120,
+            "remaining_sec": 180,
+            "amount_usd": 3.0,
+            "analysis": {
+                "entry_side": "up",
+                "entry_price": 0.60,
+                "entry_model_prob": 0.80,
+                "entry_edge_signal": 0.20,
+            },
+            "order": {"success": True, "avg_price": 0.60},
+        },
+        {
+            "event": "window_settlement",
+            "market_slug": "m1",
+            "age_sec": 300,
+            "settlement_open_price": 100.0,
+            "settlement_close_price": 101.0,
+            "winning_side": "up",
+            "settlement_uncertain": False,
+        },
+    ]
+
+    result = run_backtest(rows, BacktestConfig(amount_usd=1.0, honor_order_events=True))
+
+    assert result.trades[0]["entry_amount_usd"] == 3.0
+    assert result.trades[0]["shares"] == pytest.approx(5.0)
+    assert result.trades[0]["pnl"] == pytest.approx(2.0)

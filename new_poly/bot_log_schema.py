@@ -203,6 +203,7 @@ def _position_log(position: PositionSnapshot | None, *, compact: bool) -> dict[s
         "entry_time": _compact(position.entry_time),
         "entry_avg_price": _compact(position.entry_avg_price),
         "filled_shares": _compact(position.filled_shares),
+        "entry_amount_usd": _compact(position.entry_amount_usd),
         "entry_model_prob": _compact(position.entry_model_prob),
         "entry_edge": _compact(position.entry_edge),
         "entry_polymarket_divergence_bps": _compact(position.entry_polymarket_divergence_bps, 3),

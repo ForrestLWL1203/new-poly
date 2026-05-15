@@ -179,12 +179,13 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
             exits.append(item)
             cashflows.append(_cashflow_item(row, item, kind="sell"))
             open_position = row.get("position_after_exit") if "position_after_exit" in row else None
-            if row.get("exit_pnl") is not None:
-                item["pnl"] = round(float(row["exit_pnl"]), 6)
-                pnl_events.append(float(row["exit_pnl"]))
+            exit_pnl = _exit_pnl(row)
+            if exit_pnl is not None:
+                item["pnl"] = round(exit_pnl, 6)
+                pnl_events.append(exit_pnl)
             realized_pnl = _float_or(realized_pnl, row.get("realized_pnl"))
-            if row.get("exit_pnl") is not None and row.get("realized_pnl") is None:
-                realized_pnl = round(realized_pnl + float(row["exit_pnl"]), 6)
+            if exit_pnl is not None and row.get("realized_pnl") is None:
+                realized_pnl = round(realized_pnl + exit_pnl, 6)
         elif event == "position_reduce":
             item = _trade_item(row, intent="exit", success_default=True)
             item["status"] = "partial"
@@ -192,9 +193,10 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
             exits.append(item)
             cashflows.append(_cashflow_item(row, item, kind="sell"))
             open_position = row.get("position_after_exit") or row.get("position") or _position_after_reduce(row)
-            if row.get("exit_pnl") is not None:
-                item["pnl"] = round(float(row["exit_pnl"]), 6)
-                pnl_events.append(float(row["exit_pnl"]))
+            exit_pnl = _exit_pnl(row)
+            if exit_pnl is not None:
+                item["pnl"] = round(exit_pnl, 6)
+                pnl_events.append(exit_pnl)
             realized_pnl = _float_or(realized_pnl, row.get("realized_pnl"))
         elif event == "order_no_fill":
             intent = "exit" if row.get("exit_intent") == "exit" or row.get("order_intent") == "exit" else "entry"
@@ -281,6 +283,9 @@ def _trade_item(row: dict[str, Any], *, intent: str, success_default: bool) -> d
     amount = row.get("amount_usd")
     if amount is None and intent == "entry":
         amount = row.get("entry_amount_usd")
+    if amount is None and intent == "entry":
+        position_after_entry = row.get("position_after_entry") if isinstance(row.get("position_after_entry"), dict) else {}
+        amount = position_after_entry.get("entry_amount_usd")
     if amount is None and intent == "entry" and price is not None and shares is not None:
         amount = float(price) * float(shares)
     success = bool(order.get("success", success_default))
@@ -306,6 +311,23 @@ def _trade_item(row: dict[str, Any], *, intent: str, success_default: bool) -> d
     }
 
 
+def _exit_pnl(row: dict[str, Any]) -> float | None:
+    if row.get("exit_pnl") is not None:
+        return float(row["exit_pnl"])
+    before = row.get("position_before_exit") if isinstance(row.get("position_before_exit"), dict) else {}
+    entry_price = before.get("entry_avg_price")
+    exit_price = row.get("exit_price") or row.get("avg_price")
+    shares = row.get("exit_shares") or row.get("shares")
+    order = row.get("order") if isinstance(row.get("order"), dict) else {}
+    if exit_price is None:
+        exit_price = order.get("avg_price")
+    if shares is None:
+        shares = order.get("filled_size")
+    if entry_price is None or exit_price is None or shares is None:
+        return None
+    return round((float(exit_price) - float(entry_price)) * float(shares), 6)
+
+
 def _position_from_entry(row: dict[str, Any]) -> dict[str, Any] | None:
     side = row.get("entry_side") or row.get("side")
     price = row.get("entry_price")
@@ -318,6 +340,7 @@ def _position_from_entry(row: dict[str, Any]) -> dict[str, Any] | None:
         "entry_time": row.get("age_sec"),
         "entry_avg_price": _round_or_none(price),
         "filled_shares": _round_or_none(shares),
+        "entry_amount_usd": _round_or_none(row.get("amount_usd") or row.get("entry_amount_usd") or float(price) * float(shares)),
         "exit_status": "open",
     }
 
@@ -333,6 +356,7 @@ def _position_after_reduce(row: dict[str, Any]) -> dict[str, Any] | None:
         "entry_time": before.get("entry_time"),
         "entry_avg_price": before.get("entry_avg_price"),
         "filled_shares": _round_or_none(remaining),
+        "entry_amount_usd": _round_or_none(float(before.get("entry_avg_price") or 0.0) * float(remaining)),
         "exit_status": "residual_open",
     }
 
@@ -469,7 +493,8 @@ def _cashflow_item(row: dict[str, Any], trade: dict[str, Any], *, kind: str) -> 
     shares = trade.get("shares")
     if price is None or shares is None or trade.get("status") == "failed":
         return None
-    amount = round(float(price) * float(shares), 6)
+    amount = trade.get("amount_usd") if kind == "buy" and trade.get("amount_usd") is not None else float(price) * float(shares)
+    amount = round(float(amount), 6)
     if kind == "buy":
         amount = -amount
     return {

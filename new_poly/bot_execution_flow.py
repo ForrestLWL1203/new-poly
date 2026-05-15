@@ -150,6 +150,12 @@ def _record_unknown_entry_candidate(
     ))
 
 
+def _filled_notional(result, fallback_amount_usd: float) -> float:
+    if result is not None and result.success and result.avg_price > 0 and result.filled_size > 0:
+        return result.avg_price * result.filled_size
+    return fallback_amount_usd
+
+
 async def _query_unknown_entry_safety_balance(
     *,
     state: StrategyState,
@@ -193,6 +199,7 @@ async def _finish_pending_entry_order(
     logger,
     order_coro,
     price_analysis: dict[str, Any],
+    amount_usd: float,
 ) -> None:
     try:
         result = await order_coro
@@ -208,6 +215,7 @@ async def _finish_pending_entry_order(
             row["order_intent"] = "entry"
             row["token_id"] = token_id
             row["entry_side"] = decision.side
+            row["amount_usd"] = _compact(_filled_notional(result, amount_usd))
             if result.success:
                 row["event"] = "orphan_entry_after_window_switch"
                 row["action"] = "manual_or_orphan_balance_review_required"
@@ -222,6 +230,7 @@ async def _finish_pending_entry_order(
             logger.write(row)
             return
         if result.success and decision.side is not None and decision.edge is not None:
+            filled_notional = _filled_notional(result, amount_usd)
             state.record_entry(PositionSnapshot(
                 market_slug=window.slug,
                 token_side=decision.side,
@@ -231,6 +240,7 @@ async def _finish_pending_entry_order(
                 filled_shares=result.filled_size,
                 entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
                 entry_edge=decision.edge,
+                entry_amount_usd=filled_notional,
                 entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
                 entry_favorable_gap_bps=decision.favorable_gap_bps,
                 entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
@@ -239,6 +249,7 @@ async def _finish_pending_entry_order(
             row["entry_side"] = decision.side
             row["entry_price"] = _compact(result.avg_price)
             row["entry_shares"] = _compact(result.filled_size)
+            row["amount_usd"] = _compact(filled_notional)
             row["position_after_entry"] = _position_log(state.open_position, compact=not options.analysis_logs)
         elif (
             options.mode == "live"
@@ -418,6 +429,7 @@ async def _maybe_recover_unknown_entry_balance(
         })
         return decision
     price = pending.entry_avg_price if pending.entry_avg_price > 0 else pending.amount_usd / balance
+    amount_usd = price * balance
     state.record_entry(PositionSnapshot(
         market_slug=window.slug,
         token_side=pending.token_side,
@@ -427,6 +439,7 @@ async def _maybe_recover_unknown_entry_balance(
         filled_shares=balance,
         entry_model_prob=pending.entry_model_prob,
         entry_edge=pending.entry_edge,
+        entry_amount_usd=amount_usd,
         entry_polymarket_divergence_bps=pending.entry_polymarket_divergence_bps,
         entry_favorable_gap_bps=pending.entry_favorable_gap_bps,
         entry_reference_distance_bps=pending.entry_reference_distance_bps,
@@ -438,6 +451,7 @@ async def _maybe_recover_unknown_entry_balance(
         "entry_side": pending.token_side,
         "entry_price": _compact(price),
         "entry_shares": _compact(balance),
+        "amount_usd": _compact(amount_usd),
         "position_after_entry": _position_log(state.open_position, compact=not options.analysis_logs),
     })
     return await handle_open_position_tick(
@@ -695,6 +709,7 @@ async def handle_flat_tick(
             logger=logger,
             order_coro=order_coro,
             price_analysis=price_analysis,
+            amount_usd=amount_usd,
         ))
         state.mark_pending_execution("entry", task)
         row["event"] = "order_reconcile_pending"
@@ -706,6 +721,7 @@ async def handle_flat_tick(
     if options.analysis_logs:
         row["analysis"] = {"price_sources": price_analysis, **_entry_analysis(decision, result)}
     if result.success and decision.side is not None and decision.edge is not None:
+        filled_notional = _filled_notional(result, amount_usd)
         state.record_entry(PositionSnapshot(
             market_slug=window.slug,
             token_side=decision.side,
@@ -715,6 +731,7 @@ async def handle_flat_tick(
             filled_shares=result.filled_size,
             entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
             entry_edge=decision.edge,
+            entry_amount_usd=filled_notional,
             entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
             entry_favorable_gap_bps=decision.favorable_gap_bps,
             entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
@@ -723,6 +740,7 @@ async def handle_flat_tick(
         row["entry_side"] = decision.side
         row["entry_price"] = _compact(result.avg_price)
         row["entry_shares"] = _compact(result.filled_size)
+        row["amount_usd"] = _compact(filled_notional)
         row["position_after_entry"] = _position_log(state.open_position, compact=not options.analysis_logs)
     elif (
         options.mode == "live"

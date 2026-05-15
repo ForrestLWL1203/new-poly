@@ -619,6 +619,54 @@ def test_dashboard_status_merges_entry_and_exit_into_trade_record(tmp_path: Path
     ]
 
 
+def test_dashboard_status_uses_position_entry_amount_and_recomputes_missing_exit_pnl(tmp_path: Path) -> None:
+    log = tmp_path / "paper-sweden-1w-20260513T020000Z.jsonl"
+    _write_jsonl(
+        log,
+        [
+            {"ts": "2026-05-13T02:00:00+00:00", "event": "config", "mode": "paper", "windows": 1},
+            {
+                "ts": "2026-05-13T02:02:00+00:00",
+                "event": "entry",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-2",
+                "entry_side": "up",
+                "entry_price": 0.60,
+                "entry_shares": 5.0,
+                "position_after_entry": {
+                    "token_side": "up",
+                    "entry_avg_price": 0.60,
+                    "filled_shares": 5.0,
+                    "entry_amount_usd": 3.0,
+                },
+                "order": {"success": True, "message": "paper buy filled"},
+            },
+            {
+                "ts": "2026-05-13T02:03:00+00:00",
+                "event": "exit",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-2",
+                "exit_side": "up",
+                "exit_price": 0.70,
+                "exit_shares": 5.0,
+                "position_before_exit": {
+                    "token_side": "up",
+                    "entry_avg_price": 0.60,
+                    "filled_shares": 5.0,
+                    "entry_amount_usd": 3.0,
+                },
+                "order": {"success": True, "message": "paper sell filled"},
+            },
+        ],
+    )
+
+    status = build_dashboard_status("paper", tmp_path, running_pids=[])
+
+    assert status["trades"][0]["buy_amount_usd"] == 3.0
+    assert status["trades"][0]["pnl"] == 0.5
+    assert status["realized_pnl"] == 0.5
+
+
 def test_dashboard_status_trade_record_keeps_failed_entry_readable(tmp_path: Path) -> None:
     log = tmp_path / "live-sweden-1w-20260513T010000Z.jsonl"
     _write_jsonl(

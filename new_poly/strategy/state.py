@@ -25,6 +25,7 @@ class PositionSnapshot:
     filled_shares: float
     entry_model_prob: float
     entry_edge: float
+    entry_amount_usd: float | None = None
     entry_polymarket_divergence_bps: float | None = None
     entry_favorable_gap_bps: float | None = None
     entry_reference_distance_bps: float | None = None
@@ -147,6 +148,11 @@ class StrategyState:
         self.realized_pnl += pnl
         self.peak_pnl = max(self.peak_pnl, self.realized_pnl)
         self.open_position.filled_shares -= exit_shares
+        if self.open_position.entry_amount_usd is not None:
+            self.open_position.entry_amount_usd = max(
+                0.0,
+                self.open_position.entry_amount_usd - self.open_position.entry_avg_price * exit_shares,
+            )
         closed = self.open_position.filled_shares <= 1e-9
         if closed:
             self.open_position.exit_status = reason
