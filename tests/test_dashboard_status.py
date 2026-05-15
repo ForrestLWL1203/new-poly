@@ -595,6 +595,49 @@ def test_dashboard_status_records_entry_no_fill_window(tmp_path: Path) -> None:
     assert status["trades"][0]["buy_status"] == "failed"
 
 
+def test_dashboard_status_merges_settlement_into_trade_record(tmp_path: Path) -> None:
+    log = tmp_path / "paper-sweden-1w-20260513T010000Z.jsonl"
+    _write_jsonl(
+        log,
+        [
+            {"ts": "2026-05-13T01:00:00+00:00", "event": "config", "mode": "paper", "windows": 1},
+            {
+                "ts": "2026-05-13T01:07:00+00:00",
+                "event": "entry",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-1",
+                "entry_side": "down",
+                "entry_price": 0.54,
+                "entry_shares": 1.851852,
+                "amount_usd": 1.0,
+                "order": {"success": True, "message": "paper buy filled"},
+            },
+            {
+                "ts": "2026-05-13T01:11:30+00:00",
+                "event": "settlement",
+                "mode": "paper",
+                "market_slug": "btc-updown-5m-1",
+                "winning_side": "down",
+                "position": {
+                    "token_side": "down",
+                    "entry_avg_price": 0.54,
+                    "filled_shares": 1.851852,
+                    "entry_amount_usd": 1.0,
+                },
+                "settlement_pnl": 0.851852,
+                "realized_pnl": 0.851852,
+            },
+        ],
+    )
+
+    status = build_dashboard_status("paper", tmp_path, running_pids=[])
+
+    assert status["trades"][0]["sell_time"] == "2026-05-13 09:11:30"
+    assert status["trades"][0]["sell_price"] == 1.0
+    assert status["trades"][0]["pnl"] == 0.851852
+    assert status["trades"][0]["exit_reason"] == "结算完成"
+
+
 def test_dashboard_status_sums_exit_pnl_when_exit_rows_have_stale_realized_pnl(tmp_path: Path) -> None:
     log = tmp_path / "paper-sweden-2w-20260513T010000Z.jsonl"
     _write_jsonl(

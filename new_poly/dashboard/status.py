@@ -223,6 +223,11 @@ def _summarize_rows(mode: str, rows: list[dict[str, Any]], *, now_utc: dt.dateti
         elif event in {"settlement", "window_settlement"}:
             _apply_window_settlement(window_records, row)
             if event == "settlement" and row.get("settlement_pnl") is not None:
+                item = _settlement_exit_item(row)
+                if item is not None:
+                    exits.append(item)
+                    cashflows.append(_cashflow_item(row, item, kind="sell"))
+                    open_position = None
                 pnl_events.append(float(row["settlement_pnl"]))
         elif event == "fatal_stop":
             fatal_stop_reason = row.get("fatal_stop_reason") or row.get("reason")
@@ -342,6 +347,32 @@ def _exit_pnl(row: dict[str, Any]) -> float | None:
     if entry_price is None or exit_price is None or shares is None:
         return None
     return round((float(exit_price) - float(entry_price)) * float(shares), 6)
+
+
+def _settlement_exit_item(row: dict[str, Any]) -> dict[str, Any] | None:
+    position = row.get("position") if isinstance(row.get("position"), dict) else {}
+    side = position.get("token_side") or row.get("winning_side")
+    shares = position.get("filled_shares")
+    if side is None or shares is None:
+        return None
+    winning_side = row.get("winning_side")
+    settlement_price = 1.0 if side == winning_side else 0.0
+    item = {
+        "ts": row.get("ts"),
+        "mode": row.get("mode"),
+        "market_slug": row.get("market_slug"),
+        "side": side,
+        "status": "filled",
+        "price": settlement_price,
+        "shares": _round_or_none(shares),
+        "amount_usd": _round_or_none(settlement_price * float(shares)),
+        "reason": "settlement",
+        "reason_text": translate_reason("settlement"),
+        "message": row.get("settlement_source"),
+        "order_result_text": translate_reason("settlement"),
+        "pnl": round(float(row["settlement_pnl"]), 6) if row.get("settlement_pnl") is not None else None,
+    }
+    return item
 
 
 def _position_from_entry(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -465,6 +496,7 @@ def translate_reason(value: Any) -> str | None:
         "edge": "策略信号触发",
         "progressive_stop_exit": "价格回撤且参考信号受损，主动退出",
         "extreme_loss_exit": "极端价格回撤，主动退出",
+        "settlement": "结算完成",
         "hold_to_settlement": "接近结算，继续持有",
         "final_force_exit": "临近结束，强制退出",
         "risk_exit": "风控退出",
