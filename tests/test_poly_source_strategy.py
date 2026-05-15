@@ -132,6 +132,7 @@ def test_poly_source_config_exposes_only_active_single_source_exit_knobs() -> No
         "entry_size_score_mid",
         "entry_size_score_full",
         "entry_size_high_price_cap",
+        "entry_size_full_min_age_sec",
         "entry_size_mid_multiplier",
         "entry_size_full_multiplier",
         "poly_score_component_logs",
@@ -310,11 +311,14 @@ def test_poly_source_entry_amount_scales_by_score_but_not_high_price() -> None:
         entry_size_score_mid=6.0,
         entry_size_score_full=6.5,
         entry_size_high_price_cap=0.70,
+        entry_size_full_min_age_sec=150.0,
     )
 
     assert entry_amount_usd(1.0, score=5.99, entry_price=0.55, cfg=cfg) == pytest.approx(1.0)
     assert entry_amount_usd(1.0, score=6.0, entry_price=0.55, cfg=cfg) == pytest.approx(2.0)
     assert entry_amount_usd(1.0, score=6.5, entry_price=0.55, cfg=cfg) == pytest.approx(3.0)
+    assert entry_amount_usd(1.0, score=7.0, entry_price=0.55, cfg=cfg, age_sec=149.0) == pytest.approx(2.0)
+    assert entry_amount_usd(1.0, score=7.0, entry_price=0.55, cfg=cfg, age_sec=150.0) == pytest.approx(3.0)
     assert entry_amount_usd(1.0, score=7.5, entry_price=0.70, cfg=cfg) == pytest.approx(1.0)
     assert entry_amount_usd(1.0, score=8.0, entry_price=0.55, cfg=cfg, phase="early_value") == pytest.approx(1.0)
 
@@ -600,6 +604,96 @@ def test_poly_source_progressive_stop_exits_when_price_and_reference_break() -> 
     assert decision.action == "exit"
     assert decision.reason == "progressive_stop_exit"
     assert decision.progressive_stop_reference_reason == "reference_crossed_k"
+
+
+def test_poly_source_suppresses_mid_tier_strong_entry_stop_before_late_window() -> None:
+    cfg = PolySourceConfig(
+        entry_size_score_mid=6.5,
+        entry_size_score_full=7.0,
+        entry_size_high_price_cap=0.70,
+        reference_distance_exit_remaining_sec=(120.0, 90.0, 70.0, 45.0, 30.0),
+        reference_distance_exit_min_bps=(-2.0, -1.0, 1.0, 1.5, 1.75),
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        120.0,
+        0.64,
+        10.0,
+        0.0,
+        6.6,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=99.99, return_bps=-0.2, up_bid=0.24, age=165.0, remaining=135.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "hold"
+    assert decision.reason == "strong_entry_stop_suppressed"
+    assert decision.progressive_stop_reference_reason == "reference_crossed_k"
+
+
+def test_poly_source_does_not_suppress_full_size_strong_entry_stop() -> None:
+    cfg = PolySourceConfig(
+        entry_size_score_mid=6.5,
+        entry_size_score_full=7.0,
+        entry_size_high_price_cap=0.70,
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        120.0,
+        0.64,
+        10.0,
+        0.0,
+        7.2,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=99.99, return_bps=-0.2, up_bid=0.24, age=165.0, remaining=135.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "exit"
+    assert decision.reason == "progressive_stop_exit"
+
+
+def test_poly_source_suppresses_mid_tier_strong_entry_extreme_stop_before_late_window() -> None:
+    cfg = PolySourceConfig(
+        entry_size_score_mid=6.5,
+        entry_size_score_full=7.0,
+        entry_size_high_price_cap=0.70,
+    )
+    position = PositionSnapshot(
+        "m1",
+        "up",
+        "up-token",
+        120.0,
+        0.64,
+        10.0,
+        0.0,
+        6.6,
+        entry_reference_distance_bps=2.0,
+    )
+
+    decision = evaluate_poly_exit(
+        _snapshot(poly_price=99.99, return_bps=-0.2, up_bid=0.15, age=170.0, remaining=130.0),
+        position,
+        cfg,
+        StrategyState(current_market_slug="m1"),
+    )
+
+    assert decision.action == "hold"
+    assert decision.reason == "strong_entry_stop_suppressed"
 
 
 def test_poly_source_progressive_stop_exits_when_reference_crosses_k_and_price_breaks() -> None:

@@ -91,6 +91,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-size-score-mid", type=float, default=6.0)
     parser.add_argument("--entry-size-score-full", type=float, default=6.5)
     parser.add_argument("--entry-size-high-price-cap", type=float, default=0.70)
+    parser.add_argument("--entry-size-full-min-age-sec", type=float, default=150.0)
     parser.add_argument("--entry-size-mid-multiplier", type=float, default=2.0)
     parser.add_argument("--entry-size-full-multiplier", type=float, default=3.0)
     parser.add_argument("--poly-score-component-logs", choices=("compact", "full"), default="compact")
@@ -170,6 +171,7 @@ def main() -> int:
         entry_size_score_mid=args.entry_size_score_mid,
         entry_size_score_full=args.entry_size_score_full,
         entry_size_high_price_cap=args.entry_size_high_price_cap,
+        entry_size_full_min_age_sec=args.entry_size_full_min_age_sec,
         entry_size_mid_multiplier=args.entry_size_mid_multiplier,
         entry_size_full_multiplier=args.entry_size_full_multiplier,
         poly_score_component_logs=args.poly_score_component_logs,

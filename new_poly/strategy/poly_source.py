@@ -47,6 +47,7 @@ class PolySourceConfig:
     entry_size_score_mid: float = 6.0
     entry_size_score_full: float = 6.5
     entry_size_high_price_cap: float = 0.70
+    entry_size_full_min_age_sec: float = 150.0
     entry_size_mid_multiplier: float = 2.0
     entry_size_full_multiplier: float = 3.0
     poly_score_component_logs: str = "compact"
@@ -161,6 +162,7 @@ def entry_amount_usd(
     entry_price: float | None,
     cfg: PolySourceConfig,
     phase: str | None = None,
+    age_sec: float | None = None,
 ) -> float:
     base = max(0.0, float(base_amount_usd))
     if base <= 0.0:
@@ -171,7 +173,8 @@ def entry_amount_usd(
         return base
     if score is None:
         return base
-    if score >= cfg.entry_size_score_full:
+    full_size_allowed = age_sec is None or age_sec >= cfg.entry_size_full_min_age_sec
+    if full_size_allowed and score >= cfg.entry_size_score_full:
         return round(base * max(1.0, cfg.entry_size_full_multiplier), 6)
     if score >= cfg.entry_size_score_mid:
         return round(base * max(1.0, cfg.entry_size_mid_multiplier), 6)
@@ -364,6 +367,22 @@ def _progressive_reference_reason(
     return None
 
 
+def _should_suppress_progressive_stop(
+    *,
+    position: PositionSnapshot,
+    remaining_sec: float,
+    reference_reason: str | None,
+    cfg: PolySourceConfig,
+) -> bool:
+    if reference_reason not in {"reference_crossed_k", "reference_floor_broken"}:
+        return False
+    if remaining_sec <= cfg.progressive_stop_late_remaining_sec:
+        return False
+    if position.entry_avg_price > max(0.0, cfg.entry_size_high_price_cap - 0.05):
+        return False
+    return cfg.entry_size_score_mid <= position.entry_edge < cfg.entry_size_score_full
+
+
 def _decision(
     action: str,
     reason: str,
@@ -530,7 +549,13 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
         position=position,
         cfg=cfg,
     )
-    if held_sec >= cfg.exit_min_hold_sec and loss_ratio >= cfg.progressive_stop_extreme_loss_ratio:
+    stop_suppressed = _should_suppress_progressive_stop(
+        position=position,
+        remaining_sec=snapshot.remaining_sec,
+        reference_reason=reference_reason,
+        cfg=cfg,
+    )
+    if held_sec >= cfg.exit_min_hold_sec and loss_ratio >= cfg.progressive_stop_extreme_loss_ratio and not stop_suppressed:
         return _decision(
             "exit",
             "extreme_loss_exit",
@@ -553,6 +578,23 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
         and loss_ratio >= allowed_loss_ratio
         and reference_reason is not None
     ):
+        if stop_suppressed:
+            return _decision(
+                "hold",
+                "strong_entry_stop_suppressed",
+                side=side,
+                price=bid,
+                limit_price=bid_limit,
+                distance_bps=own_distance,
+                trend_bps=trend,
+                cfg=cfg,
+                snapshot=snapshot,
+                profit_now=profit_now,
+                hold_score=hold_score,
+                progressive_loss_ratio=loss_ratio,
+                progressive_allowed_loss_ratio=allowed_loss_ratio,
+                progressive_reference_reason=reference_reason,
+            )
         return _decision(
             "exit",
             "progressive_stop_exit",

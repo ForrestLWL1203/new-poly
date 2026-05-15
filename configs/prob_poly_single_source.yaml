@@ -2,13 +2,13 @@ strategy:
   strategy_mode: poly_single_source
 
 poly_source:
-  entry_start_age_sec: 120
-  entry_end_age_sec: 220
+  entry_start_age_sec: 130
+  entry_end_age_sec: 240
   final_no_entry_remaining_sec: 30
   pre_entry_observation_start_age_sec: 60
   early_to_core_age_sec: 120
   core_to_late_age_sec: 240
-  early_value_entry_enabled: true
+  early_value_entry_enabled: false
   early_value_start_age_sec: 60
   early_value_end_age_sec: 120
   early_value_min_reference_distance_bps: 2.0
@@ -16,16 +16,16 @@ poly_source:
   early_value_min_entry_score: 5.0
   early_value_max_entry_ask: 0.65
   early_value_max_spread: 0.08
-  early_value_hold_protection_enabled: true
-  max_entries_per_market: 2
+  early_value_hold_protection_enabled: false
+  max_entries_per_market: 1
   max_book_age_ms: 1000
   poly_reference_distance_bps: 1.5
   max_poly_reference_distance_bps: 4.0
   poly_trend_lookback_sec: 10.0
   poly_return_bps: 0.3
-  max_entry_ask: 0.75
-  max_entry_fill_price: 0.75
-  min_poly_entry_score: 4.5
+  max_entry_ask: 0.70
+  max_entry_fill_price: 0.70
+  min_poly_entry_score: 6.2
   progressive_stop_warmup_sec: 30
   progressive_stop_full_sec: 120
   progressive_stop_initial_loss_ratio: 0.50
@@ -36,9 +36,10 @@ poly_source:
   reentry_cooldown_sec: 20
   reentry_min_score_bonus: 0.5
   reentry_max_entry_fill_price: 0.70
-  entry_size_score_mid: 6.0
-  entry_size_score_full: 6.5
+  entry_size_score_mid: 6.5
+  entry_size_score_full: 7.0
   entry_size_high_price_cap: 0.70
+  entry_size_full_min_age_sec: 150
   entry_size_mid_multiplier: 2.0
   entry_size_full_multiplier: 3.0
   poly_score_component_logs: compact

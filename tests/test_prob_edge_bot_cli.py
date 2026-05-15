@@ -45,7 +45,9 @@ def test_poly_single_source_config_loads() -> None:
     cfg = load_bot_config(REPO_ROOT / "configs" / "prob_poly_single_source.yaml")
 
     assert cfg.strategy_mode == "poly_single_source"
-    assert cfg.poly_source.early_value_entry_enabled is True
+    assert cfg.poly_source.entry_start_age_sec == 130.0
+    assert cfg.poly_source.entry_end_age_sec == 240.0
+    assert cfg.poly_source.early_value_entry_enabled is False
     assert cfg.poly_source.early_value_start_age_sec == 60.0
     assert cfg.poly_source.early_value_end_age_sec == 120.0
     assert cfg.poly_source.early_value_min_reference_distance_bps == 2.0
@@ -53,7 +55,14 @@ def test_poly_single_source_config_loads() -> None:
     assert cfg.poly_source.early_value_min_entry_score == 5.0
     assert cfg.poly_source.early_value_max_entry_ask == 0.65
     assert cfg.poly_source.early_value_max_spread == 0.08
-    assert cfg.poly_source.early_value_hold_protection_enabled is True
+    assert cfg.poly_source.early_value_hold_protection_enabled is False
+    assert cfg.poly_source.max_entries_per_market == 1
+    assert cfg.poly_source.max_entry_ask == 0.70
+    assert cfg.poly_source.max_entry_fill_price == 0.70
+    assert cfg.poly_source.min_poly_entry_score == 6.2
+    assert cfg.poly_source.entry_size_score_mid == 6.5
+    assert cfg.poly_source.entry_size_score_full == 7.0
+    assert cfg.poly_source.entry_size_full_min_age_sec == 150.0
     assert cfg.poly_source.poly_reference_distance_bps == 1.5
     assert cfg.poly_source.max_poly_reference_distance_bps == 4.0
     assert cfg.poly_source.reference_distance_exit_remaining_sec == (120.0, 90.0, 70.0, 45.0, 30.0)

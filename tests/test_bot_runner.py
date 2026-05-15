@@ -309,15 +309,15 @@ def test_live_unknown_buy_safety_check_uses_poly_entry_end_age() -> None:
     )
     snap = MarketSnapshot(
         market_slug="m1",
-        age_sec=240.0,
-        remaining_sec=100.0,
+        age_sec=250.0,
+        remaining_sec=50.0,
         s_price=101.0,
         k_price=100.0,
         sigma_eff=0.6,
     )
 
     assert options.config.poly_source is not None
-    assert options.config.poly_source.entry_end_age_sec == 220.0
+    assert options.config.poly_source.entry_end_age_sec == 240.0
     assert _unknown_buy_needs_safety_check(state=state, snap=snap, window=window, cfg=options.config, options=options)
 
 

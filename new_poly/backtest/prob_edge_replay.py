@@ -74,6 +74,7 @@ class BacktestConfig:
     entry_size_score_mid: float = 6.0
     entry_size_score_full: float = 6.5
     entry_size_high_price_cap: float = 0.70
+    entry_size_full_min_age_sec: float = 150.0
     entry_size_mid_multiplier: float = 2.0
     entry_size_full_multiplier: float = 3.0
     poly_score_component_logs: str = "compact"
@@ -124,6 +125,7 @@ class BacktestConfig:
             entry_size_score_mid=self.entry_size_score_mid,
             entry_size_score_full=self.entry_size_score_full,
             entry_size_high_price_cap=self.entry_size_high_price_cap,
+            entry_size_full_min_age_sec=self.entry_size_full_min_age_sec,
             entry_size_mid_multiplier=self.entry_size_mid_multiplier,
             entry_size_full_multiplier=self.entry_size_full_multiplier,
             poly_score_component_logs=self.poly_score_component_logs,
@@ -654,6 +656,7 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         entry_price=fill_price,
                         cfg=poly_cfg,
                         phase=decision.phase,
+                        age_sec=fill_snap.age_sec,
                     )
                     shares = entry_amount / fill_price
                     state.record_entry(PositionSnapshot(

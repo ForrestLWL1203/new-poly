@@ -130,6 +130,7 @@ def _record_unknown_entry_candidate(
         entry_price=decision.best_ask or decision.price or decision.limit_price,
         cfg=cfg.poly_source,
         phase=decision.phase,
+        age_sec=snap.age_sec,
     )
     state.record_unresolved_unknown_entry(UnknownEntryOrder(
         market_slug=window.slug,
@@ -675,6 +676,7 @@ async def handle_flat_tick(
         entry_price=decision.best_ask or decision.price or decision.limit_price,
         cfg=cfg.poly_source,
         phase=decision.phase,
+        age_sec=snap.age_sec,
     )
     if logger is not None:
         logger.write(_order_intent_row(
