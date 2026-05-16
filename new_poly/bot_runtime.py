@@ -1,4 +1,4 @@
-"""Runtime helpers for the BTC 5m probability-edge bot."""
+"""Runtime helpers for the BTC 5m poly-source bot."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from new_poly.market.binance_rv import BinanceRvSnapshot, fetch_binance_rv_snaps
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import fetch_dvol_snapshot
 from new_poly.market.deribit import DvolSnapshot
-from new_poly.market.prob_edge_data import (
+from new_poly.market.poly_source_data import (
     WindowPrices,
     effective_price,
     find_following_window,
@@ -39,15 +39,9 @@ from new_poly.market.prob_edge_data import (
 )
 from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.stream import PriceStream
-from new_poly.backtest.prob_edge_replay import BacktestConfig
+from new_poly.backtest.poly_source_replay import BacktestConfig
 from new_poly.bot_log_schema import _compact
-from new_poly.strategy.dynamic_params import (
-    DynamicConfig,
-    DynamicDecision,
-    DynamicState,
-    analyze_dynamic_params,
-)
-from new_poly.strategy.prob_edge import MarketSnapshot, StrategyDecision
+from new_poly.strategy.types import MarketSnapshot, StrategyDecision
 from new_poly.strategy.poly_source import PolySourceConfig, evaluate_poly_exit
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import (
@@ -58,8 +52,6 @@ from new_poly.trading.execution import (
 )
 
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "prob_poly_single_source.yaml"
-DEFAULT_DYNAMIC_CONFIG = DEFAULT_CONFIG
-DEFAULT_DYNAMIC_STATE = REPO_ROOT / "data" / "prob-edge-dynamic-state.json"
 
 
 class VolatilitySnapshot(Protocol):
@@ -118,9 +110,6 @@ class RuntimeOptions:
     config: BotConfig
     live_risk_ack: bool = False
     analysis_logs: bool = False
-    dynamic_params: bool = False
-    dynamic_config: Path = DEFAULT_DYNAMIC_CONFIG
-    dynamic_state: Path = DEFAULT_DYNAMIC_STATE
     log_retention_hours: float | None = 24.0
     log_prune_every_windows: int = 5
     post_exit_observation_enabled: bool = False
@@ -297,16 +286,6 @@ def load_bot_config(path: Path) -> BotConfig:
         pre_entry_observation_start_age_sec=float(_deep_get(raw, ("poly_source", "pre_entry_observation_start_age_sec"), 0.0)),
         early_to_core_age_sec=float(_deep_get(raw, ("poly_source", "early_to_core_age_sec"), 120.0)),
         core_to_late_age_sec=float(_deep_get(raw, ("poly_source", "core_to_late_age_sec"), 240.0)),
-        early_value_entry_enabled=bool(_deep_get(raw, ("poly_source", "early_value_entry_enabled"), False)),
-        early_value_start_age_sec=float(_deep_get(raw, ("poly_source", "early_value_start_age_sec"), 60.0)),
-        early_value_end_age_sec=float(_deep_get(raw, ("poly_source", "early_value_end_age_sec"), 120.0)),
-        early_value_min_reference_distance_bps=float(_deep_get(raw, ("poly_source", "early_value_min_reference_distance_bps"), 2.5)),
-        early_value_min_poly_return_bps=float(_deep_get(raw, ("poly_source", "early_value_min_poly_return_bps"), 0.5)),
-        early_value_min_entry_score=float(_deep_get(raw, ("poly_source", "early_value_min_entry_score"), 5.5)),
-        early_value_max_entry_ask=float(_deep_get(raw, ("poly_source", "early_value_max_entry_ask"), 0.60)),
-        early_value_max_spread=float(_deep_get(raw, ("poly_source", "early_value_max_spread"), 0.06)),
-        early_value_hold_protection_enabled=bool(_deep_get(raw, ("poly_source", "early_value_hold_protection_enabled"), False)),
-        max_entries_per_market=int(_deep_get(raw, ("poly_source", "max_entries_per_market"), 1)),
         max_book_age_ms=float(_deep_get(raw, ("poly_source", "max_book_age_ms"), 1000.0)),
         poly_reference_distance_bps=float(_deep_get(raw, ("poly_source", "poly_reference_distance_bps"), 0.5)),
         max_poly_reference_distance_bps=float(_deep_get(raw, ("poly_source", "max_poly_reference_distance_bps"), 0.0)),
@@ -329,10 +308,6 @@ def load_bot_config(path: Path) -> BotConfig:
         direction_confidence_score_override=bool(_deep_get(raw, ("poly_source", "direction_confidence_score_override"), False)),
         direction_confidence_high_reference_bps=float(_deep_get(raw, ("poly_source", "direction_confidence_high_reference_bps"), 3.0)),
         direction_confidence_prior_streak_min=int(_deep_get(raw, ("poly_source", "direction_confidence_prior_streak_min"), 3)),
-        exit_direction_confidence_enabled=bool(_deep_get(raw, ("poly_source", "exit_direction_confidence_enabled"), False)),
-        exit_min_direction_confidence=float(_deep_get(raw, ("poly_source", "exit_min_direction_confidence"), 0.78)),
-        exit_direction_confidence_min_hold_sec=float(_deep_get(raw, ("poly_source", "exit_direction_confidence_min_hold_sec"), 20.0)),
-        exit_direction_confidence_pressure_count=int(_deep_get(raw, ("poly_source", "exit_direction_confidence_pressure_count"), 2)),
         late_ev_exit_enabled=bool(_deep_get(raw, ("poly_source", "late_ev_exit_enabled"), False)),
         late_ev_exit_min_hold_sec=float(_deep_get(raw, ("poly_source", "late_ev_exit_min_hold_sec"), 60.0)),
         late_ev_exit_min_remaining_sec=float(_deep_get(raw, ("poly_source", "late_ev_exit_min_remaining_sec"), 45.0)),
@@ -346,34 +321,16 @@ def load_bot_config(path: Path) -> BotConfig:
         ),
         late_ev_exit_min_cross_bps=float(_deep_get(raw, ("poly_source", "late_ev_exit_min_cross_bps"), 0.5)),
         late_ev_exit_min_cross_sec=float(_deep_get(raw, ("poly_source", "late_ev_exit_min_cross_sec"), 5.0)),
-        progressive_stop_warmup_sec=float(_deep_get(raw, ("poly_source", "progressive_stop_warmup_sec"), 30.0)),
-        progressive_stop_full_sec=float(_deep_get(raw, ("poly_source", "progressive_stop_full_sec"), 120.0)),
-        progressive_stop_initial_loss_ratio=float(_deep_get(raw, ("poly_source", "progressive_stop_initial_loss_ratio"), 0.60)),
-        progressive_stop_final_loss_ratio=float(_deep_get(raw, ("poly_source", "progressive_stop_final_loss_ratio"), 0.30)),
-        progressive_stop_late_remaining_sec=float(_deep_get(raw, ("poly_source", "progressive_stop_late_remaining_sec"), 80.0)),
-        progressive_stop_reference_deterioration_bps=float(_deep_get(raw, ("poly_source", "progressive_stop_reference_deterioration_bps"), 2.0)),
-        progressive_stop_extreme_loss_ratio=float(_deep_get(raw, ("poly_source", "progressive_stop_extreme_loss_ratio"), 0.75)),
-        reentry_cooldown_sec=float(_deep_get(raw, ("poly_source", "reentry_cooldown_sec"), 20.0)),
-        reentry_min_score_bonus=float(_deep_get(raw, ("poly_source", "reentry_min_score_bonus"), 1.0)),
-        reentry_max_entry_fill_price=float(_deep_get(raw, ("poly_source", "reentry_max_entry_fill_price"), 0.65)),
+        extreme_loss_ratio=float(_deep_get(raw, ("poly_source", "extreme_loss_ratio"), 0.90)),
         entry_size_score_mid=float(_deep_get(raw, ("poly_source", "entry_size_score_mid"), 6.0)),
         entry_size_score_full=float(_deep_get(raw, ("poly_source", "entry_size_score_full"), 6.5)),
         entry_size_full_confidence=float(_deep_get(raw, ("poly_source", "entry_size_full_confidence"), 0.95)),
-        entry_size_high_price_cap=float(_deep_get(raw, ("poly_source", "entry_size_high_price_cap"), 0.70)),
         entry_size_full_min_age_sec=float(_deep_get(raw, ("poly_source", "entry_size_full_min_age_sec"), 150.0)),
         entry_size_mid_multiplier=float(_deep_get(raw, ("poly_source", "entry_size_mid_multiplier"), 2.0)),
         entry_size_full_multiplier=float(_deep_get(raw, ("poly_source", "entry_size_full_multiplier"), 3.0)),
         poly_score_component_logs=str(_deep_get(raw, ("poly_source", "poly_score_component_logs"), "compact")),
         entry_tick_size=float(_deep_get(raw, ("poly_source", "entry_tick_size"), 0.01)),
         buy_price_buffer_ticks=float(_deep_get(raw, ("poly_source", "buy_price_buffer_ticks"), 2.0)),
-        reference_distance_exit_remaining_sec=_float_tuple(
-            _deep_get(raw, ("poly_source", "reference_distance_exit_remaining_sec"), None),
-            (120.0, 90.0, 70.0, 45.0, 30.0),
-        ),
-        reference_distance_exit_min_bps=_float_tuple(
-            _deep_get(raw, ("poly_source", "reference_distance_exit_min_bps"), None),
-            (-2.0, -1.0, 0.25, 0.75, 1.0),
-        ),
         exit_min_hold_sec=float(_deep_get(raw, ("poly_source", "exit_min_hold_sec"), 3.0)),
         hold_to_settlement_enabled=bool(_deep_get(raw, ("poly_source", "hold_to_settlement_enabled"), True)),
         hold_to_settlement_min_profit_ratio=float(_deep_get(raw, ("poly_source", "hold_to_settlement_min_profit_ratio"), 0.50)),
@@ -461,7 +418,7 @@ def load_bot_config(path: Path) -> BotConfig:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="BTC 5m probability-edge strategy bot")
+    parser = argparse.ArgumentParser(description="BTC 5m poly-source strategy bot")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--mode", choices=("paper", "live"), default="paper")
     parser.add_argument("--i-understand-live-risk", action="store_true")
@@ -472,9 +429,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval-sec", type=float)
     parser.add_argument("--analysis-logs", dest="analysis_logs", action="store_true", default=None)
     parser.add_argument("--no-analysis-logs", dest="analysis_logs", action="store_false")
-    parser.add_argument("--dynamic-params", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--dynamic-config", type=Path, default=DEFAULT_DYNAMIC_CONFIG, help=argparse.SUPPRESS)
-    parser.add_argument("--dynamic-state", type=Path, default=DEFAULT_DYNAMIC_STATE, help=argparse.SUPPRESS)
     parser.add_argument("--log-retention-hours", type=float, default=24.0, help="Prune JSONL rows older than this many hours; <=0 disables pruning")
     parser.add_argument("--log-prune-every-windows", type=int, default=5, help="Run JSONL retention pruning every N completed windows")
     parser.add_argument("--post-exit-observation", dest="post_exit_observation_enabled", action="store_true", default=None)
@@ -521,10 +475,6 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         ))
     if args.mode == "live" and not args.i_understand_live_risk:
         raise ValueError("live mode requires --i-understand-live-risk")
-    if args.dynamic_params:
-        raise ValueError("--dynamic-params was removed with the old dual-source strategy")
-    if args.dynamic_params and args.jsonl is None:
-        raise ValueError("--dynamic-params requires --jsonl for analysis input")
     return RuntimeOptions(
         mode=args.mode,
         windows=args.windows,
@@ -533,9 +483,6 @@ def build_runtime_options(args: argparse.Namespace) -> RuntimeOptions:
         config=cfg,
         live_risk_ack=args.i_understand_live_risk,
         analysis_logs=(args.analysis_logs if args.analysis_logs is not None else args.mode == "paper"),
-        dynamic_params=bool(args.dynamic_params),
-        dynamic_config=args.dynamic_config,
-        dynamic_state=args.dynamic_state,
         log_retention_hours=(float(args.log_retention_hours) if args.log_retention_hours and args.log_retention_hours > 0 else None),
         log_prune_every_windows=max(1, int(args.log_prune_every_windows)),
         post_exit_observation_enabled=(
@@ -593,27 +540,12 @@ def _config_log_row(options: RuntimeOptions) -> dict[str, Any]:
             "post_exit_observation_enabled": options.post_exit_observation_enabled,
             "post_exit_observation_interval_sec": options.post_exit_observation_interval_sec,
         },
-        "dynamic_params": {
-            "enabled": options.dynamic_params,
-            "config": str(options.dynamic_config) if options.dynamic_params else None,
-            "state": str(options.dynamic_state) if options.dynamic_params else None,
-        },
         "log_retention_hours": options.log_retention_hours,
         "log_prune_every_windows": options.log_prune_every_windows,
     }
     if cfg.config_warnings:
         row["config_warnings"] = list(cfg.config_warnings)
     return row
-
-
-def _dynamic_health_payload(last_check_result: dict[str, Any]) -> dict[str, Any] | None:
-    value = last_check_result.get("health")
-    return value if isinstance(value, dict) else None
-
-
-def _dynamic_candidate_payload(last_check_result: dict[str, Any]) -> list[Any]:
-    value = last_check_result.get("candidate_results")
-    return value if isinstance(value, list) else []
 
 
 PRICE_RUNTIME_FIELDS = {"price_source", "s_price", "k_price", "basis_bps"}
@@ -634,7 +566,6 @@ PRICE_ANALYSIS_FIELDS = {
     "source_spread_bps",
     "lead_binance_vs_polymarket_usd",
     "lead_binance_vs_polymarket_bps",
-    "polymarket_divergence_bps",
     "lead_coinbase_vs_polymarket_usd",
     "lead_coinbase_vs_polymarket_bps",
     "lead_proxy_vs_polymarket_usd",
@@ -662,7 +593,7 @@ PRICE_ANALYSIS_FIELDS = {
 }
 
 
-def _runtime_log_meta(meta: dict[str, Any], *, strategy_mode: str = "prob_edge") -> dict[str, Any]:
+def _runtime_log_meta(meta: dict[str, Any], *, strategy_mode: str = "poly_single_source") -> dict[str, Any]:
     if strategy_mode == "poly_single_source":
         return {
             key: value
@@ -673,7 +604,7 @@ def _runtime_log_meta(meta: dict[str, Any], *, strategy_mode: str = "prob_edge")
     return {key: value for key, value in meta.items() if key not in PRICE_ANALYSIS_FIELDS}
 
 
-def _price_analysis(meta: dict[str, Any], *, strategy_mode: str = "prob_edge") -> dict[str, Any]:
+def _price_analysis(meta: dict[str, Any], *, strategy_mode: str = "poly_single_source") -> dict[str, Any]:
     if strategy_mode == "poly_single_source":
         fields = (
             "k_price",
@@ -714,7 +645,6 @@ def _price_analysis(meta: dict[str, Any], *, strategy_mode: str = "prob_edge") -
             "source_spread_bps",
             "lead_binance_vs_polymarket_usd",
             "lead_binance_vs_polymarket_bps",
-            "polymarket_divergence_bps",
             "lead_binance_return_3s_bps",
             "lead_polymarket_return_3s_bps",
             "lead_polymarket_return_10s_bps",
@@ -753,7 +683,7 @@ def _should_attach_reference_meta(
     return decision is not None and decision.action == "exit"
 
 
-def _reference_meta(meta: dict[str, Any], *, strategy_mode: str = "prob_edge") -> dict[str, Any]:
+def _reference_meta(meta: dict[str, Any], *, strategy_mode: str = "poly_single_source") -> dict[str, Any]:
     if strategy_mode == "poly_single_source":
         fields = (
             "polymarket_price",
@@ -777,7 +707,6 @@ def _reference_meta(meta: dict[str, Any], *, strategy_mode: str = "prob_edge") -
         "polymarket_price_age_sec",
         "lead_binance_vs_polymarket_usd",
         "lead_binance_vs_polymarket_bps",
-        "polymarket_divergence_bps",
         "lead_binance_return_3s_bps",
         "lead_polymarket_return_3s_bps",
         "lead_polymarket_return_10s_bps",
@@ -851,13 +780,7 @@ def _should_write_row(row: dict[str, Any], seen_repetitive_skips: set[tuple[str,
         return False
     reason = decision.get("reason")
     one_per_window_reasons = {"outside_entry_time", "max_entries", "final_no_entry"}
-    one_per_window_phase_reasons = {
-        "edge_too_small",
-        "gap_direction_conflict",
-        "model_prob_too_low",
-        "reference_not_confirmed",
-        "weak_sk_distance",
-    }
+    one_per_window_phase_reasons = {"direction_confidence_too_low"}
     one_per_window_side_reasons = {
         "poly_ask_too_high",
         "poly_reference_distance_too_high",
@@ -968,17 +891,7 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         entry_end_age_sec=cfg.poly_source.entry_end_age_sec,
         final_no_entry_remaining_sec=cfg.poly_source.final_no_entry_remaining_sec,
         pre_entry_observation_start_age_sec=cfg.poly_source.pre_entry_observation_start_age_sec,
-        early_value_entry_enabled=cfg.poly_source.early_value_entry_enabled,
-        early_value_start_age_sec=cfg.poly_source.early_value_start_age_sec,
-        early_value_end_age_sec=cfg.poly_source.early_value_end_age_sec,
-        early_value_min_reference_distance_bps=cfg.poly_source.early_value_min_reference_distance_bps,
-        early_value_min_poly_return_bps=cfg.poly_source.early_value_min_poly_return_bps,
-        early_value_min_entry_score=cfg.poly_source.early_value_min_entry_score,
-        early_value_max_entry_ask=cfg.poly_source.early_value_max_entry_ask,
-        early_value_max_spread=cfg.poly_source.early_value_max_spread,
-        early_value_hold_protection_enabled=cfg.poly_source.early_value_hold_protection_enabled,
         max_book_age_ms=cfg.poly_source.max_book_age_ms,
-        max_entries_per_market=cfg.poly_source.max_entries_per_market,
         buy_slippage_ticks=0.0,
         sell_slippage_ticks=0.0,
         sell_price_buffer_ticks=cfg.execution.sell_price_buffer_ticks,
@@ -1010,10 +923,6 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         direction_confidence_score_override=cfg.poly_source.direction_confidence_score_override,
         direction_confidence_high_reference_bps=cfg.poly_source.direction_confidence_high_reference_bps,
         direction_confidence_prior_streak_min=cfg.poly_source.direction_confidence_prior_streak_min,
-        exit_direction_confidence_enabled=cfg.poly_source.exit_direction_confidence_enabled,
-        exit_min_direction_confidence=cfg.poly_source.exit_min_direction_confidence,
-        exit_direction_confidence_min_hold_sec=cfg.poly_source.exit_direction_confidence_min_hold_sec,
-        exit_direction_confidence_pressure_count=cfg.poly_source.exit_direction_confidence_pressure_count,
         late_ev_exit_enabled=cfg.poly_source.late_ev_exit_enabled,
         late_ev_exit_min_hold_sec=cfg.poly_source.late_ev_exit_min_hold_sec,
         late_ev_exit_min_remaining_sec=cfg.poly_source.late_ev_exit_min_remaining_sec,
@@ -1026,40 +935,13 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         entry_size_score_mid=cfg.poly_source.entry_size_score_mid,
         entry_size_score_full=cfg.poly_source.entry_size_score_full,
         entry_size_full_confidence=cfg.poly_source.entry_size_full_confidence,
-        entry_size_high_price_cap=cfg.poly_source.entry_size_high_price_cap,
         entry_size_full_min_age_sec=cfg.poly_source.entry_size_full_min_age_sec,
         entry_size_mid_multiplier=cfg.poly_source.entry_size_mid_multiplier,
         entry_size_full_multiplier=cfg.poly_source.entry_size_full_multiplier,
-        reference_distance_exit_remaining_sec=cfg.poly_source.reference_distance_exit_remaining_sec,
-        reference_distance_exit_min_bps=cfg.poly_source.reference_distance_exit_min_bps,
+        extreme_loss_ratio=cfg.poly_source.extreme_loss_ratio,
         poly_exit_min_hold_sec=cfg.poly_source.exit_min_hold_sec,
         poly_hold_to_settlement_min_reference_distance_bps=cfg.poly_source.hold_to_settlement_min_reference_distance_bps,
         poly_hold_to_settlement_min_poly_return_bps=cfg.poly_source.hold_to_settlement_min_poly_return_bps,
-    )
-
-
-async def _run_dynamic_analysis_task(
-    *,
-    jsonl_path: Path,
-    dynamic_cfg: DynamicConfig,
-    dynamic_state: DynamicState,
-    base_config: BacktestConfig,
-    mode: str,
-    current_window_id: str,
-    realized_drawdown: float | None,
-) -> tuple[DynamicDecision, DynamicState]:
-    return await asyncio.wait_for(
-        asyncio.to_thread(
-            analyze_dynamic_params,
-            jsonl_path,
-            dynamic_cfg,
-            dynamic_state,
-            base_config,
-            mode=mode,
-            current_window_id=current_window_id,
-            realized_drawdown=realized_drawdown,
-        ),
-        timeout=dynamic_cfg.analysis_timeout_sec,
     )
 
 
@@ -1152,7 +1034,6 @@ def _snapshot(
         up_bid_age_ms=up.get("bid_age_ms"),
         down_bid_age_ms=down.get("bid_age_ms"),
         source_spread_bps=price.spread_bps,
-        polymarket_divergence_bps=lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps,
         polymarket_price=fresh_polymarket_price,
         polymarket_price_age_sec=price.polymarket_age_sec,
         polymarket_return_1s_bps=price_return_bps(polymarket_feed, now_ts=now_ts, lookback_sec=1.0),
@@ -1189,7 +1070,6 @@ def _snapshot(
         "source_spread_bps": _compact(raw_source_spread_bps if raw_source_spread_bps is not None else price.spread_bps, 3),
         "lead_binance_vs_polymarket_usd": _compact(lead_binance_usd, 2),
         "lead_binance_vs_polymarket_bps": _compact(lead_binance_bps, 3),
-        "polymarket_divergence_bps": _compact(lead_proxy_bps if cfg.coinbase_enabled and lead_proxy_bps is not None else lead_binance_bps, 3),
         "lead_coinbase_vs_polymarket_usd": _compact(lead_coinbase_usd, 2),
         "lead_coinbase_vs_polymarket_bps": _compact(lead_coinbase_bps, 3),
         "lead_proxy_vs_polymarket_usd": _compact(lead_proxy_usd, 2),

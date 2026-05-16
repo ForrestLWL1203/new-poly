@@ -12,7 +12,7 @@ def _paths(tmp_path: Path) -> DashboardPaths:
     repo.mkdir()
     (repo / "scripts").mkdir()
     (repo / "configs").mkdir()
-    (repo / "scripts" / "run_prob_edge_bot.py").write_text("print('bot')\n", encoding="utf-8")
+    (repo / "scripts" / "run_poly_source_bot.py").write_text("print('bot')\n", encoding="utf-8")
     (repo / "configs" / "prob_poly_single_source.yaml").write_text("strategy: {}\n", encoding="utf-8")
     logs = tmp_path / "logs"
     logs.mkdir()
@@ -44,7 +44,7 @@ def test_restart_builds_whitelisted_paper_command(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     cmd = launched[0][0]
-    assert cmd[:2] == ["/venv/bin/python", str(tmp_path / "repo" / "scripts" / "run_prob_edge_bot.py")]
+    assert cmd[:2] == ["/venv/bin/python", str(tmp_path / "repo" / "scripts" / "run_poly_source_bot.py")]
     assert "--mode" in cmd and "paper" in cmd
     assert "--windows" in cmd and "12" in cmd
     assert "--analysis-logs" in cmd
@@ -65,7 +65,7 @@ def test_restart_rejects_live_control_in_local_environment(tmp_path: Path) -> No
 def test_stop_only_targets_matching_bot_process(tmp_path: Path) -> None:
     killed = []
     processes = [
-        {"pid": 111, "cmd": "/venv/bin/python /repo/scripts/run_prob_edge_bot.py --mode paper --jsonl paper.jsonl"},
+        {"pid": 111, "cmd": "/venv/bin/python /repo/scripts/run_poly_source_bot.py --mode paper --jsonl paper.jsonl"},
         {"pid": 222, "cmd": "python unrelated.py --mode paper"},
     ]
     controller = DashboardProcessController(
@@ -91,7 +91,7 @@ def test_status_is_idle_after_stop_process_disappears_without_selected_log(tmp_p
     )
     process_rows = [{
         "pid": 333,
-        "cmd": f"/venv/bin/python {paths.repo_root}/scripts/run_prob_edge_bot.py --mode paper --jsonl {running_log}",
+        "cmd": f"/venv/bin/python {paths.repo_root}/scripts/run_poly_source_bot.py --mode paper --jsonl {running_log}",
     }]
 
     controller = DashboardProcessController(paths, process_lister=lambda: process_rows, terminator=lambda _pid: None)
@@ -126,7 +126,7 @@ def test_status_uses_running_process_jsonl_path(tmp_path: Path) -> None:
     running_log.write_text('{"ts":"2026-05-13T02:00:00+00:00","event":"config","mode":"paper","windows":1}\n', encoding="utf-8")
     processes = [{
         "pid": 333,
-        "cmd": f"/venv/bin/python {paths.repo_root}/scripts/run_prob_edge_bot.py --mode paper --jsonl {running_log}",
+        "cmd": f"/venv/bin/python {paths.repo_root}/scripts/run_poly_source_bot.py --mode paper --jsonl {running_log}",
     }]
     controller = DashboardProcessController(paths, process_lister=lambda: processes)
 
@@ -142,7 +142,7 @@ def test_status_ignores_shell_commands_that_mention_bot_name(tmp_path: Path) -> 
     log.write_text('{"ts":"2026-05-13T01:00:00+00:00","event":"config","mode":"paper","windows":1}\n', encoding="utf-8")
     processes = [{
         "pid": 444,
-        "cmd": "zsh -lc pgrep -af 'run_prob_edge_bot.py.*--mode paper'",
+        "cmd": "zsh -lc pgrep -af 'run_poly_source_bot.py.*--mode paper'",
     }]
     controller = DashboardProcessController(paths, process_lister=lambda: processes)
 

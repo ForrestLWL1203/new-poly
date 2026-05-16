@@ -192,7 +192,7 @@ def test_paper_sell_uses_live_style_exit_floor(monkeypatch) -> None:
             config=ExecutionConfig(paper_latency_sec=0.0, sell_price_buffer_ticks=4, sell_retry_price_buffer_ticks=5),
         )
 
-        result = await gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="progressive_stop_exit")
+        result = await gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="late_ev_exit")
 
         assert result.success is True
         assert result.avg_price == 0.36
@@ -431,7 +431,7 @@ def test_live_sell_profit_exit_uses_configured_aggressive_retry(monkeypatch) -> 
         ExecutionResult(True, filled_size=10.0, avg_price=0.39, message="MATCHED", mode="live"),
     ])
 
-    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="late_ev_exit"))
 
     assert result.success is True
     assert gateway.calls[0][3] == 0.32
@@ -446,7 +446,7 @@ def test_live_sell_logic_decay_starts_below_bid_limit(monkeypatch) -> None:
         ExecutionResult(True, filled_size=10.0, avg_price=0.36, message="MATCHED", mode="live"),
     ])
 
-    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="late_ev_exit"))
 
     assert result.success is True
     assert gateway.calls[0][3] == 0.32
@@ -461,7 +461,7 @@ def test_live_sell_polymarket_divergence_uses_configured_aggressive_retry(monkey
         ExecutionResult(True, filled_size=10.0, avg_price=0.36, message="MATCHED", mode="live"),
     ])
 
-    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="late_ev_exit"))
 
     assert result.success is True
     assert gateway.calls[0][3] == 0.32
@@ -480,9 +480,9 @@ def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) ->
     async def refresh_retry(attempt):
         attempts.append(attempt)
         if attempt == 0:
-            return SellRetryParams(min_price=0.40, exit_reason="progressive_stop_exit")
+            return SellRetryParams(min_price=0.40, exit_reason="late_ev_exit")
         if attempt == 1:
-            return SellRetryParams(min_price=0.50, exit_reason="progressive_stop_exit")
+            return SellRetryParams(min_price=0.50, exit_reason="late_ev_exit")
         raise AssertionError(f"unexpected attempt {attempt}")
 
     result = asyncio.run(
@@ -490,7 +490,7 @@ def test_live_sell_retry_refreshes_exit_floor_before_second_post(monkeypatch) ->
             "up",
             shares=10.0,
             min_price=0.40,
-            exit_reason="progressive_stop_exit",
+            exit_reason="late_ev_exit",
             retry_refresh=refresh_retry,
         )
     )
@@ -511,14 +511,14 @@ def test_live_sell_refreshes_exit_floor_before_first_post(monkeypatch) -> None:
 
     async def refresh_retry(attempt):
         attempts.append(attempt)
-        return SellRetryParams(min_price=0.50, exit_reason="progressive_stop_exit")
+        return SellRetryParams(min_price=0.50, exit_reason="late_ev_exit")
 
     result = asyncio.run(
         gateway.sell(
             "up",
             shares=10.0,
             min_price=0.40,
-            exit_reason="progressive_stop_exit",
+            exit_reason="late_ev_exit",
             retry_refresh=refresh_retry,
         )
     )
@@ -542,7 +542,7 @@ def test_live_batch_sell_posts_multiple_fak_slices(monkeypatch) -> None:
         batch_exit_extra_buffer_ticks=(0.0, 3.0, 6.0),
     )
 
-    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="late_ev_exit"))
 
     assert result.success is True
     assert result.filled_size == pytest.approx(100.0)
@@ -560,7 +560,7 @@ def test_live_batch_sell_invalid_amount_is_soft_failure(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
     gateway = LiveFakExecutionGateway(live_risk_ack=True, batch_exit_enabled=True, batch_exit_min_shares=20.0)
 
-    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="late_ev_exit"))
 
     assert result.success is False
     assert result.message == "live invalid amount"
@@ -574,7 +574,7 @@ def test_live_batch_sell_balance_error_is_soft_failure(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_tick_size", lambda token_id: 0.01)
     gateway = LiveFakExecutionGateway(live_risk_ack=True, batch_exit_enabled=True, batch_exit_min_shares=20.0)
 
-    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="late_ev_exit"))
 
     assert result.success is False
     assert result.message.startswith("live sell balance unavailable")
@@ -631,7 +631,7 @@ def test_live_sell_balance_error_is_not_fatal(monkeypatch) -> None:
         ExecutionResult(False, message="live sell balance unavailable", mode="live"),
     ])
 
-    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.10, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.10, exit_reason="late_ev_exit"))
 
     assert result.success is False
     assert result.fatal_stop_reason is None
@@ -653,7 +653,7 @@ def test_live_sell_request_exception_reconciles_from_balance_and_trades(monkeypa
         ),
     ])
 
-    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.12, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.12, exit_reason="late_ev_exit"))
 
     assert result.success is True
     assert result.message == "live sell reconciled after unknown POST result"
@@ -683,7 +683,7 @@ def test_live_sell_unknown_result_polls_until_balance_decreases(monkeypatch) -> 
         ),
     ])
 
-    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.12, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=4.0, min_price=0.12, exit_reason="late_ev_exit"))
 
     assert result.success is True
     assert result.message == "live sell reconciled after unknown POST result"
@@ -729,7 +729,7 @@ def test_live_sell_success_trusts_response_when_balance_lags(monkeypatch) -> Non
         ),
     ])
 
-    result = asyncio.run(gateway.sell("down", shares=2.941175, min_price=0.11, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("down", shares=2.941175, min_price=0.11, exit_reason="late_ev_exit"))
 
     assert result.success is True
     assert result.filled_size == pytest.approx(2.94)
@@ -754,7 +754,7 @@ def test_live_sell_success_trusts_response_when_balance_has_not_moved_yet(monkey
         ),
     ])
 
-    result = asyncio.run(gateway.sell("down", shares=2.941175, min_price=0.11, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("down", shares=2.941175, min_price=0.11, exit_reason="late_ev_exit"))
 
     assert result.success is True
     assert result.filled_size == pytest.approx(2.94)
@@ -1043,7 +1043,7 @@ def test_live_sell_first_attempt_uses_cached_shares_without_balance_lookup(monke
         ExecutionResult(False, message="UNMATCHED", mode="live"),
     ], retry_count=0)
 
-    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=10.0, min_price=0.40, exit_reason="late_ev_exit"))
 
     assert result.success is False
     assert gateway.calls == [("up", 10.0, SELL, 0.32)]
@@ -1070,7 +1070,7 @@ def test_live_sell_dust_shares_are_not_posted(monkeypatch) -> None:
     monkeypatch.setattr("new_poly.trading.execution.get_token_balance", lambda token_id, safe=True: 0.005787)
     gateway = SequencedLiveGateway([], live_min_sell_shares=0.01)
 
-    result = asyncio.run(gateway.sell("up", shares=0.005787, min_price=0.64, exit_reason="progressive_stop_exit"))
+    result = asyncio.run(gateway.sell("up", shares=0.005787, min_price=0.64, exit_reason="late_ev_exit"))
 
     assert result.success is False
     assert result.attempt == 0
@@ -1411,13 +1411,13 @@ def test_paper_sell_retry_uses_refreshed_exit_floor(monkeypatch) -> None:
 
         async def refresh_retry(attempt):
             assert attempt == 1
-            return SellRetryParams(min_price=0.50, exit_reason="progressive_stop_exit")
+            return SellRetryParams(min_price=0.50, exit_reason="late_ev_exit")
 
         result = await gateway.sell(
             "up",
             shares=10.0,
             min_price=0.60,
-            exit_reason="progressive_stop_exit",
+            exit_reason="late_ev_exit",
             retry_refresh=refresh_retry,
         )
 
@@ -1442,7 +1442,7 @@ def test_paper_sell_uses_local_tick_without_clob_lookup(monkeypatch) -> None:
             config=ExecutionConfig(paper_latency_sec=0.0, retry_interval_sec=0.0, retry_count=0),
         )
 
-        result = await gateway.sell("up", shares=10.0, min_price=0.50, exit_reason="progressive_stop_exit")
+        result = await gateway.sell("up", shares=10.0, min_price=0.50, exit_reason="late_ev_exit")
 
         assert result.success is True
         assert result.avg_price == 0.45
@@ -1470,7 +1470,7 @@ def test_paper_batch_sell_can_partially_exit_large_share_position(monkeypatch) -
             ),
         )
 
-        result = await gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="progressive_stop_exit")
+        result = await gateway.sell("up", shares=100.0, min_price=0.38, exit_reason="late_ev_exit")
 
         assert result.success is True
         assert result.filled_size == pytest.approx(100.0)
@@ -1497,7 +1497,7 @@ def test_paper_sell_retry_skips_when_exit_refresh_fails(monkeypatch) -> None:
             "up",
             shares=10.0,
             min_price=0.60,
-            exit_reason="progressive_stop_exit",
+            exit_reason="late_ev_exit",
             retry_refresh=refresh_retry,
         )
 

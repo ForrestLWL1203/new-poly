@@ -1,1 +1,1 @@
-"""Offline replay tools for probability-edge research."""
+"""Offline replay tools for poly-source research."""

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live data collector for BTC 5m probability-edge research."""
+"""Live data collector for BTC 5m poly-source research."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import DvolSnapshot, fetch_dvol_snapshot
 from new_poly.market.market import MarketWindow
-from new_poly.market.prob_edge_data import (
+from new_poly.market.poly_source_data import (
     DEFAULT_MAX_DVOL_AGE_SEC,
     WindowPrices,
     compact_float,
@@ -232,7 +232,7 @@ def build_row(
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Emit compact JSONL data rows for BTC 5m probability-edge research.")
+    parser = argparse.ArgumentParser(description="Emit compact JSONL data rows for BTC 5m poly-source research.")
     parser.add_argument("--depth-notional", type=float, default=5.0)
     parser.add_argument("--depth-safety-multiplier", type=float, default=1.5)
     parser.add_argument("--order-notional", type=float, dest="depth_notional", help=argparse.SUPPRESS)

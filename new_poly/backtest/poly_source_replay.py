@@ -1,4 +1,4 @@
-"""Replay collector JSONL rows through the probability-edge strategy."""
+"""Replay collector JSONL rows through the poly-source strategy."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
-from new_poly.strategy.prob_edge import MarketSnapshot
+from new_poly.strategy.types import MarketSnapshot
 from new_poly.strategy.poly_source import PolySourceConfig, entry_amount_usd, evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.execution import sell_aggression_ticks
@@ -25,17 +25,7 @@ class BacktestConfig:
     entry_end_age_sec: float = 270.0
     final_no_entry_remaining_sec: float = 30.0
     pre_entry_observation_start_age_sec: float = 0.0
-    early_value_entry_enabled: bool = False
-    early_value_start_age_sec: float = 60.0
-    early_value_end_age_sec: float = 120.0
-    early_value_min_reference_distance_bps: float = 2.5
-    early_value_min_poly_return_bps: float = 0.5
-    early_value_min_entry_score: float = 5.5
-    early_value_max_entry_ask: float = 0.60
-    early_value_max_spread: float = 0.06
-    early_value_hold_protection_enabled: bool = False
     max_book_age_ms: float = 1000.0
-    max_entries_per_market: int = 2
     entry_tick_size: float = 0.01
     buy_slippage_ticks: float = 0.0
     sell_slippage_ticks: float = 0.0
@@ -75,10 +65,6 @@ class BacktestConfig:
     direction_confidence_score_override: bool = False
     direction_confidence_high_reference_bps: float = 3.0
     direction_confidence_prior_streak_min: int = 3
-    exit_direction_confidence_enabled: bool = False
-    exit_min_direction_confidence: float = 0.78
-    exit_direction_confidence_min_hold_sec: float = 20.0
-    exit_direction_confidence_pressure_count: int = 2
     late_ev_exit_enabled: bool = False
     late_ev_exit_min_hold_sec: float = 60.0
     late_ev_exit_min_remaining_sec: float = 45.0
@@ -86,27 +72,15 @@ class BacktestConfig:
     late_ev_exit_margin: tuple[float, ...] = (0.18, 0.12, 0.06)
     late_ev_exit_min_cross_bps: float = 0.5
     late_ev_exit_min_cross_sec: float = 5.0
-    progressive_stop_warmup_sec: float = 30.0
-    progressive_stop_full_sec: float = 120.0
-    progressive_stop_initial_loss_ratio: float = 0.60
-    progressive_stop_final_loss_ratio: float = 0.30
-    progressive_stop_late_remaining_sec: float = 80.0
-    progressive_stop_reference_deterioration_bps: float = 2.0
-    progressive_stop_extreme_loss_ratio: float = 0.75
-    reentry_cooldown_sec: float = 20.0
-    reentry_min_score_bonus: float = 1.0
-    reentry_max_entry_fill_price: float = 0.65
+    extreme_loss_ratio: float = 0.90
     entry_size_score_mid: float = 6.0
     entry_size_score_full: float = 6.5
     entry_size_full_confidence: float = 0.95
-    entry_size_high_price_cap: float = 0.70
     entry_size_full_min_age_sec: float = 150.0
     entry_size_mid_multiplier: float = 2.0
     entry_size_full_multiplier: float = 3.0
     poly_score_component_logs: str = "compact"
     poly_buy_price_buffer_ticks: float = 2.0
-    reference_distance_exit_remaining_sec: tuple[float, ...] = (120.0, 90.0, 70.0, 45.0, 30.0)
-    reference_distance_exit_min_bps: tuple[float, ...] = (-2.0, -1.0, 0.25, 0.75, 1.0)
     poly_exit_min_hold_sec: float = 3.0
     poly_hold_to_settlement_min_reference_distance_bps: float = 1.0
     poly_hold_to_settlement_min_poly_return_bps: float = 0.0
@@ -120,16 +94,6 @@ class BacktestConfig:
             pre_entry_observation_start_age_sec=self.pre_entry_observation_start_age_sec,
             early_to_core_age_sec=self.early_to_core_age_sec,
             core_to_late_age_sec=self.core_to_late_age_sec,
-            early_value_entry_enabled=self.early_value_entry_enabled,
-            early_value_start_age_sec=self.early_value_start_age_sec,
-            early_value_end_age_sec=self.early_value_end_age_sec,
-            early_value_min_reference_distance_bps=self.early_value_min_reference_distance_bps,
-            early_value_min_poly_return_bps=self.early_value_min_poly_return_bps,
-            early_value_min_entry_score=self.early_value_min_entry_score,
-            early_value_max_entry_ask=self.early_value_max_entry_ask,
-            early_value_max_spread=self.early_value_max_spread,
-            early_value_hold_protection_enabled=self.early_value_hold_protection_enabled,
-            max_entries_per_market=self.max_entries_per_market,
             max_book_age_ms=self.max_book_age_ms,
             poly_reference_distance_bps=self.poly_reference_distance_bps,
             max_poly_reference_distance_bps=self.max_poly_reference_distance_bps,
@@ -152,10 +116,6 @@ class BacktestConfig:
             direction_confidence_score_override=self.direction_confidence_score_override,
             direction_confidence_high_reference_bps=self.direction_confidence_high_reference_bps,
             direction_confidence_prior_streak_min=self.direction_confidence_prior_streak_min,
-            exit_direction_confidence_enabled=self.exit_direction_confidence_enabled,
-            exit_min_direction_confidence=self.exit_min_direction_confidence,
-            exit_direction_confidence_min_hold_sec=self.exit_direction_confidence_min_hold_sec,
-            exit_direction_confidence_pressure_count=self.exit_direction_confidence_pressure_count,
             late_ev_exit_enabled=self.late_ev_exit_enabled,
             late_ev_exit_min_hold_sec=self.late_ev_exit_min_hold_sec,
             late_ev_exit_min_remaining_sec=self.late_ev_exit_min_remaining_sec,
@@ -163,28 +123,16 @@ class BacktestConfig:
             late_ev_exit_margin=self.late_ev_exit_margin,
             late_ev_exit_min_cross_bps=self.late_ev_exit_min_cross_bps,
             late_ev_exit_min_cross_sec=self.late_ev_exit_min_cross_sec,
-            progressive_stop_warmup_sec=self.progressive_stop_warmup_sec,
-            progressive_stop_full_sec=self.progressive_stop_full_sec,
-            progressive_stop_initial_loss_ratio=self.progressive_stop_initial_loss_ratio,
-            progressive_stop_final_loss_ratio=self.progressive_stop_final_loss_ratio,
-            progressive_stop_late_remaining_sec=self.progressive_stop_late_remaining_sec,
-            progressive_stop_reference_deterioration_bps=self.progressive_stop_reference_deterioration_bps,
-            progressive_stop_extreme_loss_ratio=self.progressive_stop_extreme_loss_ratio,
-            reentry_cooldown_sec=self.reentry_cooldown_sec,
-            reentry_min_score_bonus=self.reentry_min_score_bonus,
-            reentry_max_entry_fill_price=self.reentry_max_entry_fill_price,
+            extreme_loss_ratio=self.extreme_loss_ratio,
             entry_size_score_mid=self.entry_size_score_mid,
             entry_size_score_full=self.entry_size_score_full,
             entry_size_full_confidence=self.entry_size_full_confidence,
-            entry_size_high_price_cap=self.entry_size_high_price_cap,
             entry_size_full_min_age_sec=self.entry_size_full_min_age_sec,
             entry_size_mid_multiplier=self.entry_size_mid_multiplier,
             entry_size_full_multiplier=self.entry_size_full_multiplier,
             poly_score_component_logs=self.poly_score_component_logs,
             entry_tick_size=self.entry_tick_size,
             buy_price_buffer_ticks=self.poly_buy_price_buffer_ticks,
-            reference_distance_exit_remaining_sec=self.reference_distance_exit_remaining_sec,
-            reference_distance_exit_min_bps=self.reference_distance_exit_min_bps,
             exit_min_hold_sec=self.poly_exit_min_hold_sec,
             hold_to_settlement_enabled=self.hold_to_settlement_enabled,
             hold_to_settlement_min_profit_ratio=self.hold_to_settlement_min_profit_ratio,
@@ -266,14 +214,6 @@ def snapshot_from_row(row: dict[str, Any]) -> MarketSnapshot:
         up_bid_age_ms=_float(up.get("bid_age_ms")),
         down_bid_age_ms=_float(down.get("bid_age_ms")),
         source_spread_bps=_first_float(row.get("source_spread_bps"), analysis_sources.get("source_spread_bps")),
-        polymarket_divergence_bps=_first_float(
-            row.get("polymarket_divergence_bps"),
-            row.get("lead_binance_vs_polymarket_bps"),
-            reference.get("polymarket_divergence_bps"),
-            reference.get("lead_binance_vs_polymarket_bps"),
-            analysis_sources.get("polymarket_divergence_bps"),
-            analysis_sources.get("lead_binance_vs_polymarket_bps"),
-        ),
         polymarket_price=_first_float(row.get("polymarket_price"), reference.get("polymarket_price"), analysis_sources.get("polymarket_price")),
         polymarket_price_age_sec=_first_float(row.get("polymarket_price_age_sec"), reference.get("polymarket_price_age_sec"), analysis_sources.get("polymarket_price_age_sec")),
         polymarket_return_1s_bps=_first_float(row.get("polymarket_return_1s_bps"), row.get("lead_polymarket_return_1s_bps"), reference.get("lead_polymarket_return_1s_bps"), analysis_sources.get("lead_polymarket_return_1s_bps")),
@@ -506,12 +446,8 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
     order = _order(row)
     side = analysis.get("entry_side")
     entry_price = _float(analysis.get("entry_price")) or _float(order.get("avg_price"))
-    model_prob = _float(analysis.get("entry_model_prob")) or _float((row.get("decision") or {}).get("model_prob"))
-    edge = _float(analysis.get("entry_edge_signal")) or _float((row.get("decision") or {}).get("edge")) or 0.0
-    entry_polymarket_divergence_bps = _float(analysis.get("entry_polymarket_divergence_bps"))
-    entry_favorable_gap_bps = _float(analysis.get("entry_favorable_gap_bps"))
-    entry_reference_distance_bps = _float(analysis.get("entry_reference_distance_bps"))
-    if side not in {"up", "down"} or entry_price is None or model_prob is None:
+    entry_reference_distance_bps = _float(analysis.get("entry_poly_reference_distance_bps")) or _float(analysis.get("entry_reference_distance_bps"))
+    if side not in {"up", "down"} or entry_price is None:
         return None
     entry_amount = (
         _float(row.get("amount_usd"))
@@ -530,11 +466,7 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
         entry_time=age_sec,
         entry_avg_price=entry_price,
         filled_shares=shares,
-        entry_model_prob=model_prob,
-        entry_edge=edge,
         entry_amount_usd=entry_amount,
-        entry_polymarket_divergence_bps=entry_polymarket_divergence_bps,
-        entry_favorable_gap_bps=entry_favorable_gap_bps,
         entry_reference_distance_bps=entry_reference_distance_bps,
     )
     trade = {
@@ -544,9 +476,6 @@ def _event_entry(row: dict[str, Any], slug: str, cfg: BacktestConfig) -> tuple[P
         "entry_age_sec": age_sec,
         "entry_price": entry_price,
         "entry_amount_usd": entry_amount,
-        "entry_model_prob": model_prob,
-        "entry_edge": edge,
-        "entry_edge_at_fill": model_prob - entry_price,
         "shares": shares,
         "partial_exits": [],
         "partial_pnl": 0.0,
@@ -670,12 +599,12 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "exit_price": exit_price,
                         "pnl": pnl,
                         "hold_sec": exit_age - active_trade["entry_age_sec"],
-                        "poly_hold_score": decision.poly_hold_score,
-                        "poly_hold_floor_bps": decision.poly_hold_floor_bps,
-                        "poly_hold_reference_margin_bps": decision.poly_hold_reference_margin_bps,
-                        "progressive_stop_loss_ratio": decision.progressive_stop_loss_ratio,
-                        "progressive_stop_allowed_loss_ratio": decision.progressive_stop_allowed_loss_ratio,
-                        "progressive_stop_reference_reason": decision.progressive_stop_reference_reason,
+                        "loss_ratio": decision.loss_ratio,
+                        "reference_exit_reason": decision.reference_exit_reason,
+                        "reference_cross_depth_bps": decision.reference_cross_depth_bps,
+                        "reference_cross_age_sec": decision.reference_cross_age_sec,
+                        "late_ev_margin": decision.late_ev_margin,
+                        "exit_direction_confidence": decision.direction_confidence,
                     })
                     _annotate_trade_settlement(active_trade, group_settlement)
                     equity += pnl
@@ -722,12 +651,8 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         entry_time=fill_snap.age_sec,
                         entry_avg_price=fill_price,
                         filled_shares=shares,
-                        entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
-                        entry_edge=decision.edge if decision.edge is not None else 0.0,
                         entry_amount_usd=entry_amount,
-                        entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
-                        entry_favorable_gap_bps=decision.favorable_gap_bps,
-                        entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
+                        entry_reference_distance_bps=decision.poly_reference_distance_bps,
                     ))
                     active_trade = {
                         "market_slug": slug,
@@ -736,9 +661,6 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "entry_age_sec": fill_snap.age_sec,
                         "entry_price": fill_price,
                         "entry_amount_usd": entry_amount,
-                        "entry_model_prob": decision.model_prob,
-                        "entry_edge": decision.edge,
-                        "entry_edge_at_fill": (decision.model_prob - fill_price) if decision.model_prob is not None else None,
                         "poly_entry_score": decision.poly_entry_score,
                         "poly_entry_distance_score": decision.poly_entry_distance_score,
                         "poly_entry_trend_score": decision.poly_entry_trend_score,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backtest the BTC 5m probability-edge strategy from collector JSONL."""
+"""Backtest the BTC 5m poly-source strategy from collector JSONL."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_poly_source_configs
+from new_poly.backtest.poly_source_replay import BacktestConfig, run_backtest, scan_poly_source_configs
+from new_poly.bot_runtime import _backtest_base_config, load_bot_config
 
 
 def _float_list(value: str) -> list[float]:
@@ -24,6 +25,13 @@ def load_rows(path: Path) -> list[dict[str, Any]]:
         for line in handle:
             if line.strip():
                 rows.append(json.loads(line))
+    return rows
+
+
+def load_all_rows(paths: list[Path]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in paths:
+        rows.extend(load_rows(path))
     return rows
 
 
@@ -48,23 +56,14 @@ def _amount_bucket(value: Any) -> str:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Replay probability-edge strategy from collector JSONL")
-    parser.add_argument("--jsonl", type=Path, required=True)
+    parser = argparse.ArgumentParser(description="Replay poly-source strategy from collector JSONL")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--jsonl", type=Path, action="append", required=True)
     parser.add_argument("--amount-usd", type=float, default=5.0)
     parser.add_argument("--entry-start-age-sec", type=float, default=90.0)
     parser.add_argument("--entry-end-age-sec", type=float, default=270.0)
     parser.add_argument("--final-no-entry-remaining-sec", type=float, default=30.0)
     parser.add_argument("--pre-entry-observation-start-age-sec", type=float, default=0.0)
-    parser.add_argument("--early-value-entry", dest="early_value_entry_enabled", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--early-value-start-age-sec", type=float, default=60.0)
-    parser.add_argument("--early-value-end-age-sec", type=float, default=120.0)
-    parser.add_argument("--early-value-min-reference-distance-bps", type=float, default=2.5)
-    parser.add_argument("--early-value-min-poly-return-bps", type=float, default=0.5)
-    parser.add_argument("--early-value-min-entry-score", type=float, default=5.5)
-    parser.add_argument("--early-value-max-entry-ask", type=float, default=0.60)
-    parser.add_argument("--early-value-max-spread", type=float, default=0.06)
-    parser.add_argument("--early-value-hold-protection", dest="early_value_hold_protection_enabled", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--max-entries-per-market", type=int, default=2)
     parser.add_argument("--entry-tick-size", type=float, default=0.01)
     parser.add_argument("--slippage-ticks", type=float, default=0.0, help="Apply the same BUY/SELL slippage ticks")
     parser.add_argument("--buy-slippage-ticks", type=float)
@@ -104,10 +103,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--direction-confidence-score-override", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--direction-confidence-high-reference-bps", type=float, default=3.0)
     parser.add_argument("--direction-confidence-prior-streak-min", type=int, default=3)
-    parser.add_argument("--exit-direction-confidence-enabled", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--exit-min-direction-confidence", type=float, default=0.78)
-    parser.add_argument("--exit-direction-confidence-min-hold-sec", type=float, default=20.0)
-    parser.add_argument("--exit-direction-confidence-pressure-count", type=int, default=2)
     parser.add_argument("--late-ev-exit-enabled", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--late-ev-exit-min-hold-sec", type=float, default=60.0)
     parser.add_argument("--late-ev-exit-min-remaining-sec", type=float, default=45.0)
@@ -115,26 +110,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--late-ev-exit-margin", default="0.18,0.12,0.06")
     parser.add_argument("--late-ev-exit-min-cross-bps", type=float, default=0.5)
     parser.add_argument("--late-ev-exit-min-cross-sec", type=float, default=5.0)
-    parser.add_argument("--progressive-stop-warmup-sec", type=float, default=30.0)
-    parser.add_argument("--progressive-stop-full-sec", type=float, default=120.0)
-    parser.add_argument("--progressive-stop-initial-loss-ratio", type=float, default=0.60)
-    parser.add_argument("--progressive-stop-final-loss-ratio", type=float, default=0.30)
-    parser.add_argument("--progressive-stop-late-remaining-sec", type=float, default=80.0)
-    parser.add_argument("--progressive-stop-reference-deterioration-bps", type=float, default=2.0)
-    parser.add_argument("--progressive-stop-extreme-loss-ratio", type=float, default=0.75)
-    parser.add_argument("--reentry-cooldown-sec", type=float, default=20.0)
-    parser.add_argument("--reentry-min-score-bonus", type=float, default=1.0)
-    parser.add_argument("--reentry-max-entry-fill-price", type=float, default=0.65)
+    parser.add_argument("--extreme-loss-ratio", type=float, default=0.90)
     parser.add_argument("--entry-size-score-mid", type=float, default=6.0)
     parser.add_argument("--entry-size-score-full", type=float, default=6.5)
     parser.add_argument("--entry-size-full-confidence", type=float, default=0.95)
-    parser.add_argument("--entry-size-high-price-cap", type=float, default=0.70)
     parser.add_argument("--entry-size-full-min-age-sec", type=float, default=150.0)
     parser.add_argument("--entry-size-mid-multiplier", type=float, default=2.0)
     parser.add_argument("--entry-size-full-multiplier", type=float, default=3.0)
     parser.add_argument("--poly-score-component-logs", choices=("compact", "full"), default="compact")
-    parser.add_argument("--reference-distance-exit-remaining-sec", default="120,90,70,45,30")
-    parser.add_argument("--reference-distance-exit-min-bps", default="-2,-1,0.25,0.75,1")
     parser.add_argument("--poly-exit-min-hold-sec", type=float, default=3.0)
     parser.add_argument("--poly-hold-to-settlement-min-reference-distance-bps", type=float, default=1.0)
     parser.add_argument("--poly-hold-to-settlement-min-poly-return-bps", type=float, default=0.0)
@@ -154,25 +137,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_arg_parser().parse_args()
-    rows = load_rows(args.jsonl)
+    rows = load_all_rows(args.jsonl)
     buy_slippage_ticks = args.slippage_ticks if args.buy_slippage_ticks is None else args.buy_slippage_ticks
     sell_slippage_ticks = args.slippage_ticks if args.sell_slippage_ticks is None else args.sell_slippage_ticks
-    cfg = BacktestConfig(
-        amount_usd=args.amount_usd,
+    if args.config is not None:
+        cfg = _backtest_base_config(load_bot_config(args.config))
+        cfg = BacktestConfig(
+            **{
+                **cfg.__dict__,
+                "buy_slippage_ticks": buy_slippage_ticks,
+                "sell_slippage_ticks": sell_slippage_ticks,
+                "honor_order_events": args.honor_order_events,
+                "settlement_boundary_usd": args.settlement_boundary_usd,
+            }
+        )
+    else:
+        cfg = BacktestConfig(
+            amount_usd=args.amount_usd,
         entry_start_age_sec=args.entry_start_age_sec,
         entry_end_age_sec=args.entry_end_age_sec,
         final_no_entry_remaining_sec=args.final_no_entry_remaining_sec,
         pre_entry_observation_start_age_sec=args.pre_entry_observation_start_age_sec,
-        early_value_entry_enabled=args.early_value_entry_enabled,
-        early_value_start_age_sec=args.early_value_start_age_sec,
-        early_value_end_age_sec=args.early_value_end_age_sec,
-        early_value_min_reference_distance_bps=args.early_value_min_reference_distance_bps,
-        early_value_min_poly_return_bps=args.early_value_min_poly_return_bps,
-        early_value_min_entry_score=args.early_value_min_entry_score,
-        early_value_max_entry_ask=args.early_value_max_entry_ask,
-        early_value_max_spread=args.early_value_max_spread,
-        early_value_hold_protection_enabled=args.early_value_hold_protection_enabled,
-        max_entries_per_market=args.max_entries_per_market,
         buy_slippage_ticks=buy_slippage_ticks,
         sell_slippage_ticks=sell_slippage_ticks,
         sell_price_buffer_ticks=args.sell_price_buffer_ticks,
@@ -210,10 +195,6 @@ def main() -> int:
         direction_confidence_score_override=args.direction_confidence_score_override,
         direction_confidence_high_reference_bps=args.direction_confidence_high_reference_bps,
         direction_confidence_prior_streak_min=args.direction_confidence_prior_streak_min,
-        exit_direction_confidence_enabled=args.exit_direction_confidence_enabled,
-        exit_min_direction_confidence=args.exit_min_direction_confidence,
-        exit_direction_confidence_min_hold_sec=args.exit_direction_confidence_min_hold_sec,
-        exit_direction_confidence_pressure_count=args.exit_direction_confidence_pressure_count,
         late_ev_exit_enabled=args.late_ev_exit_enabled,
         late_ev_exit_min_hold_sec=args.late_ev_exit_min_hold_sec,
         late_ev_exit_min_remaining_sec=args.late_ev_exit_min_remaining_sec,
@@ -221,35 +202,23 @@ def main() -> int:
         late_ev_exit_margin=tuple(_float_list(args.late_ev_exit_margin)),
         late_ev_exit_min_cross_bps=args.late_ev_exit_min_cross_bps,
         late_ev_exit_min_cross_sec=args.late_ev_exit_min_cross_sec,
-        progressive_stop_warmup_sec=args.progressive_stop_warmup_sec,
-        progressive_stop_full_sec=args.progressive_stop_full_sec,
-        progressive_stop_initial_loss_ratio=args.progressive_stop_initial_loss_ratio,
-        progressive_stop_final_loss_ratio=args.progressive_stop_final_loss_ratio,
-        progressive_stop_late_remaining_sec=args.progressive_stop_late_remaining_sec,
-        progressive_stop_reference_deterioration_bps=args.progressive_stop_reference_deterioration_bps,
-        progressive_stop_extreme_loss_ratio=args.progressive_stop_extreme_loss_ratio,
-        reentry_cooldown_sec=args.reentry_cooldown_sec,
-        reentry_min_score_bonus=args.reentry_min_score_bonus,
-        reentry_max_entry_fill_price=args.reentry_max_entry_fill_price,
+        extreme_loss_ratio=args.extreme_loss_ratio,
         entry_size_score_mid=args.entry_size_score_mid,
         entry_size_score_full=args.entry_size_score_full,
         entry_size_full_confidence=args.entry_size_full_confidence,
-        entry_size_high_price_cap=args.entry_size_high_price_cap,
         entry_size_full_min_age_sec=args.entry_size_full_min_age_sec,
         entry_size_mid_multiplier=args.entry_size_mid_multiplier,
         entry_size_full_multiplier=args.entry_size_full_multiplier,
         poly_score_component_logs=args.poly_score_component_logs,
-        reference_distance_exit_remaining_sec=tuple(_float_list(args.reference_distance_exit_remaining_sec)),
-        reference_distance_exit_min_bps=tuple(_float_list(args.reference_distance_exit_min_bps)),
         poly_exit_min_hold_sec=args.poly_exit_min_hold_sec,
         poly_hold_to_settlement_min_reference_distance_bps=args.poly_hold_to_settlement_min_reference_distance_bps,
         poly_hold_to_settlement_min_poly_return_bps=args.poly_hold_to_settlement_min_poly_return_bps,
         settlement_boundary_usd=args.settlement_boundary_usd,
-        entry_tick_size=args.entry_tick_size,
-    )
+            entry_tick_size=args.entry_tick_size,
+        )
     result = run_backtest(rows, cfg)
     payload: dict[str, Any] = {
-        "source": str(args.jsonl),
+        "source": [str(path) for path in args.jsonl],
         "default_config": cfg.__dict__,
         "summary": result.summary,
         "exit_reasons": _counts(result.trades, "exit_reason"),

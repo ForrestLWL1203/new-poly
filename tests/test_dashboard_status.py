@@ -703,7 +703,7 @@ def test_dashboard_status_merges_entry_and_exit_into_trade_record(tmp_path: Path
                 "exit_price": 0.61,
                 "exit_shares": 2.5,
                 "exit_pnl": 0.475,
-                "reason": "progressive_stop_exit",
+                "reason": "late_ev_exit",
                 "order": {"success": True, "message": "paper sell filled"},
             },
         ],
@@ -724,7 +724,7 @@ def test_dashboard_status_merges_entry_and_exit_into_trade_record(tmp_path: Path
             "sell_time": "2026-05-13 09:03:00",
             "sell_price": 0.61,
             "pnl": 0.475,
-            "exit_reason": "价格回撤且参考信号受损，主动退出",
+            "exit_reason": "末期前段 reference 反穿确认，主动止损",
         }
     ]
 

@@ -1,4 +1,4 @@
-"""JSONL row construction helpers for the probability-edge bot."""
+"""JSONL row construction helpers for the poly-source bot."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from new_poly.bot_runtime import (
     _should_attach_reference_meta,
     _should_write_row,
 )
-from new_poly.strategy.prob_edge import StrategyDecision
+from new_poly.strategy.types import StrategyDecision
 from new_poly.strategy.state import StrategyState
 
 # Minimal high-frequency paper fields consumed by backtest replay.
-# Keep this in sync with new_poly.backtest.prob_edge_replay.snapshot_from_row.
+# Keep this in sync with new_poly.backtest.poly_source_replay.snapshot_from_row.
 _POLY_SOURCE_BACKTEST_FIELDS = {
     "event",
     "ts",

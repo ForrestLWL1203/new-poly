@@ -1,4 +1,4 @@
-"""State containers for the probability-edge strategy."""
+"""State containers for the poly-source strategy."""
 
 from __future__ import annotations
 
@@ -137,7 +137,7 @@ class DirectionState:
         self.quality = "acceptable"
 
 
-@dataclass
+@dataclass(init=False)
 class PositionSnapshot:
     market_slug: str
     token_side: str
@@ -145,18 +145,39 @@ class PositionSnapshot:
     entry_time: float
     entry_avg_price: float
     filled_shares: float
-    entry_model_prob: float
-    entry_edge: float
     entry_amount_usd: float | None = None
-    entry_polymarket_divergence_bps: float | None = None
-    entry_favorable_gap_bps: float | None = None
     entry_reference_distance_bps: float | None = None
-    last_model_prob: float | None = None
     last_executable_bid: float | None = None
     exit_status: str = "open"
 
+    def __init__(
+        self,
+        market_slug: str,
+        token_side: str,
+        token_id: str,
+        entry_time: float,
+        entry_avg_price: float,
+        filled_shares: float,
+        *legacy_probability_fields: float,
+        entry_amount_usd: float | None = None,
+        entry_reference_distance_bps: float | None = None,
+        last_executable_bid: float | None = None,
+        exit_status: str = "open",
+        **_removed_legacy_fields: float,
+    ) -> None:
+        self.market_slug = market_slug
+        self.token_side = token_side
+        self.token_id = token_id
+        self.entry_time = entry_time
+        self.entry_avg_price = entry_avg_price
+        self.filled_shares = filled_shares
+        self.entry_amount_usd = entry_amount_usd
+        self.entry_reference_distance_bps = entry_reference_distance_bps
+        self.last_executable_bid = last_executable_bid
+        self.exit_status = exit_status
 
-@dataclass
+
+@dataclass(init=False)
 class UnknownEntryOrder:
     market_slug: str
     token_side: str
@@ -164,10 +185,6 @@ class UnknownEntryOrder:
     amount_usd: float
     entry_time: float
     entry_avg_price: float
-    entry_model_prob: float
-    entry_edge: float
-    entry_polymarket_divergence_bps: float | None = None
-    entry_favorable_gap_bps: float | None = None
     entry_reference_distance_bps: float | None = None
     created_at_epoch_ms: int | None = None
     signal_price: float | None = None
@@ -175,6 +192,38 @@ class UnknownEntryOrder:
     best_ask: float | None = None
     depth_limit_price: float | None = None
     safety_checked: bool = False
+
+    def __init__(
+        self,
+        market_slug: str,
+        token_side: str,
+        token_id: str,
+        amount_usd: float,
+        entry_time: float,
+        entry_avg_price: float,
+        *legacy_probability_fields: float,
+        entry_reference_distance_bps: float | None = None,
+        created_at_epoch_ms: int | None = None,
+        signal_price: float | None = None,
+        limit_price: float | None = None,
+        best_ask: float | None = None,
+        depth_limit_price: float | None = None,
+        safety_checked: bool = False,
+        **_removed_legacy_fields: float,
+    ) -> None:
+        self.market_slug = market_slug
+        self.token_side = token_side
+        self.token_id = token_id
+        self.amount_usd = amount_usd
+        self.entry_time = entry_time
+        self.entry_avg_price = entry_avg_price
+        self.entry_reference_distance_bps = entry_reference_distance_bps
+        self.created_at_epoch_ms = created_at_epoch_ms
+        self.signal_price = signal_price
+        self.limit_price = limit_price
+        self.best_ask = best_ask
+        self.depth_limit_price = depth_limit_price
+        self.safety_checked = safety_checked
 
 
 @dataclass
@@ -187,7 +236,6 @@ class StrategyState:
     last_exit_reason: str | None = None
     last_exit_side: str | None = None
     last_exit_age_sec: float | None = None
-    prob_history: list[tuple[float, float]] | None = None
     consecutive_losses: int = 0
     loss_pause_remaining_windows: int = 0
     loss_pause_started_market_slug: str | None = None
@@ -199,8 +247,6 @@ class StrategyState:
     reference_baseline: ReferenceBaseline | None = None
     direction_state: DirectionState | None = None
     window_outcomes: list[WindowOutcome] | None = None
-    exit_pressure_count: int = 0
-    exit_pressure_reason: str | None = None
 
     @property
     def has_position(self) -> bool:
@@ -221,15 +267,12 @@ class StrategyState:
         self.last_exit_reason = None
         self.last_exit_side = None
         self.last_exit_age_sec = None
-        self.prob_history = []
         self.pending_execution = None
         self.pending_execution_market_slug = None
         self.pending_execution_task = None
         self.unresolved_unknown_entry = None
         self.reference_baseline = None
         self.direction_state = None
-        self.exit_pressure_count = 0
-        self.exit_pressure_reason = None
 
     def record_direction_observation(self, snapshot: Any, cfg: Any) -> None:
         market_slug = str(getattr(snapshot, "market_slug", self.current_market_slug or ""))
@@ -292,9 +335,6 @@ class StrategyState:
     def record_entry(self, position: PositionSnapshot) -> None:
         self.open_position = position
         self.entry_count += 1
-        self.prob_history = []
-        self.exit_pressure_count = 0
-        self.exit_pressure_reason = None
 
     def mark_pending_execution(self, kind: str, task: object | None = None) -> None:
         self.pending_execution = kind
@@ -330,9 +370,6 @@ class StrategyState:
         if closed:
             self.open_position.exit_status = reason
             self.open_position = None
-            self.prob_history = []
-            self.exit_pressure_count = 0
-            self.exit_pressure_reason = None
         self.last_exit_reason = reason
         self.last_exit_side = exit_side
         self.last_exit_age_sec = exit_age_sec
@@ -350,9 +387,6 @@ class StrategyState:
         position = self.open_position
         position.exit_status = "pending_settlement"
         self.open_position = None
-        self.prob_history = []
-        self.exit_pressure_count = 0
-        self.exit_pressure_reason = None
         return position
 
     def record_position_settlement(self, position: PositionSnapshot, winning_side: str) -> float:
@@ -365,9 +399,6 @@ class StrategyState:
         self.last_exit_reason = "settled"
         self.last_exit_side = position.token_side
         self.last_exit_age_sec = None
-        self.prob_history = []
-        self.exit_pressure_count = 0
-        self.exit_pressure_reason = None
         return pnl
 
     def record_position_unsettled(self, position: PositionSnapshot, reason: str) -> float:
@@ -375,9 +406,6 @@ class StrategyState:
         self.last_exit_reason = reason
         self.last_exit_side = position.token_side
         self.last_exit_age_sec = None
-        self.prob_history = []
-        self.exit_pressure_count = 0
-        self.exit_pressure_reason = None
         return 0.0
 
     def record_settlement(self, winning_side: str) -> float:
@@ -387,23 +415,6 @@ class StrategyState:
         self.open_position = None
         self.record_window_settlement(position.market_slug, winning_side)
         return self.record_position_settlement(position, winning_side)
-
-    def record_model_prob(self, age_sec: float, model_prob: float, *, retention_sec: float = 5.0) -> None:
-        if self.prob_history is None:
-            self.prob_history = []
-        self.prob_history.append((age_sec, model_prob))
-        cutoff = age_sec - retention_sec
-        self.prob_history = [(ts, prob) for ts, prob in self.prob_history if ts >= cutoff]
-
-    def prob_delta(self, age_sec: float, model_prob: float, *, window_sec: float) -> float | None:
-        if not self.prob_history:
-            return None
-        cutoff = age_sec - window_sec
-        candidates = [(ts, prob) for ts, prob in self.prob_history if ts <= cutoff]
-        if not candidates:
-            return None
-        _ts, old_prob = max(candidates, key=lambda item: item[0])
-        return model_prob - old_prob
 
     def apply_closed_trade_risk(self, pnl: float, *, loss_limit: int, pause_windows: int) -> dict[str, object] | None:
         if loss_limit <= 0:

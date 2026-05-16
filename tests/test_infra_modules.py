@@ -13,7 +13,7 @@ from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.binance_rv import compute_binance_rv_sigma_from_klines
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
 from new_poly.market.deribit import DvolSnapshot
-from new_poly.market.prob_edge_data import WindowPrices, effective_price
+from new_poly.market.poly_source_data import WindowPrices, effective_price
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
 from new_poly.trading import clob_client as clob_client_module
@@ -98,7 +98,7 @@ def test_coinbase_price_feed_history_lookup_helpers() -> None:
     assert feed.first_price_at_or_after(101.0, max_forward_sec=10.0) == 10.5
 
 
-def test_prob_edge_data_effective_price_uses_raw_binance_as_model_source() -> None:
+def test_poly_source_data_effective_price_uses_raw_binance_as_model_source() -> None:
     feed = BinancePriceFeed("btcusdt")
     feed._inject(100.0, 105.0)
     prices = WindowPrices(k_price=102.0, binance_open_price=100.0)

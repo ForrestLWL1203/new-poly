@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the BTC 5m probability-edge strategy bot."""
+"""Run the BTC 5m poly-source strategy bot."""
 
 from __future__ import annotations
 

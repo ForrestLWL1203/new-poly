@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.backtest.prob_edge_replay import BacktestConfig, run_backtest, scan_poly_source_configs
+from new_poly.backtest.poly_source_replay import BacktestConfig, run_backtest, scan_poly_source_configs
 
 
 def _poly_row(
@@ -56,7 +56,6 @@ def test_poly_single_source_backtest_uses_poly_direction_and_reports_settle_only
     assert result.summary["settle_only_total_pnl"] == pytest.approx(0.666667 - 1.0)
     assert result.summary["exit_reason_counts"]["settlement"] == 2
     assert result.trades[0]["entry_side"] == "down"
-    assert result.trades[0]["entry_model_prob"] is None
     assert result.trades[0]["poly_entry_score"] is not None
 
 
@@ -200,8 +199,7 @@ def test_backtest_honored_entry_events_use_logged_amount_when_size_missing() -> 
             "analysis": {
                 "entry_side": "up",
                 "entry_price": 0.60,
-                "entry_model_prob": 0.80,
-                "entry_edge_signal": 0.20,
+                "entry_poly_reference_distance_bps": 2.0,
             },
             "order": {"success": True, "avg_price": 0.60},
         },

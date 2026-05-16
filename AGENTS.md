@@ -24,19 +24,11 @@ strategy:
 
 - Active config: `configs/prob_poly_single_source.yaml`.
 - Active strategy logic: `new_poly/strategy/poly_source.py`.
-- `new_poly/strategy/prob_edge.py` contains shared DTOs only; the old
-  dual-source probability-edge strategy logic has been removed.
-- Runtime entry decisions do not use Binance/Coinbase `S`, `model_prob`,
-  `required_edge`, Black-Scholes probability, aggressive profiles, or dynamic
-  parameter profiles.
+- `new_poly/strategy/types.py` contains shared DTOs.
+- Runtime entry decisions use only the current Polymarket single-source fields in `poly_source.py`.
 - Binance/Coinbase/proxy helpers remain available for data collection,
   diagnostics, and strategy-neutral infrastructure.
 
-Any older section below that refers to `configs/prob_edge_aggressive.yaml`,
-`configs/prob_edge_mvp.yaml`, `configs/prob_edge_dynamic.yaml`, `model_prob`,
-`required_edge`, `market_disagrees_exit`, or Binance-as-model strategy behavior
-is historical context only unless explicitly updated to mention
-`poly_single_source`.
 
 ## Clean-Room Strategy Rule
 
@@ -157,7 +149,7 @@ Useful read-only status checks:
 
 ```bash
 SSHPASS="$(cat /Users/forrestliao/workspace/new-poly/docs/sweden-vps-secret.txt)" \
-  sshpass -e ssh root@70.34.207.45 'pgrep -af "run_prob_edge_bot|collect_prob_edge_data" || true'
+  sshpass -e ssh root@70.34.207.45 'pgrep -af "run_poly_source_bot|collect_poly_source_data" || true'
 SSHPASS="$(cat /Users/forrestliao/workspace/new-poly/docs/sweden-vps-secret.txt)" \
   sshpass -e ssh root@70.34.207.45 'ls -lt /opt/new-poly/logs | head -20'
 ```
@@ -228,11 +220,11 @@ flag only when the user explicitly asks for an order-posting probe.
 Current live data collection script:
 
 ```text
-local: /Users/forrestliao/workspace/new-poly/scripts/collect_prob_edge_data.py
-VPS:   /opt/new-poly/app/collect_prob_edge_data.py
+local: /Users/forrestliao/workspace/new-poly/scripts/collect_poly_source_data.py
+VPS:   /opt/new-poly/app/collect_poly_source_data.py
 ```
 
-`scripts/prob_edge_dry_run.py` is only a compatibility wrapper for the collector.
+`scripts/collect_poly_source_data.py` is only a compatibility wrapper for the collector.
 
 The collector does not authenticate to CLOB, does not read private keys or API
 credentials, does not submit orders, and does not evaluate strategy entry/exit
@@ -255,15 +247,15 @@ later strategy dry-run and backtest code:
 - data-quality `warnings`.
 
 Do not add strategy fields such as `decision`, `candidate_side`, `skip_reason`,
-`edge`, `required_edge`, or PnL to the collector. Those belong in future
+`decision`, `skip_reason`, or PnL to the collector. Those belong in future
 strategy dry-run/backtest scripts.
 
 Safe local command:
 
 ```bash
-python3 /Users/forrestliao/workspace/new-poly/scripts/collect_prob_edge_data.py \
+python3 /Users/forrestliao/workspace/new-poly/scripts/collect_poly_source_data.py \
   --interval-sec 1 \
-  --jsonl /Users/forrestliao/workspace/new-poly/data/prob-edge-collector.jsonl \
+  --jsonl /Users/forrestliao/workspace/new-poly/data/poly-source-collector.jsonl \
   --sigma-eff 0.6 \
   --sigma-source manual \
   --windows 12
@@ -272,9 +264,9 @@ python3 /Users/forrestliao/workspace/new-poly/scripts/collect_prob_edge_data.py 
 Safe VPS command after copying the script:
 
 ```bash
-/opt/new-poly/venv/bin/python /opt/new-poly/app/collect_prob_edge_data.py \
+/opt/new-poly/venv/bin/python /opt/new-poly/app/collect_poly_source_data.py \
   --interval-sec 1 \
-  --jsonl /opt/new-poly/data/prob-edge-collector.jsonl \
+  --jsonl /opt/new-poly/data/poly-source-collector.jsonl \
   --sigma-eff 0.6 \
   --sigma-source manual \
   --windows 12
@@ -287,8 +279,8 @@ Copy to VPS:
 
 ```bash
 scp -i /Users/forrestliao/workspace/new-poly/docs/LightsailDefaultKey-eu-west-1.pem \
-  /Users/forrestliao/workspace/new-poly/scripts/collect_prob_edge_data.py \
-  ubuntu@176.34.134.21:/opt/new-poly/app/collect_prob_edge_data.py
+  /Users/forrestliao/workspace/new-poly/scripts/collect_poly_source_data.py \
+  ubuntu@176.34.134.21:/opt/new-poly/app/collect_poly_source_data.py
 ```
 
 Current status:
@@ -317,151 +309,45 @@ Current status:
 - Coinbase is disabled by default in current configs. Do not enable it unless a
   run explicitly needs multi-source diagnostics.
 
-### Probability Edge Strategy Bot
+### Poly Source Strategy Bot
 
 Main entrypoint:
 
 ```text
-scripts/run_prob_edge_bot.py
+scripts/run_poly_source_bot.py
 ```
 
 Current architecture:
 
 - `new_poly/bot_loop.py` owns the higher-level bot loop.
-- `new_poly/bot_runtime.py` owns config loading, logging helpers, snapshots,
-  settlement helpers, and volatility retry helpers.
-- `new_poly/strategy/prob_edge.py` is IO-free strategy logic.
+- `new_poly/bot_runtime.py` owns config loading, logging helpers, snapshots, settlement helpers, and volatility retry helpers.
+- `new_poly/strategy/poly_source.py` owns active entry/exit strategy logic.
+- `new_poly/strategy/types.py` owns shared DTOs only.
 - `new_poly/trading/execution.py` contains paper/live execution gateways.
 
-Default live-oriented profile:
+Current strategy shape:
 
-```text
-configs/prob_edge_aggressive.yaml
-```
-
-Current tuned strategy shape:
-
-- Binance BTC/USDT WebSocket is the primary model `S`.
-- Polymarket crypto price API `openPrice` is `K`.
-- Polymarket live-data Chainlink stream is a reference/risk source, not the
-  normal model `S`.
-- Coinbase is disabled by default.
-- New entries normally use `entry_start_age_sec=100`,
-  `entry_end_age_sec=240`, `early_required_edge=0.16`,
-  `core_required_edge=0.14`.
-- The aggressive config is aggressive by entry count but stricter by entry
-  quality. It currently uses `min_entry_model_prob=0.55`,
-  `max_entries_per_market=2`, `low_price_extra_edge_threshold=0.30`, and
-  `low_price_extra_edge=0.04`.
-- The aggressive config also filters weak-distance mid-priced entries:
-  when `best_ask > 0.35` and `abs(S-K) < 2bps`, the bot skips entry with
-  `weak_sk_distance`. This targets tickets that are no longer cheap while the
-  Binance model price remains too close to Polymarket's Price to Beat.
-- Recent live analysis showed many large losses came from low-certainty
-  "cheap ticket" entries where `model_prob` was near `0.50` but edge looked
-  large because the ask was low. Backtests on recent live/paper/collector logs
-  suggest raising `min_entry_model_prob` toward `0.55-0.60` improves win rate
-  and drawdown at the cost of fewer trades. Treat this as the next parameter
-  family to validate before widening entry windows or lowering edge thresholds.
-- The aggressive config also enables price/probability BUY cap relaxation after
-  a normal edge signal passes: low-priced tickets (`ask<=0.25`, `prob>=0.40`)
-  can use up to `+8` ticks, mid-priced tickets (`ask<=0.65`, `prob>=0.60/0.75`)
-  can use up to `+8/+10` ticks, and high-priced tickets only relax when
-  `prob>=0.95`, capped at `+4` ticks. This improves FAK fill rate without
-  broadly relaxing low-quality entries.
-- Run directly from the committed config unless the user explicitly asks for a
-  temporary YAML override. Check the actual run config in
-  `/opt/new-poly/logs/<run-id>.yaml` before comparing logs.
-- `prob_drop_exit` is disabled by default because `market_disagrees_exit` and
-  Polymarket divergence exits now cover the main observed failure mode.
-- `defensive_take_profit` is configurable but disabled in current MVP/aggressive
-  configs. If the model probability has not clearly deteriorated and no
-  market-disagreement/divergence guard fires, late profitable positions should
-  usually keep their settlement upside instead of selling only because the
-  probability has stalled.
-
-Risk exits:
-
-- `logic_decay_exit`: model probability falls below entry price minus
-  `model_decay_buffer`.
-- `market_disagrees_exit`: CLOB executable bid falls below a configured
-  fraction of the entry price while model probability has dropped by at least
-  `market_disagrees_exit_min_model_drop`. Current live configs use
-  `market_disagrees_exit_threshold=0.48`, so a `0.42` entry can exit near
-  `0.20` instead of waiting for the slower `logic_decay_exit`. CLOB price
-  collapse alone still should not force an exit while the model thesis is
-  mostly intact.
-- `polymarket_divergence_exit`: Binance-vs-Polymarket reference divergence is
-  adverse for the held side.
-- `final_force_exit`: last-stage risk reduction before settlement.
-- `risk_exit`: missing/stale model or book inputs.
+- Direction is evaluated continuously from `direction_observe_start_age_sec`, not from a single tick.
+- Entry uses confirmed direction state plus Polymarket reference distance, reference return, price quality, market quality, and direction confidence.
+- Dynamic buy amount is confidence-based and capped by high entry price.
+- One entry per market is allowed.
+- Exits are limited to `extreme_loss_exit`, guarded `late_ev_exit`, `hold_to_settlement`, settlement, and execution/risk operational exits.
 
 Execution behavior:
 
 - Live mode requires both `--mode live` and `--i-understand-live-risk`.
 - BUY amount is USDC notional; SELL amount is shares.
-- One position per market is allowed. If a SELL fails and a position remains
-  open, new entries are blocked until the position is closed or settled.
-- BUY FAK uses the current best ask plus a configured tick ladder, capped by
-  `fair_cap`; in aggressive config that cap may be relaxed by the
-  price/probability buckets above. It no longer reserves extra fair-room beyond
-  the cap.
-- BUY retry is a second attempt for the same signal. It does not re-run the
-  full strategy signal refresh between attempts.
-- SELL refreshes sell parameters from the latest local book immediately before
-  the first POST and again before retries, then uses more aggressive buffers for
-  risk/force exits.
-- Unknown or timed-out FAK responses must be reconciled by balance before
-  retrying or declaring failure. A timeout does not prove the order failed.
-- CLOB `POST /order` can return transient `425 service not ready`; treat it as
-  a recoverable order no-fill / request exception, not as a fatal bot crash.
-- Important live accounting caveat: a successful SELL POST response may contain
-  a usable fill size while the immediate token balance query still shows only a
-  tiny decrease. When response status is matched and a nonzero fill can be
-  derived from response fields, prefer the response fill for state accounting
-  and use balance/trades as diagnostics. Use balance reconciliation as the
-  primary source only for unknown/timeout responses. This avoids creating fake
-  residual positions that later produce noisy
-  `live sell balance unavailable; reconciliation no balance decrease` rows.
-- Safe balance reductions with a residual position are logged as
-  `position_reduce`; tiny residuals below live minimum sell size can finish via
-  `dust_position`.
-- Current CLOB HTTP helper timeout is short but allows slow FAK responses:
-  total/read/write `5.0s`, connect `0.5s`, pool `0.2s`. A timeout still does
-  not prove the order failed; reconcile by balance/trades before deciding.
-- Live no-sellable-balance for a token position should not stop the whole bot;
-  account-level insufficient USDC/funds can stop the bot.
+- One position per market is allowed. If a SELL fails and a position remains open, new entries are blocked until the position is closed or settled.
+- BUY FAK uses the current best ask plus configured tick buffers, capped by strategy limit price.
+- SELL refreshes sell parameters from the latest local book immediately before POST and again before retries.
+- Unknown or timed-out FAK responses must be reconciled by balance before retrying or declaring failure.
+- Live no-sellable-balance for a token position should not stop the whole bot; account-level insufficient USDC/funds can stop the bot.
 
 Logging:
 
-- Analysis-heavy fields should be emitted for paper/dry-run and short live
-  diagnostics, not as permanent noisy live logs.
-- Log entry lifecycle as `order_intent` before BUY POST and then the resulting
-  `entry` or entry `order_no_fill` event. Log SELL attempts as `exit_intent`
-  before POST so buy-intent/fill-rate statistics do not mix with normal
-  stop/take-profit exits. Exit responses can be `position_reduce`, `exit`,
-  `order_no_fill`, `dust_position`, or fatal/error events.
-- Do not log signed orders, private keys, API credentials, full account config,
-  or full order books.
-
-Run log naming:
-
-- Use a single filename shape for saved live/paper/dry-run/collector logs:
-  `<mode>-<region>-<windows>w-<YYYYMMDDTHHMMSSZ>.<ext>`.
-- `mode` should be `live`, `paper`, `collector`, or `probe`; use `paper` for
-  strategy dry-runs that do not POST real orders.
-- `region` should be `sweden`, `ireland`, `local`, or another explicit runtime
-  location.
-- The timestamp is UTC run start time. If an old run only has minute precision,
-  normalize seconds to `00`.
-- Keep companion files on the same stem, e.g. `.jsonl`, `.out`, `.yaml`, `.tgz`.
-- Do not add ad-hoc labels such as `dynamic-sell`, `reconcile`, `posreduce`, or
-  `analysis` to filenames. Put that context in a report, note, or the log
-  contents instead.
-- Preferred local locations:
-  `data/live_runs/live-<region>-<windows>w-<timestamp>.jsonl` for real live
-  runs, and `data/live_runs/paper-<region>-<windows>w-<timestamp>.jsonl` for
-  paper strategy runs unless a task explicitly asks for another directory.
+- Entry logs keep side, phase, entry price, amount, reference distance, trend/return, entry score, direction quality/confidence/cross/streak.
+- Exit logs keep reason, bid/limit/price, PnL, remaining seconds, loss ratio, direction confidence, reference exit reason, cross depth/age, and late EV band diagnostics.
+- Do not log signed orders, private keys, API credentials, full account config, or full order books.
 
 ### Reusable Infrastructure Modules
 
@@ -474,7 +360,7 @@ new_poly/market/polymarket_live.py
 new_poly/market/market.py
 new_poly/market/series.py
 new_poly/market/stream.py
-new_poly/market/prob_edge_data.py
+new_poly/market/poly_source_data.py
 new_poly/market/deribit.py
 new_poly/trading/fak_quotes.py
 ```
@@ -488,9 +374,9 @@ thresholds.
 
 - Shared collector/bot helpers such as `WindowPrices`, K refresh,
   boundary-open refresh, effective price calculation, token depth summaries,
-  and BTC 5m window rollover live in `new_poly/market/prob_edge_data.py`.
+  and BTC 5m window rollover live in `new_poly/market/poly_source_data.py`.
   Entry scripts should import that module instead of importing from
-  `scripts/collect_prob_edge_data.py`.
+  `scripts/collect_poly_source_data.py`.
 - Raw proxy model price formula:
   use only sources that have both a live price and same-window open price;
   `proxy_live = mean(valid paired live prices)`;

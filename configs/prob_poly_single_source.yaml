@@ -8,23 +8,13 @@ poly_source:
   pre_entry_observation_start_age_sec: 60
   early_to_core_age_sec: 120
   core_to_late_age_sec: 240
-  early_value_entry_enabled: false
-  early_value_start_age_sec: 60
-  early_value_end_age_sec: 120
-  early_value_min_reference_distance_bps: 2.0
-  early_value_min_poly_return_bps: 0.2
-  early_value_min_entry_score: 5.0
-  early_value_max_entry_ask: 0.65
-  early_value_max_spread: 0.08
-  early_value_hold_protection_enabled: false
-  max_entries_per_market: 1
   max_book_age_ms: 1000
   poly_reference_distance_bps: 1.5
   max_poly_reference_distance_bps: 4.0
   poly_trend_lookback_sec: 10.0
   poly_return_bps: 0.3
-  max_entry_ask: 0.70
-  max_entry_fill_price: 0.70
+  max_entry_ask: 0.75
+  max_entry_fill_price: 0.75
   min_poly_entry_score: 5.2
   direction_observe_start_age_sec: 30
   direction_min_observed_sec: 30
@@ -40,10 +30,6 @@ poly_source:
   direction_confidence_score_override: true
   direction_confidence_high_reference_bps: 3.0
   direction_confidence_prior_streak_min: 3
-  exit_direction_confidence_enabled: false
-  exit_min_direction_confidence: 0.78
-  exit_direction_confidence_min_hold_sec: 999
-  exit_direction_confidence_pressure_count: 2
   late_ev_exit_enabled: true
   late_ev_exit_min_hold_sec: 80
   late_ev_exit_min_remaining_sec: 45
@@ -51,28 +37,16 @@ poly_source:
   late_ev_exit_margin: "0.18,0.12,0.06"
   late_ev_exit_min_cross_bps: 0.5
   late_ev_exit_min_cross_sec: 5.0
-  progressive_stop_warmup_sec: 30
-  progressive_stop_full_sec: 120
-  progressive_stop_initial_loss_ratio: 0.50
-  progressive_stop_final_loss_ratio: 0.40
-  progressive_stop_late_remaining_sec: 80
-  progressive_stop_reference_deterioration_bps: 2.0
-  progressive_stop_extreme_loss_ratio: 0.75
-  reentry_cooldown_sec: 20
-  reentry_min_score_bonus: 0.5
-  reentry_max_entry_fill_price: 0.70
+  extreme_loss_ratio: 0.90
   entry_size_score_mid: 5.6
   entry_size_score_full: 6.3
   entry_size_full_confidence: 0.95
-  entry_size_high_price_cap: 0.70
   entry_size_full_min_age_sec: 150
   entry_size_mid_multiplier: 2.0
   entry_size_full_multiplier: 3.0
   poly_score_component_logs: compact
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2
-  reference_distance_exit_remaining_sec: [120.0, 90.0, 70.0, 45.0, 30.0]
-  reference_distance_exit_min_bps: [-2.0, -1.0, 1.0, 1.5, 1.75]
   exit_min_hold_sec: 3.0
   hold_to_settlement_enabled: true
   hold_to_settlement_min_profit_ratio: 0.0

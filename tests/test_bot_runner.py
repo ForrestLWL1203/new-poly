@@ -12,9 +12,8 @@ from new_poly.bot_runtime import DvolRefreshState, WindowPrices, build_arg_parse
 from new_poly.market.deribit import DvolSnapshot
 from new_poly.market.market import MarketWindow
 from new_poly.strategy.state import PositionSnapshot, StrategyState, UnknownEntryOrder
-from new_poly.strategy.prob_edge import MarketSnapshot
-from new_poly.strategy.prob_edge import StrategyDecision
-from new_poly.strategy.dynamic_params import DynamicState
+from new_poly.strategy.types import MarketSnapshot
+from new_poly.strategy.types import StrategyDecision
 
 
 class DummyLogger:
@@ -91,14 +90,12 @@ def test_entry_writes_order_intent_before_gateway_returns(monkeypatch) -> None:
             action="enter",
             reason="edge",
             side="down",
-            model_prob=0.70,
             price=0.37,
             limit_price=0.56,
             depth_limit_price=0.37,
             best_ask=0.37,
             edge=0.33,
             phase="core",
-            required_edge=0.14,
         )
         gateway_started = asyncio.Event()
         release_gateway = asyncio.Event()
@@ -195,7 +192,7 @@ def test_compact_trade_events_keep_position_snapshots_without_analysis_logs(monk
         exit_row = {"event": "tick", "market_slug": "m1"}
         exit_decision = StrategyDecision(
             action="exit",
-            reason="progressive_stop_exit",
+            reason="late_ev_exit",
             side="up",
             price=0.61,
             limit_price=0.60,
@@ -259,8 +256,6 @@ def test_poly_source_order_intent_omits_empty_legacy_probability_fields() -> Non
     assert row["event"] == "order_intent"
     assert row["reason"] == "poly_edge"
     assert row["edge"] == 5.2
-    assert "model_prob" not in row
-    assert "required_edge" not in row
     assert "phase" not in row
 
 
@@ -284,7 +279,6 @@ def test_order_intent_keeps_structural_null_fields() -> None:
     assert row["exit_side"] is None
     assert row["signal_price"] is None
     assert row["limit_price"] is None
-    assert "model_prob" not in row
 
 
 def test_live_unknown_buy_safety_check_uses_poly_entry_end_age() -> None:
@@ -304,8 +298,6 @@ def test_live_unknown_buy_safety_check_uses_poly_entry_end_age() -> None:
         amount_usd=1.0,
         entry_time=200.0,
         entry_avg_price=0.29,
-        entry_model_prob=0.0,
-        entry_edge=5.0,
     )
     snap = MarketSnapshot(
         market_slug="m1",
@@ -334,7 +326,7 @@ def test_post_exit_observation_ticks_are_throttled_and_keep_poly_context() -> No
     runner.state = StrategyState(
         current_market_slug="m1",
         entry_count=1,
-        last_exit_reason="progressive_stop_exit",
+        last_exit_reason="late_ev_exit",
         last_exit_side="up",
         last_exit_age_sec=120.0,
     )
@@ -376,7 +368,7 @@ def test_post_exit_observation_ticks_are_throttled_and_keep_poly_context() -> No
     assert len(runner.logger.rows) == 1
     row = runner.logger.rows[0]
     assert row["event"] == "post_exit_observation"
-    assert row["last_exit_reason"] == "progressive_stop_exit"
+    assert row["last_exit_reason"] == "late_ev_exit"
     assert row["last_exit_side"] == "up"
     assert row["last_exit_age_sec"] == 120.0
     assert row["decision"] == {"action": "observe", "reason": "post_exit_observation"}
@@ -410,8 +402,6 @@ def test_poly_source_tick_logs_keep_backtest_fields_and_drop_repeated_analysis()
         entry_time=130.0,
         entry_avg_price=0.42,
         filled_shares=2.0,
-        entry_model_prob=0.0,
-        entry_edge=4.0,
     ))
     row = {
         "ts": "2026-05-12T00:00:00+00:00",
@@ -519,16 +509,6 @@ def test_poly_source_live_tick_logs_are_not_compacted() -> None:
     assert compact_high_frequency_row(row, options=options) is row
 
 
-def test_non_poly_source_tick_logs_are_not_compacted() -> None:
-    from new_poly.bot_logging import compact_high_frequency_row
-
-    options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
-    options = replace(options, config=replace(options.config, strategy_mode="prob_edge"))
-    row = {"event": "tick", "mode": "paper", "decision": {"action": "skip"}, "position": {"token_side": "up"}}
-
-    assert compact_high_frequency_row(row, options=options) is row
-
-
 def test_poly_source_compact_tick_keeps_clob_ws_and_prefers_top_level_analysis() -> None:
     from new_poly.bot_logging import compact_high_frequency_row
 
@@ -606,14 +586,11 @@ def test_exit_writes_exit_intent_before_gateway_returns(monkeypatch) -> None:
             entry_time=130.0,
             entry_avg_price=0.37,
             filled_shares=2.0,
-            entry_model_prob=0.70,
-            entry_edge=0.33,
         ))
         decision = StrategyDecision(
             action="exit",
-            reason="progressive_stop_exit",
+            reason="late_ev_exit",
             side="down",
-            model_prob=0.30,
             price=0.31,
             limit_price=0.26,
             profit_now=-0.06,
@@ -649,7 +626,7 @@ def test_exit_writes_exit_intent_before_gateway_returns(monkeypatch) -> None:
         assert logger.rows[0]["event"] == "exit_intent"
         assert logger.rows[0]["exit_intent"] == "exit"
         assert logger.rows[0]["exit_side"] == "down"
-        assert logger.rows[0]["exit_reason"] == "progressive_stop_exit"
+        assert logger.rows[0]["exit_reason"] == "late_ev_exit"
         assert logger.rows[0]["shares"] == 2.0
 
         release_gateway.set()
@@ -682,14 +659,11 @@ def test_dust_sell_result_closes_residual_without_crashing(monkeypatch) -> None:
             entry_time=130.0,
             entry_avg_price=0.76,
             filled_shares=0.005787,
-            entry_model_prob=0.70,
-            entry_edge=0.33,
         ))
         decision = StrategyDecision(
             action="exit",
-            reason="progressive_stop_exit",
+            reason="late_ev_exit",
             side="down",
-            model_prob=0.30,
             price=0.64,
             limit_price=0.64,
         )
@@ -754,14 +728,11 @@ def test_intentional_safe_sell_residual_logs_position_reduce(monkeypatch) -> Non
             entry_time=130.0,
             entry_avg_price=0.37,
             filled_shares=2.0,
-            entry_model_prob=0.70,
-            entry_edge=0.33,
         ))
         decision = StrategyDecision(
             action="exit",
-            reason="progressive_stop_exit",
+            reason="late_ev_exit",
             side="down",
-            model_prob=0.30,
             price=0.31,
             limit_price=0.26,
             profit_now=-0.06,
@@ -793,57 +764,6 @@ def test_intentional_safe_sell_residual_logs_position_reduce(monkeypatch) -> Non
         assert row["remaining_shares"] == 0.01
         assert state.open_position is not None
         assert abs(state.open_position.filled_shares - 0.01) < 1e-9
-
-    asyncio.run(scenario())
-
-
-def test_roll_window_updates_context_and_dynamic_state(monkeypatch) -> None:
-    async def scenario() -> None:
-        options = build_runtime_options(build_arg_parser().parse_args(["--mode", "paper"]))
-        runner = BotRunner(options)
-        runner.logger = DummyLogger()
-        stream = DummyStream()
-        feeds = FeedContext(binance=None, coinbase=None, polymarket=None, stream=stream)
-        gateway = object()
-        first = _window("m1")
-        next_window = _window("m2", offset=5)
-        initial_prices = WindowPrices(k_price=100.0)
-        next_prices = WindowPrices(k_price=101.0)
-        new_cfg = replace(options.config, amount_usd=2.0)
-        dynamic_state = DynamicState(active_profile="aggressive")
-        dynamic_task = asyncio.create_task(asyncio.sleep(0))
-
-        async def fake_handle_window_close(**kwargs):
-            assert kwargs["window"] is first
-            assert kwargs["prices"] is initial_prices
-            assert kwargs["feeds"] is feeds
-            return WindowCloseResult(next_window, next_prices, new_cfg, dynamic_state, dynamic_task, False)
-
-        monkeypatch.setattr("new_poly.bot_runner._handle_window_close", fake_handle_window_close)
-
-        runner.startup_context = StartupContext(feeds=feeds, gateway=gateway)
-        runner.context = StartedContext(feeds=feeds, gateway=gateway, window=first, prices=initial_prices)
-        runner.dynamic.state = DynamicState(active_profile="aggressive", pending_profile="aggressive")
-        initial_dynamic_task = asyncio.create_task(asyncio.sleep(0))
-        runner.dynamic.task = initial_dynamic_task
-        runner.state.entry_count = 3
-        runner.state.current_market_slug = first.slug
-
-        should_stop = await runner.roll_window()
-
-        assert should_stop is False
-        assert runner.active.window is next_window
-        assert runner.active.prices is next_prices
-        assert runner.cfg is new_cfg
-        assert runner.dynamic.state is dynamic_state
-        assert runner.dynamic.task is dynamic_task
-        assert runner.state.current_market_slug == next_window.slug
-        assert runner.state.entry_count == 0
-        assert runner.state.open_position is None
-        assert runner.active.feeds is feeds
-        assert runner.active.gateway is gateway
-
-        await asyncio.gather(initial_dynamic_task, dynamic_task, runner.dynamic.task, return_exceptions=True)
 
     asyncio.run(scenario())
 
@@ -1025,8 +945,6 @@ def test_settle_open_position_writes_settlement_row(monkeypatch) -> None:
         entry_time=120.0,
         entry_avg_price=0.40,
         filled_shares=2.0,
-        entry_model_prob=0.70,
-        entry_edge=0.30,
     ))
 
     monkeypatch.setattr("new_poly.bot_loop.effective_price", lambda *args, **kwargs: type(
@@ -1073,8 +991,6 @@ def test_settle_open_position_prefers_polymarket_close_price(monkeypatch) -> Non
         entry_time=120.0,
         entry_avg_price=0.40,
         filled_shares=2.0,
-        entry_model_prob=0.70,
-        entry_edge=0.30,
     ))
 
     monkeypatch.setattr("new_poly.bot_loop.effective_price", lambda *args, **kwargs: type(
@@ -1168,8 +1084,6 @@ def test_window_close_without_position_defers_settlement_until_next_window(monke
             loop=loop,
             logger=logger,
             series=object(),
-            dynamic_state=None,
-            dynamic_task=None,
         )
 
         assert result.should_stop is False
@@ -1214,8 +1128,6 @@ def test_window_close_with_open_position_defers_position_settlement_until_close_
             entry_time=120.0,
             entry_avg_price=0.40,
             filled_shares=2.0,
-            entry_model_prob=0.70,
-            entry_edge=0.30,
         ))
 
         monkeypatch.setattr("new_poly.bot_loop.find_following_window", lambda window, series: second)
@@ -1237,8 +1149,6 @@ def test_window_close_with_open_position_defers_position_settlement_until_close_
             loop=loop,
             logger=logger,
             series=object(),
-            dynamic_state=None,
-            dynamic_task=None,
         )
 
         assert result.should_stop is False
@@ -1297,8 +1207,6 @@ def test_final_window_close_without_position_waits_then_writes_settlement(monkey
             loop=loop,
             logger=logger,
             series=object(),
-            dynamic_state=None,
-            dynamic_task=None,
         )
 
         assert result.should_stop is True
@@ -1324,8 +1232,6 @@ def test_final_window_close_with_open_position_waits_then_writes_position_settle
             entry_time=120.0,
             entry_avg_price=0.25,
             filled_shares=4.0,
-            entry_model_prob=0.70,
-            entry_edge=0.30,
         ))
         calls = []
         sleeps = []
@@ -1352,8 +1258,6 @@ def test_final_window_close_with_open_position_waits_then_writes_position_settle
             loop=loop,
             logger=logger,
             series=object(),
-            dynamic_state=None,
-            dynamic_task=None,
         )
 
         assert result.should_stop is True
@@ -1498,7 +1402,6 @@ def test_pre_entry_observation_tick_is_marked_for_logging_before_entry_window() 
             entry_start_age_sec=120.0,
             entry_end_age_sec=220.0,
             pre_entry_observation_start_age_sec=60.0,
-            early_value_entry_enabled=False,
         ),
     )
     options = replace(options, config=cfg)

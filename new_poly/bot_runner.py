@@ -1,4 +1,4 @@
-"""Runtime runner for the BTC 5m probability-edge bot."""
+"""Runtime runner for the BTC 5m poly-source bot."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import traceback
 from dataclasses import dataclass, replace
 from typing import Any
 
-from new_poly.bot_dynamic import DynamicParamController
 from new_poly.bot_execution_flow import handle_flat_tick, handle_open_position_tick
 from new_poly.bot_logging import build_tick_row, compact_high_frequency_row, write_tick_row
 from new_poly.bot_loop import (
@@ -35,7 +34,7 @@ from new_poly.bot_runtime import (
 )
 from new_poly.market.market import MarketWindow
 from new_poly.market.series import MarketSeries
-from new_poly.strategy.prob_edge import MarketSnapshot, StrategyDecision
+from new_poly.strategy.types import MarketSnapshot, StrategyDecision
 from new_poly.strategy.state import StrategyState
 from new_poly.trading.execution import LiveFakExecutionGateway, PaperExecutionGateway
 
@@ -80,7 +79,6 @@ class BotRunner:
         self.options = options
         self.cfg = options.config
         self.logger = JsonlLogger(options.jsonl, retention_hours=options.log_retention_hours)
-        self.dynamic = DynamicParamController()
         self.series = MarketSeries.from_known("btc-updown-5m")
         self.startup_context: StartupContext | None = None
         self.context: StartedContext | None = None
@@ -102,7 +100,6 @@ class BotRunner:
 
     async def run(self) -> int:
         try:
-            self.options, self.cfg = self.dynamic.load(options=self.options, bot_config=self.cfg)
             feeds = create_feeds(self.cfg)
             gateway = create_gateway(options=self.options, cfg=self.cfg, feeds=feeds)
             self.startup_context = StartupContext(feeds=feeds, gateway=gateway)
@@ -123,7 +120,6 @@ class BotRunner:
 
     async def start(self) -> bool:
         self.logger.write(_config_log_row(self.options))
-        self.dynamic.write_startup_error(logger=self.logger, options=self.options)
         await self.start_first_window()
         return True
 
@@ -205,7 +201,6 @@ class BotRunner:
 
     async def run_tick(self) -> bool:
         await _write_pending_window_settlement_if_due(loop=self.loop, logger=self.logger)
-        await self.drain_dynamic_task()
         tick = await self.prepare_tick_context()
         decision = await self.handle_strategy_tick(
             row=tick.row,
@@ -285,13 +280,6 @@ class BotRunner:
             row["analysis"] = tick.price_analysis
         self.logger.write(compact_high_frequency_row(row, options=self.options))
         self.loop.post_exit_observation_last_age_sec = age_sec
-
-    async def drain_dynamic_task(self) -> None:
-        await self.dynamic.drain(
-            logger=self.logger,
-            options=self.options,
-            window_slug=self.active.window.slug,
-        )
 
     async def refresh_window_inputs(self) -> None:
         now = dt.datetime.now(dt.timezone.utc)
@@ -394,25 +382,8 @@ class BotRunner:
             loop=self.loop,
             logger=self.logger,
             series=self.series,
-            dynamic_state=self.dynamic.state,
-            dynamic_task=self.dynamic.task,
-            trigger_dynamic_analysis=lambda completed_windows, current_window_id, realized_drawdown, cfg: self.dynamic.trigger_analysis_after_window(
-                completed_windows=completed_windows,
-                current_window_id=current_window_id,
-                realized_drawdown=realized_drawdown,
-                cfg=cfg,
-                logger=self.logger,
-                options=self.options,
-            ),
-            apply_pending_dynamic_profile=lambda next_window_slug, cfg: self.dynamic.apply_pending_profile(
-                next_window_slug=next_window_slug,
-                cfg=cfg,
-                logger=self.logger,
-                options=self.options,
-            ),
         )
         self.cfg = result.cfg
-        self.dynamic.update_after_window_close(state=result.dynamic_state, task=result.dynamic_task)
         self.set_window_context(WindowContext(window=result.window, prices=result.prices))
         return result.should_stop
 

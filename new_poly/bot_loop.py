@@ -1,4 +1,4 @@
-"""Loop helpers for the BTC 5m probability-edge bot."""
+"""Loop helpers for the BTC 5m poly-source bot."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 import datetime as dt
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from new_poly.bot_log_schema import _compact
 from new_poly.bot_runtime import (
@@ -31,12 +31,10 @@ from new_poly.bot_runtime import (
 )
 from new_poly.market.binance import BinancePriceFeed
 from new_poly.market.coinbase import CoinbaseBtcPriceFeed
-from new_poly.market.prob_edge_data import fetch_crypto_price_api
+from new_poly.market.poly_source_data import fetch_crypto_price_api
 from new_poly.market.polymarket_live import PolymarketChainlinkBtcPriceFeed
 from new_poly.market.series import MarketSeries
 from new_poly.market.stream import PriceStream
-from new_poly.strategy.dynamic_params import DynamicDecision, DynamicState
-from new_poly.strategy.dynamic_params import save_dynamic_state
 from new_poly.strategy.state import PositionSnapshot, StrategyState
 from new_poly.trading.clob_client import prefetch_order_params
 
@@ -69,8 +67,6 @@ class WindowCloseResult:
     window: Any
     prices: WindowPrices
     cfg: BotConfig
-    dynamic_state: DynamicState | None
-    dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None
     should_stop: bool
 
 
@@ -116,38 +112,6 @@ async def _prefetch_live_order_params(*, token_side: str, token_id: str, market_
             "action": "continue_without_prefetch",
         })
     return result
-
-
-async def _drain_dynamic_task(
-    *,
-    dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None,
-    dynamic_state: DynamicState | None,
-    logger: JsonlLogger,
-    options: RuntimeOptions,
-    window_slug: str,
-) -> tuple[asyncio.Task[tuple[DynamicDecision, DynamicState]] | None, DynamicState | None]:
-    if dynamic_task is None or not dynamic_task.done():
-        return dynamic_task, dynamic_state
-    try:
-        decision, dynamic_state = dynamic_task.result()
-        if dynamic_state is not None:
-            save_dynamic_state(options.dynamic_state, dynamic_state)
-        logger.write(decision.to_log_row(
-            mode=options.mode,
-            window_id=window_slug,
-            failed_health_checks=dynamic_state.failed_health_checks if dynamic_state is not None else 0,
-        ))
-    except Exception as exc:
-        logger.write({
-            "ts": dt.datetime.now().astimezone().isoformat(),
-            "event": "dynamic_error",
-            "mode": options.mode,
-            "market_slug": window_slug,
-            "error_type": type(exc).__name__,
-            "message": str(exc),
-            "action": "keep_current",
-        })
-    return None, dynamic_state
 
 
 async def _refresh_window_inputs(
@@ -519,10 +483,6 @@ async def _handle_window_close(
     loop: LoopRuntime,
     logger: JsonlLogger,
     series: MarketSeries,
-    dynamic_state: DynamicState | None,
-    dynamic_task: asyncio.Task[tuple[DynamicDecision, DynamicState]] | None,
-    trigger_dynamic_analysis: Callable[[int, str, float, BotConfig], asyncio.Task[tuple[DynamicDecision, DynamicState]] | None] | None = None,
-    apply_pending_dynamic_profile: Callable[[str, BotConfig], tuple[BotConfig, DynamicState | None]] | None = None,
 ) -> WindowCloseResult:
     pending_position = None
     if state.has_position:
@@ -537,8 +497,6 @@ async def _handle_window_close(
             **pause_event,
         })
     _prune_logs_after_window_if_needed(loop=loop, logger=logger, options=options)
-    if trigger_dynamic_analysis is not None:
-        dynamic_task = trigger_dynamic_analysis(loop.completed_windows, window.slug, state.drawdown, cfg)
     if options.windows is not None and loop.completed_windows >= options.windows:
         loop.pending_window_settlement = None
         if prices.k_price is not None:
@@ -555,7 +513,7 @@ async def _handle_window_close(
                 )
             else:
                 await _write_window_settlement_row(window=window, cfg=cfg, options=options, logger=logger, state=state)
-        return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, True)
+        return WindowCloseResult(window, prices, cfg, True)
 
     next_window = find_following_window(window, series)
     if prices.k_price is not None:
@@ -568,9 +526,6 @@ async def _handle_window_close(
             position=pending_position,
             prices=prices if pending_position is not None else None,
         )
-    if apply_pending_dynamic_profile is not None:
-        cfg, dynamic_state = apply_pending_dynamic_profile(next_window.slug, cfg)
-
     window, prices = await _switch_to_next_window(
         window=window,
         series=series,
@@ -581,4 +536,4 @@ async def _handle_window_close(
         logger=logger,
         next_window=next_window,
     )
-    return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, False)
+    return WindowCloseResult(window, prices, cfg, False)

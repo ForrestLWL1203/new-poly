@@ -1,4 +1,4 @@
-"""Entry and exit execution flow helpers for the probability-edge bot."""
+"""Entry and exit execution flow helpers for the poly-source bot."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from new_poly.bot_runtime import (
     _refresh_entry_retry_params,
     _refresh_exit_retry_params,
 )
-from new_poly.strategy.prob_edge import StrategyDecision
+from new_poly.strategy.types import StrategyDecision
 from new_poly.strategy.poly_source import entry_amount_usd, evaluate_poly_entry, evaluate_poly_exit
 from new_poly.strategy.state import PositionSnapshot, StrategyState, UnknownEntryOrder
 from new_poly.trading.clob_client import get_token_balance
@@ -25,9 +25,7 @@ UNKNOWN_ENTRY_SAFETY_REMAINING_SEC = 90.0
 UNKNOWN_ENTRY_SAFETY_MIN_AGE_SEC = 30.0
 
 _ORDER_INTENT_OMIT_IF_NONE = {
-    "model_prob",
     "phase",
-    "required_edge",
     "best_ask",
     "depth_limit_price",
     "edge",
@@ -58,14 +56,12 @@ def _order_intent_row(
         "side": decision.side,
         f"{intent}_side": decision.side,
         "reason": decision.reason,
-        "model_prob": _compact(decision.model_prob),
         "signal_price": _compact(decision.price),
         "limit_price": _compact(decision.limit_price),
         "best_ask": _compact(decision.best_ask),
         "depth_limit_price": _compact(decision.depth_limit_price),
         "edge": _compact(decision.edge),
         "phase": decision.phase,
-        "required_edge": _compact(decision.required_edge),
     }
     if extra:
         out.update(extra)
@@ -143,11 +139,7 @@ def _record_unknown_entry_candidate(
         amount_usd=amount_usd,
         entry_time=snap.age_sec,
         entry_avg_price=decision.best_ask or decision.price or decision.limit_price or 0.0,
-        entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
-        entry_edge=decision.edge,
-        entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
-        entry_favorable_gap_bps=decision.favorable_gap_bps,
-        entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
+        entry_reference_distance_bps=decision.poly_reference_distance_bps,
         created_at_epoch_ms=int(created_at) if created_at is not None else None,
         signal_price=decision.price,
         limit_price=decision.limit_price,
@@ -244,12 +236,8 @@ async def _finish_pending_entry_order(
                 entry_time=snap.age_sec,
                 entry_avg_price=result.avg_price,
                 filled_shares=result.filled_size,
-                entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
-                entry_edge=decision.edge,
                 entry_amount_usd=filled_notional,
-                entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
-                entry_favorable_gap_bps=decision.favorable_gap_bps,
-                entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
+                entry_reference_distance_bps=decision.poly_reference_distance_bps,
             ))
             row["event"] = "entry"
             row["entry_side"] = decision.side
@@ -443,11 +431,7 @@ async def _maybe_recover_unknown_entry_balance(
         entry_time=snap.age_sec,
         entry_avg_price=price,
         filled_shares=balance,
-        entry_model_prob=pending.entry_model_prob,
-        entry_edge=pending.entry_edge,
         entry_amount_usd=amount_usd,
-        entry_polymarket_divergence_bps=pending.entry_polymarket_divergence_bps,
-        entry_favorable_gap_bps=pending.entry_favorable_gap_bps,
         entry_reference_distance_bps=pending.entry_reference_distance_bps,
     ))
     state.clear_unresolved_unknown_entry()
@@ -741,12 +725,8 @@ async def handle_flat_tick(
             entry_time=snap.age_sec,
             entry_avg_price=result.avg_price,
             filled_shares=result.filled_size,
-            entry_model_prob=decision.model_prob if decision.model_prob is not None else 0.0,
-            entry_edge=decision.edge,
             entry_amount_usd=filled_notional,
-            entry_polymarket_divergence_bps=decision.polymarket_divergence_bps,
-            entry_favorable_gap_bps=decision.favorable_gap_bps,
-            entry_reference_distance_bps=decision.entry_reference_distance_bps or decision.poly_reference_distance_bps,
+            entry_reference_distance_bps=decision.poly_reference_distance_bps,
         ))
         row["event"] = "entry"
         row["entry_side"] = decision.side

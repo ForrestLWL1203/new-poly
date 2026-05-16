@@ -22,9 +22,7 @@ The only active runtime config is:
 configs/prob_poly_single_source.yaml
 ```
 
-The strategy does not use Binance/Coinbase model probability, Black-Scholes
-probability, `model_prob`, or `required_edge` for entries. It uses Polymarket's
-BTC live-data reference price versus the window `k_price`:
+The strategy uses Polymarket's BTC live-data reference price versus the window `k_price`:
 
 - `polymarket_price > k_price` means UP-side reference confirmation.
 - `polymarket_price < k_price` means DOWN-side reference confirmation.
@@ -44,13 +42,13 @@ and reusable market infrastructure. They are not the active strategy model.
 Paper smoke test:
 
 ```bash
-python3 scripts/run_prob_edge_bot.py --once
+python3 scripts/run_poly_source_bot.py --once
 ```
 
 Longer paper run:
 
 ```bash
-python3 scripts/run_prob_edge_bot.py \
+python3 scripts/run_poly_source_bot.py \
   --config configs/prob_poly_single_source.yaml \
   --mode paper \
   --windows 96 \
@@ -61,7 +59,7 @@ python3 scripts/run_prob_edge_bot.py \
 Live mode requires both explicit live flags:
 
 ```bash
-python3 scripts/run_prob_edge_bot.py \
+python3 scripts/run_poly_source_bot.py \
   --config configs/prob_poly_single_source.yaml \
   --mode live \
   --i-understand-live-risk
@@ -74,19 +72,16 @@ Do not print, commit, or copy Polymarket account config/private key material.
 The collector is still useful for neutral market data capture:
 
 ```text
-scripts/collect_prob_edge_data.py
+scripts/collect_poly_source_data.py
 ```
 
 It does not authenticate to CLOB, submit orders, or evaluate strategy
-entry/exit decisions. The compatibility wrapper `scripts/prob_edge_dry_run.py`
-delegates to the collector.
-
-Example:
+entry/exit decisions. Example:
 
 ```bash
-python3 scripts/collect_prob_edge_data.py \
+python3 scripts/collect_poly_source_data.py \
   --interval-sec 1 \
-  --jsonl data/prob-edge-collector.jsonl \
+  --jsonl data/poly-source-collector.jsonl \
   --sigma-eff 0.6 \
   --sigma-source manual \
   --windows 12
@@ -97,19 +92,16 @@ Those fields are diagnostic data, not active strategy entry logic.
 
 ## Backtest And Replay
 
-The historical replay entrypoint remains:
+The replay entrypoint is:
 
 ```text
-scripts/backtest_prob_edge.py
+scripts/backtest_poly_source.py
 ```
-
-Despite the legacy filename, current replay code supports the single-source
-strategy through `BacktestConfig(strategy_mode="poly_single_source")`.
 
 Example:
 
 ```bash
-python3 scripts/backtest_prob_edge.py \
+python3 scripts/backtest_poly_source.py \
   --jsonl data/live_runs/paper-sweden-96w-20260512T174319Z.jsonl \
   --poly-trend-lookback-sec 10 \
   --entry-start-age-sec 120 \
@@ -120,13 +112,12 @@ python3 scripts/backtest_prob_edge.py \
 
 - `configs/prob_poly_single_source.yaml`: active bot config.
 - `new_poly/strategy/poly_source.py`: active entry/exit logic.
-- `new_poly/strategy/prob_edge.py`: shared DTOs only; old dual-source strategy
-  logic has been removed.
+- `new_poly/strategy/types.py`: shared strategy DTOs.
 - `new_poly/bot_runtime.py`, `new_poly/bot_runner.py`,
   `new_poly/bot_execution_flow.py`, `new_poly/bot_loop.py`: runtime loop and
   execution orchestration.
 - `new_poly/trading/execution.py`: paper/live FAK execution gateways.
-- `new_poly/market/prob_edge_data.py`: shared collector/runtime market data
+- `new_poly/market/poly_source_data.py`: shared collector/runtime market data
   helpers.
 
 ## VPS Notes
@@ -149,15 +140,9 @@ Useful read-only checks:
 
 ```bash
 SSHPASS="$(cat /Users/forrestliao/workspace/new-poly/docs/sweden-vps-secret.txt)" \
-  sshpass -e ssh root@70.34.207.45 'pgrep -af "run_prob_edge_bot|collect_prob_edge_data" || true'
+  sshpass -e ssh root@70.34.207.45 'pgrep -af "run_poly_source_bot|collect_poly_source_data" || true'
 
 SSHPASS="$(cat /Users/forrestliao/workspace/new-poly/docs/sweden-vps-secret.txt)" \
   sshpass -e ssh root@70.34.207.45 'ls -lt /opt/new-poly/logs | head -20'
 ```
 
-## Archived Context
-
-Older documents and reports may still mention the removed dual-source
-probability-edge strategy, aggressive/dynamic profiles, `model_prob`,
-`required_edge`, or Binance-as-model entries. Treat those as historical analysis
-unless they have been updated to explicitly describe `poly_single_source`.

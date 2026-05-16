@@ -1,2 +1,2 @@
-"""Reusable infrastructure for the new Polymarket probability bot."""
+"""Reusable infrastructure for the new Polymarket poly source bot."""
 

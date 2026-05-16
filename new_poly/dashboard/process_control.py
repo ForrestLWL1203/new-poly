@@ -133,7 +133,7 @@ class DashboardProcessController:
     def _bot_command(self, mode: str, windows: int, jsonl_path: Path) -> list[str]:
         cmd = [
             str(self.paths.python),
-            str(self.paths.repo_root / "scripts" / "run_prob_edge_bot.py"),
+            str(self.paths.repo_root / "scripts" / "run_poly_source_bot.py"),
             "--config",
             str(self.paths.repo_root / "configs" / "prob_poly_single_source.yaml"),
             "--mode",
@@ -155,7 +155,7 @@ class DashboardProcessController:
         for proc in self.process_lister():
             cmd = str(proc.get("cmd") or "")
             parts = _split_cmd(cmd)
-            if not any(part.endswith("run_prob_edge_bot.py") for part in parts):
+            if not any(part.endswith("run_poly_source_bot.py") for part in parts):
                 continue
             if not _has_mode(parts, mode):
                 continue

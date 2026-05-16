@@ -27,7 +27,7 @@ import websockets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from new_poly.market.prob_edge_data import POLYMARKET_CRYPTO_PRICE_API, compact_float, iso_z
+from new_poly.market.poly_source_data import POLYMARKET_CRYPTO_PRICE_API, compact_float, iso_z
 
 WS_URL = "wss://ws-live-data.polymarket.com"
 WINDOW_SECONDS = 300

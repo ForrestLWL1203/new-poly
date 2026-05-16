@@ -1,4 +1,4 @@
-"""Lifecycle helpers for the BTC 5m probability-edge bot."""
+"""Lifecycle helpers for the BTC 5m poly-source bot."""
 
 from __future__ import annotations
 

@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "collect_prob_edge_data.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "collect_poly_source_data.py"
 sys.path.insert(0, str(SCRIPT.parents[1]))
-spec = importlib.util.spec_from_file_location("collect_prob_edge_data", SCRIPT)
+spec = importlib.util.spec_from_file_location("collect_poly_source_data", SCRIPT)
 collector = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 sys.modules[spec.name] = collector
 spec.loader.exec_module(collector)
 
-from new_poly.market import prob_edge_data as data_helpers
+from new_poly.market import poly_source_data as data_helpers
 
 
 def test_extract_crypto_prices_from_api_response() -> None:
@@ -320,7 +320,7 @@ def test_collector_row_is_strategy_neutral() -> None:
     assert row["up"]["ask_safety_limit"] == 0.51
     assert row["depth_safety_multiplier"] == 1.5
     assert "close_price" not in row
-    for forbidden in ("decision", "candidate_side", "skip_reason", "required_edge", "edge_components", "up_prob", "down_prob"):
+    for forbidden in ("decision", "candidate_side", "skip_reason", "edge_components", "up_prob", "down_prob"):
         assert forbidden not in row
     assert "edge" not in row["up"]
     assert "private" not in json.dumps(row).lower()

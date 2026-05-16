@@ -3,8 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,13 +18,6 @@ def test_default_mode_is_paper_single_source() -> None:
     assert opts.config.poly_source.poly_reference_distance_bps == 1.5
     assert opts.config.poly_source.max_poly_reference_distance_bps == 4.0
     assert not hasattr(opts.config, "edge")
-
-
-def test_dynamic_params_cli_is_removed() -> None:
-    args = build_arg_parser().parse_args(["--once", "--dynamic-params"])
-
-    with pytest.raises(ValueError, match="removed with the old dual-source strategy"):
-        build_runtime_options(args)
 
 
 def test_config_log_row_contains_only_single_source_strategy_config() -> None:
@@ -47,24 +38,13 @@ def test_poly_single_source_config_loads() -> None:
     assert cfg.strategy_mode == "poly_single_source"
     assert cfg.poly_source.entry_start_age_sec == 120.0
     assert cfg.poly_source.entry_end_age_sec == 190.0
-    assert cfg.poly_source.early_value_entry_enabled is False
-    assert cfg.poly_source.early_value_start_age_sec == 60.0
-    assert cfg.poly_source.early_value_end_age_sec == 120.0
-    assert cfg.poly_source.early_value_min_reference_distance_bps == 2.0
-    assert cfg.poly_source.early_value_min_poly_return_bps == 0.2
-    assert cfg.poly_source.early_value_min_entry_score == 5.0
-    assert cfg.poly_source.early_value_max_entry_ask == 0.65
-    assert cfg.poly_source.early_value_max_spread == 0.08
-    assert cfg.poly_source.early_value_hold_protection_enabled is False
-    assert cfg.poly_source.max_entries_per_market == 1
-    assert cfg.poly_source.max_entry_ask == 0.70
-    assert cfg.poly_source.max_entry_fill_price == 0.70
+    assert cfg.poly_source.max_entry_ask == 0.75
+    assert cfg.poly_source.max_entry_fill_price == 0.75
     assert cfg.poly_source.min_poly_entry_score == 5.2
     assert cfg.poly_source.entry_size_score_mid == 5.6
     assert cfg.poly_source.entry_size_score_full == 6.3
     assert cfg.poly_source.entry_size_full_min_age_sec == 150.0
     assert cfg.poly_source.poly_reference_distance_bps == 1.5
     assert cfg.poly_source.max_poly_reference_distance_bps == 4.0
-    assert cfg.poly_source.reference_distance_exit_remaining_sec == (120.0, 90.0, 70.0, 45.0, 30.0)
-    assert cfg.poly_source.reference_distance_exit_min_bps == (-2.0, -1.0, 1.0, 1.5, 1.75)
+    assert cfg.poly_source.extreme_loss_ratio == 0.90
     assert cfg.poly_source.hold_to_settlement_min_poly_return_bps == -0.3
