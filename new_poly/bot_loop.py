@@ -394,8 +394,11 @@ async def _write_window_settlement_row(
     cfg: BotConfig,
     options: RuntimeOptions,
     logger: JsonlLogger,
+    state: StrategyState | None = None,
 ) -> None:
     settlement = await _crypto_close_settlement(window, cfg)
+    if state is not None and settlement.get("winning_side") in {"up", "down"}:
+        state.record_window_settlement(window.slug, settlement["winning_side"])
     logger.write({
         "ts": dt.datetime.now().astimezone().isoformat(),
         "mode": options.mode,
@@ -437,6 +440,7 @@ async def _write_pending_window_settlement_if_due(
             cfg=pending.cfg,
             options=pending.options,
             logger=logger,
+            state=pending.state,
         )
 
 
@@ -550,7 +554,7 @@ async def _handle_window_close(
                     logger=logger,
                 )
             else:
-                await _write_window_settlement_row(window=window, cfg=cfg, options=options, logger=logger)
+                await _write_window_settlement_row(window=window, cfg=cfg, options=options, logger=logger, state=state)
         return WindowCloseResult(window, prices, cfg, dynamic_state, dynamic_task, True)
 
     next_window = find_following_window(window, series)
@@ -560,7 +564,7 @@ async def _handle_window_close(
             cfg=cfg,
             options=options,
             due_at=next_window.start_time + dt.timedelta(seconds=90),
-            state=state if pending_position is not None else None,
+            state=state,
             position=pending_position,
             prices=prices if pending_position is not None else None,
         )

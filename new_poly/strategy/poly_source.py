@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .prob_edge import MarketSnapshot, StrategyDecision
-from .state import PositionSnapshot, StrategyState
+from .state import DirectionState, PositionSnapshot, StrategyState
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,31 @@ class PolySourceConfig:
     max_entry_ask: float = 0.65
     max_entry_fill_price: float = 0.0
     min_poly_entry_score: float = 0.0
+    direction_observe_start_age_sec: float = 30.0
+    direction_min_observed_sec: float = 0.0
+    direction_recent_window_sec: float = 30.0
+    direction_fresh_cross_sec: float = 20.0
+    direction_choppy_recent_crosses: int = 2
+    direction_choppy_total_crosses: int = 0
+    direction_choppy_cross_rate_per_min: float = 1.5
+    direction_stable_min_same_side_sec: float = 30.0
+    direction_stable_max_recent_crosses: int = 1
+    direction_confidence_enabled: bool = False
+    min_direction_confidence: float = 0.0
+    direction_confidence_score_override: bool = False
+    direction_confidence_high_reference_bps: float = 3.0
+    direction_confidence_prior_streak_min: int = 3
+    exit_direction_confidence_enabled: bool = False
+    exit_min_direction_confidence: float = 0.78
+    exit_direction_confidence_min_hold_sec: float = 20.0
+    exit_direction_confidence_pressure_count: int = 2
+    late_ev_exit_enabled: bool = False
+    late_ev_exit_min_hold_sec: float = 60.0
+    late_ev_exit_min_remaining_sec: float = 45.0
+    late_ev_exit_remaining_sec: tuple[float, ...] = (120.0, 80.0, 45.0)
+    late_ev_exit_margin: tuple[float, ...] = (0.18, 0.12, 0.06)
+    late_ev_exit_min_cross_bps: float = 0.5
+    late_ev_exit_min_cross_sec: float = 5.0
     progressive_stop_warmup_sec: float = 30.0
     progressive_stop_full_sec: float = 120.0
     progressive_stop_initial_loss_ratio: float = 0.60
@@ -46,6 +71,7 @@ class PolySourceConfig:
     reentry_max_entry_fill_price: float = 0.65
     entry_size_score_mid: float = 6.0
     entry_size_score_full: float = 6.5
+    entry_size_full_confidence: float = 0.95
     entry_size_high_price_cap: float = 0.70
     entry_size_full_min_age_sec: float = 150.0
     entry_size_mid_multiplier: float = 2.0
@@ -160,6 +186,10 @@ def entry_amount_usd(
     *,
     score: float | None,
     entry_price: float | None,
+    reference_distance_bps: float | None = None,
+    direction_quality: str | None = None,
+    direction_cross_count_recent: int | None = None,
+    direction_confidence: float | None = None,
     cfg: PolySourceConfig,
     phase: str | None = None,
     age_sec: float | None = None,
@@ -173,10 +203,23 @@ def entry_amount_usd(
         return base
     if score is None:
         return base
+    if cfg.direction_confidence_enabled:
+        if direction_confidence is None or direction_confidence < cfg.min_direction_confidence:
+            return base
+        span = max(1e-9, cfg.entry_size_full_confidence - cfg.min_direction_confidence)
+        progress = _clamp((direction_confidence - cfg.min_direction_confidence) / span, 0.0, 1.0)
+        multiplier = 1.0 + progress * (max(1.0, cfg.entry_size_full_multiplier) - 1.0)
+        return round(base * multiplier, 6)
+    reference_distance = reference_distance_bps if reference_distance_bps is not None else 0.0
+    if direction_quality is not None and direction_quality not in {"acceptable", "stable"}:
+        return base
     full_size_allowed = age_sec is None or age_sec >= cfg.entry_size_full_min_age_sec
-    if full_size_allowed and score >= cfg.entry_size_score_full:
+    stable_direction = direction_quality is None or (
+        direction_quality == "stable" and (direction_cross_count_recent is None or direction_cross_count_recent <= cfg.direction_stable_max_recent_crosses)
+    )
+    if full_size_allowed and stable_direction and score >= cfg.entry_size_score_full and reference_distance >= 3.5 and (entry_price is None or entry_price <= 0.60):
         return round(base * max(1.0, cfg.entry_size_full_multiplier), 6)
-    if score >= cfg.entry_size_score_mid:
+    if score >= cfg.entry_size_score_mid and reference_distance >= 3.0:
         return round(base * max(1.0, cfg.entry_size_mid_multiplier), 6)
     return base
 
@@ -205,6 +248,15 @@ def _price_quality_score(ask: float) -> float:
     return -2.0
 
 
+def _effective_entry_trend_bps(distance_bps: float, trend_bps: float) -> float:
+    if trend_bps <= 0.0 or distance_bps <= 0.0:
+        return 0.0
+    previous_distance = distance_bps - trend_bps
+    if previous_distance < 0.0:
+        return min(distance_bps, trend_bps) * 0.25
+    return min(distance_bps - previous_distance, trend_bps)
+
+
 def _hold_orderbook_time_weight(remaining_sec: float, cfg: PolySourceConfig) -> float:
     if cfg.early_value_hold_protection_enabled:
         if remaining_sec > 210.0:
@@ -226,7 +278,7 @@ def _hold_orderbook_time_weight(remaining_sec: float, cfg: PolySourceConfig) -> 
 
 def _entry_score(distance_bps: float, trend_bps: float, ask: float, bid: float | None) -> PolyEntryScore:
     distance_score, overextended = _distance_score(distance_bps)
-    trend_score = min(max(trend_bps, 0.0), 2.5) * 1.5
+    trend_score = min(_effective_entry_trend_bps(distance_bps, trend_bps), 2.0)
     price_score = _price_quality_score(ask)
     market_score = 0.0
     if bid is not None:
@@ -241,6 +293,65 @@ def _entry_score(distance_bps: float, trend_bps: float, ask: float, bid: float |
         market_quality_score=round(market_score, 6),
         overextended=overextended,
     )
+
+
+def _direction_confidence(
+    *,
+    direction: DirectionState | None,
+    distance_bps: float | None,
+    state: StrategyState,
+    cfg: PolySourceConfig,
+) -> float | None:
+    if direction is None or direction.current_side is None:
+        return None
+    confidence = 0.62
+    observed = min(max(direction.observed_sec, 0.0), 120.0)
+    confidence += observed / 120.0 * 0.05
+    if distance_bps is not None:
+        confidence += _clamp((distance_bps - 1.0) / 3.0, 0.0, 1.0) * 0.12
+    if direction.same_side_duration_sec >= 90.0:
+        confidence += 0.08
+    elif direction.same_side_duration_sec >= 60.0:
+        confidence += 0.05
+    elif direction.same_side_duration_sec >= 30.0:
+        confidence += 0.02
+    confidence -= min(direction.cross_count_recent, 3) * 0.06
+    confidence -= min(direction.cross_count_total, 5) * 0.025
+    confidence -= max(0, direction.cross_count_total - 5) * 0.02
+    if direction.quality == "stable":
+        confidence += 0.03
+    elif direction.quality == "choppy":
+        confidence -= 0.12
+    elif direction.quality == "fresh_cross":
+        confidence -= 0.08
+    streak_len = state.prior_same_side_streak_len
+    if streak_len >= cfg.direction_confidence_prior_streak_min:
+        confidence += 0.12
+    elif streak_len >= 2:
+        confidence += 0.06
+    if (
+        distance_bps is not None
+        and distance_bps >= cfg.direction_confidence_high_reference_bps
+        and direction.cross_count_recent == 0
+        and streak_len >= cfg.direction_confidence_prior_streak_min
+    ):
+        confidence = max(confidence, 0.92)
+    return round(_clamp(confidence, 0.0, 0.99), 6)
+
+
+def _position_direction_confidence(
+    *,
+    side: str,
+    direction: DirectionState | None,
+    distance_bps: float | None,
+    state: StrategyState,
+    cfg: PolySourceConfig,
+) -> float | None:
+    if direction is None or direction.current_side is None:
+        return None
+    if direction.current_side != side:
+        return 0.0
+    return _direction_confidence(direction=direction, distance_bps=distance_bps, state=state, cfg=cfg)
 
 
 def _contextual_reference_floor(
@@ -350,6 +461,7 @@ def _progressive_reference_reason(
     *,
     own_distance: float | None,
     reference_floor: float | None,
+    remaining_sec: float,
     position: PositionSnapshot,
     cfg: PolySourceConfig,
 ) -> str | None:
@@ -357,7 +469,7 @@ def _progressive_reference_reason(
         return None
     if own_distance < 0.0:
         return "reference_crossed_k"
-    if reference_floor is not None and own_distance < reference_floor:
+    if reference_floor is not None and own_distance < reference_floor - _same_side_floor_grace_bps(remaining_sec):
         return "reference_floor_broken"
     if (
         position.entry_reference_distance_bps is not None
@@ -367,20 +479,107 @@ def _progressive_reference_reason(
     return None
 
 
-def _should_suppress_progressive_stop(
+def _same_side_floor_grace_bps(remaining_sec: float) -> float:
+    if remaining_sec > 80.0:
+        return 0.75
+    if remaining_sec > 45.0:
+        return 0.50
+    return 0.25
+
+
+def _direction_thesis_exit_reason(
     *,
-    position: PositionSnapshot,
-    remaining_sec: float,
     reference_reason: str | None,
+    direction: DirectionState | None,
+    direction_confidence: float | None,
+    side: str,
+    cfg: PolySourceConfig,
+) -> str | None:
+    if reference_reason is None:
+        return None
+    if reference_reason == "reference_crossed_k":
+        return reference_reason
+    direction_broken = direction is not None and (
+        direction.current_side != side or direction.quality == "choppy"
+    )
+    confidence_broken = (
+        direction_confidence is not None
+        and direction_confidence < cfg.exit_min_direction_confidence
+    )
+    if direction_broken or confidence_broken:
+        return reference_reason
+    return None
+
+
+def _record_exit_pressure(state: StrategyState | None, reference_reason: str | None) -> int:
+    if state is None:
+        return 2 if reference_reason is not None else 0
+    if reference_reason is None:
+        state.exit_pressure_count = 0
+        state.exit_pressure_reason = None
+        return 0
+    if state.exit_pressure_reason == reference_reason:
+        state.exit_pressure_count += 1
+    else:
+        state.exit_pressure_reason = reference_reason
+        state.exit_pressure_count = 1
+    return state.exit_pressure_count
+
+
+def _late_ev_exit_margin(remaining_sec: float, cfg: PolySourceConfig) -> float | None:
+    remaining_points = tuple(float(value) for value in cfg.late_ev_exit_remaining_sec)
+    margin_points = tuple(float(value) for value in cfg.late_ev_exit_margin)
+    if len(remaining_points) != len(margin_points) or not remaining_points:
+        return None
+    points = sorted(zip(remaining_points, margin_points), key=lambda item: item[0], reverse=True)
+    if remaining_sec > points[0][0]:
+        return None
+    if remaining_sec <= points[-1][0]:
+        return points[-1][1]
+    for (left_remaining, left_margin), (right_remaining, right_margin) in zip(points, points[1:]):
+        if left_remaining >= remaining_sec >= right_remaining:
+            span = left_remaining - right_remaining
+            if span <= 0:
+                return right_margin
+            progress = (left_remaining - remaining_sec) / span
+            return left_margin + progress * (right_margin - left_margin)
+    return points[-1][1]
+
+
+def _late_ev_exit_should_sell(
+    *,
+    bid: float,
+    direction_confidence: float | None,
+    reference_reason: str | None,
+    own_distance: float | None,
+    direction: DirectionState | None,
+    side: str,
+    age_sec: float,
+    held_sec: float,
+    remaining_sec: float,
     cfg: PolySourceConfig,
 ) -> bool:
-    if reference_reason not in {"reference_crossed_k", "reference_floor_broken"}:
+    if not cfg.late_ev_exit_enabled:
         return False
-    if remaining_sec <= cfg.progressive_stop_late_remaining_sec:
+    if held_sec < cfg.late_ev_exit_min_hold_sec:
         return False
-    if position.entry_avg_price > max(0.0, cfg.entry_size_high_price_cap - 0.05):
+    if remaining_sec < cfg.late_ev_exit_min_remaining_sec:
         return False
-    return cfg.entry_size_score_mid <= position.entry_edge < cfg.entry_size_score_full
+    margin = _late_ev_exit_margin(remaining_sec, cfg)
+    if margin is None:
+        return False
+    if reference_reason is None or direction_confidence is None:
+        return False
+    if reference_reason != "reference_crossed_k":
+        return False
+    if reference_reason == "reference_crossed_k":
+        cross_depth_bps = abs(own_distance) if own_distance is not None and own_distance < 0.0 else 0.0
+        cross_age_sec = 0.0
+        if direction is not None and direction.current_side != side and direction.last_cross_age_sec is not None:
+            cross_age_sec = max(0.0, age_sec - direction.last_cross_age_sec)
+        if cross_depth_bps < cfg.late_ev_exit_min_cross_bps and cross_age_sec < cfg.late_ev_exit_min_cross_sec:
+            return False
+    return bid > direction_confidence + margin
 
 
 def _decision(
@@ -403,6 +602,9 @@ def _decision(
     progressive_loss_ratio: float | None = None,
     progressive_allowed_loss_ratio: float | None = None,
     progressive_reference_reason: str | None = None,
+    direction_state: DirectionState | None = None,
+    direction_confidence: float | None = None,
+    state: StrategyState | None = None,
 ) -> StrategyDecision:
     return StrategyDecision(
         action=action,
@@ -424,6 +626,18 @@ def _decision(
         poly_entry_price_quality_score=(entry_score.price_quality_score if entry_score is not None else None),
         poly_entry_market_quality_score=(entry_score.market_quality_score if entry_score is not None else None),
         poly_entry_overextended=(entry_score.overextended if entry_score is not None else None),
+        direction_quality=(direction_state.quality if direction_state is not None else None),
+        direction_current_side=(direction_state.current_side if direction_state is not None else None),
+        direction_dominant_side=(direction_state.dominant_side if direction_state is not None else None),
+        direction_same_side_duration_sec=(round(direction_state.same_side_duration_sec, 6) if direction_state is not None else None),
+        direction_cross_count_total=(direction_state.cross_count_total if direction_state is not None else None),
+        direction_cross_count_recent=(direction_state.cross_count_recent if direction_state is not None else None),
+        direction_cross_rate_per_min=(round(direction_state.cross_rate_per_min, 6) if direction_state is not None else None),
+        direction_support_margin=(round(direction_state.dominant_support_margin, 6) if direction_state is not None else None),
+        direction_observed_sec=(round(direction_state.observed_sec, 6) if direction_state is not None else None),
+        direction_confidence=direction_confidence,
+        prior_streak_len=(state.prior_same_side_streak_len if state is not None else None),
+        prior_streak_side=(state.prior_same_side_streak_side if state is not None else None),
         poly_hold_score=(hold_score.total if hold_score is not None else None),
         poly_hold_floor_bps=(hold_score.floor_bps if hold_score is not None else None),
         poly_hold_reference_margin_bps=(hold_score.reference_margin_bps if hold_score is not None else None),
@@ -442,66 +656,76 @@ def _decision(
 
 
 def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: PolySourceConfig) -> StrategyDecision:
+    state.record_direction_observation(snapshot, cfg)
+    direction = state.direction_state
     if state.has_position:
-        return _decision("skip", "already_holding", cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "already_holding", cfg=cfg, snapshot=snapshot, direction_state=direction, state=state)
     if state.loss_pause_remaining_windows > 0:
-        return _decision("skip", "loss_pause", cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "loss_pause", cfg=cfg, snapshot=snapshot, direction_state=direction, state=state)
     if state.entry_count >= cfg.max_entries_per_market:
-        return _decision("skip", "max_entries", cfg=cfg, snapshot=snapshot)
+        return _decision("skip", "max_entries", cfg=cfg, snapshot=snapshot, direction_state=direction, state=state)
     is_reentry = state.entry_count > 0
     if is_reentry:
         if state.last_exit_age_sec is None:
-            return _decision("skip", "reentry_missing_exit_age", cfg=cfg, snapshot=snapshot)
+            return _decision("skip", "reentry_missing_exit_age", cfg=cfg, snapshot=snapshot, direction_state=direction, state=state)
         if snapshot.age_sec - state.last_exit_age_sec < cfg.reentry_cooldown_sec:
-            return _decision("skip", "reentry_cooldown", cfg=cfg, snapshot=snapshot)
+            return _decision("skip", "reentry_cooldown", cfg=cfg, snapshot=snapshot, direction_state=direction, state=state)
 
     phase = _entry_phase(snapshot, cfg)
     if not phase.allowed:
         reason = "outside_entry_time" if phase.phase == "outside_window" else phase.phase
-        return _decision("skip", reason, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", reason, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, state=state)
 
-    side = _raw_poly_side(snapshot)
+    if direction is None or direction.current_side is None:
+        return _decision("skip", "direction_insufficient_history", cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, state=state)
+    side = direction.current_side
+    if direction.quality in {"insufficient_history", "choppy", "fresh_cross"}:
+        return _decision("skip", f"direction_{direction.quality}", side=side, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, state=state)
     if side is None:
-        return _decision("skip", "missing_poly_reference", cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "missing_poly_reference", cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, state=state)
     distance = _distance_bps(snapshot, side)
+    direction_confidence = _direction_confidence(direction=direction, distance_bps=distance, state=state, cfg=cfg)
+    if cfg.direction_confidence_enabled and (direction_confidence is None or direction_confidence < cfg.min_direction_confidence):
+        return _decision("skip", "direction_confidence_too_low", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     if distance is None or distance < cfg.poly_reference_distance_bps:
-        return _decision("skip", "poly_reference_not_confirmed", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "poly_reference_not_confirmed", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     if cfg.max_poly_reference_distance_bps > 0 and distance > cfg.max_poly_reference_distance_bps:
-        return _decision("skip", "poly_reference_distance_too_high", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "poly_reference_distance_too_high", side=side, distance_bps=distance, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     trend = _trend_bps(snapshot, cfg.poly_trend_lookback_sec, side)
     if trend is None or trend < cfg.poly_return_bps:
-        return _decision("skip", "poly_trend_not_confirmed", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "poly_trend_not_confirmed", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     ask = _ask(snapshot, side)
     if ask is None:
-        return _decision("skip", "missing_entry_price", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "missing_entry_price", side=side, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     if not _book_fresh(snapshot, side, cfg):
-        return _decision("skip", "stale_entry_book", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "stale_entry_book", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     if ask > cfg.max_entry_ask:
-        return _decision("skip", "poly_ask_too_high", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "poly_ask_too_high", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     max_fill = _max_entry_fill_price(cfg)
     if max_fill is not None and ask > max_fill:
-        return _decision("skip", "poly_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "poly_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     reentry_max_fill = _reentry_max_entry_fill_price(cfg)
     if is_reentry and reentry_max_fill is not None and ask > reentry_max_fill:
-        return _decision("skip", "reentry_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "reentry_fill_cap_exceeded", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     score = _entry_score(distance, trend, ask, _bid(snapshot, side))
-    if score.total < cfg.min_poly_entry_score:
-        return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+    score_override = cfg.direction_confidence_score_override and direction_confidence is not None and direction_confidence >= cfg.min_direction_confidence
+    if score.total < cfg.min_poly_entry_score and not score_override:
+        return _decision("skip", "poly_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     if is_reentry and score.total < cfg.min_poly_entry_score + cfg.reentry_min_score_bonus:
-        return _decision("skip", "reentry_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+        return _decision("skip", "reentry_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     if phase.phase == "early_value":
         bid = _bid(snapshot, side)
         spread = (ask - bid) if bid is not None else None
         if distance < cfg.early_value_min_reference_distance_bps:
-            return _decision("skip", "early_value_reference_too_weak", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+            return _decision("skip", "early_value_reference_too_weak", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
         if trend < cfg.early_value_min_poly_return_bps:
-            return _decision("skip", "early_value_trend_too_weak", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+            return _decision("skip", "early_value_trend_too_weak", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
         if ask > cfg.early_value_max_entry_ask:
-            return _decision("skip", "early_value_ask_too_high", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+            return _decision("skip", "early_value_ask_too_high", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
         if cfg.early_value_max_spread > 0 and (spread is None or spread > cfg.early_value_max_spread):
-            return _decision("skip", "early_value_spread_too_wide", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+            return _decision("skip", "early_value_spread_too_wide", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
         if score.total < cfg.early_value_min_entry_score:
-            return _decision("skip", "early_value_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+            return _decision("skip", "early_value_score_too_low", side=side, price=ask, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
     limit_candidates = [1.0]
     if max_fill is not None:
         limit_candidates.append(max_fill)
@@ -509,24 +733,32 @@ def evaluate_poly_entry(snapshot: MarketSnapshot, state: StrategyState, cfg: Pol
         limit_candidates.append(reentry_max_fill)
     limit = min(limit_candidates)
     reason = "poly_early_value" if phase.phase == "early_value" else "poly_edge"
-    return _decision("enter", reason, side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase)
+    return _decision("enter", reason, side=side, price=ask, limit_price=limit, distance_bps=distance, trend_bps=trend, cfg=cfg, entry_score=score, snapshot=snapshot, phase=phase.phase, direction_state=direction, direction_confidence=direction_confidence, state=state)
 
 
 def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg: PolySourceConfig, state: StrategyState | None = None) -> StrategyDecision:
+    if state is not None:
+        state.record_direction_observation(snapshot, cfg)
+    direction = state.direction_state if state is not None else None
     side = position.token_side
     bid = _bid(snapshot, side)
     bid_limit = _bid_limit(snapshot, side)
     if bid is None or bid_limit is None:
-        return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, cfg=cfg, snapshot=snapshot)
+        return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, cfg=cfg, snapshot=snapshot, direction_state=direction, state=state)
     profit_now = bid - position.entry_avg_price
     adverse_side = "down" if side == "up" else "up"
     adverse_distance = _distance_bps(snapshot, adverse_side)
     own_distance = _distance_bps(snapshot, side)
+    direction_confidence = (
+        _position_direction_confidence(side=side, direction=direction, distance_bps=own_distance, state=state, cfg=cfg)
+        if state is not None
+        else None
+    )
     trend = _trend_bps(snapshot, cfg.poly_trend_lookback_sec, side)
     hold_to_settlement = _hold_to_settlement(position, bid, bid_limit, profit_now, own_distance, trend, cfg)
     held_sec = snapshot.age_sec - position.entry_time
     if not _depth_ok(snapshot, side):
-        return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now)
+        return _decision("hold", "missing_exit_depth", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, direction_state=direction, direction_confidence=direction_confidence, state=state)
     reference_floor = _reference_distance_exit_floor(snapshot.remaining_sec, cfg)
     hold_score = _hold_score(
         position=position,
@@ -546,16 +778,15 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
     reference_reason = _progressive_reference_reason(
         own_distance=own_distance,
         reference_floor=reference_floor,
-        position=position,
-        cfg=cfg,
-    )
-    stop_suppressed = _should_suppress_progressive_stop(
-        position=position,
         remaining_sec=snapshot.remaining_sec,
-        reference_reason=reference_reason,
+        position=position,
         cfg=cfg,
     )
-    if held_sec >= cfg.exit_min_hold_sec and loss_ratio >= cfg.progressive_stop_extreme_loss_ratio and not stop_suppressed:
+    near_zero_loss_ratio = max(cfg.progressive_stop_extreme_loss_ratio, 0.90)
+    if (
+        held_sec >= cfg.exit_min_hold_sec
+        and loss_ratio >= near_zero_loss_ratio
+    ):
         return _decision(
             "exit",
             "extreme_loss_exit",
@@ -571,33 +802,25 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
             progressive_loss_ratio=loss_ratio,
             progressive_allowed_loss_ratio=allowed_loss_ratio,
             progressive_reference_reason=reference_reason,
+            direction_state=direction,
+            direction_confidence=direction_confidence,
+            state=state,
         )
-    if (
-        not hold_to_settlement
-        and held_sec >= cfg.exit_min_hold_sec
-        and loss_ratio >= allowed_loss_ratio
-        and reference_reason is not None
+    if _late_ev_exit_should_sell(
+        bid=bid,
+        direction_confidence=direction_confidence,
+        reference_reason=reference_reason,
+        own_distance=own_distance,
+        direction=direction,
+        side=side,
+        age_sec=snapshot.age_sec,
+        held_sec=held_sec,
+        remaining_sec=snapshot.remaining_sec,
+        cfg=cfg,
     ):
-        if stop_suppressed:
-            return _decision(
-                "hold",
-                "strong_entry_stop_suppressed",
-                side=side,
-                price=bid,
-                limit_price=bid_limit,
-                distance_bps=own_distance,
-                trend_bps=trend,
-                cfg=cfg,
-                snapshot=snapshot,
-                profit_now=profit_now,
-                hold_score=hold_score,
-                progressive_loss_ratio=loss_ratio,
-                progressive_allowed_loss_ratio=allowed_loss_ratio,
-                progressive_reference_reason=reference_reason,
-            )
         return _decision(
             "exit",
-            "progressive_stop_exit",
+            "late_ev_exit",
             side=side,
             price=bid,
             limit_price=bid_limit,
@@ -610,10 +833,68 @@ def evaluate_poly_exit(snapshot: MarketSnapshot, position: PositionSnapshot, cfg
             progressive_loss_ratio=loss_ratio,
             progressive_allowed_loss_ratio=allowed_loss_ratio,
             progressive_reference_reason=reference_reason,
+            direction_state=direction,
+            direction_confidence=direction_confidence,
+            state=state,
         )
+    thesis_exit_reason = _direction_thesis_exit_reason(
+        reference_reason=reference_reason,
+        direction=direction,
+        direction_confidence=direction_confidence,
+        side=side,
+        cfg=cfg,
+    )
+    if (
+        not hold_to_settlement
+        and held_sec >= max(cfg.exit_min_hold_sec, cfg.exit_direction_confidence_min_hold_sec)
+        and thesis_exit_reason is not None
+    ):
+        pressure_count = _record_exit_pressure(state, thesis_exit_reason)
+        required_pressure_count = 1 if snapshot.remaining_sec <= 60.0 and thesis_exit_reason == "reference_crossed_k" else 2
+        if pressure_count < required_pressure_count:
+            return _decision(
+                "hold",
+                "exit_pressure_pending",
+                side=side,
+                price=bid,
+                limit_price=bid_limit,
+                distance_bps=own_distance,
+                trend_bps=trend,
+                cfg=cfg,
+                snapshot=snapshot,
+                profit_now=profit_now,
+                hold_score=hold_score,
+                progressive_loss_ratio=loss_ratio,
+                progressive_allowed_loss_ratio=allowed_loss_ratio,
+                progressive_reference_reason=reference_reason,
+                direction_state=direction,
+                direction_confidence=direction_confidence,
+                state=state,
+            )
+        return _decision(
+            "exit",
+            "direction_thesis_exit",
+            side=side,
+            price=bid,
+            limit_price=bid_limit,
+            distance_bps=own_distance,
+            trend_bps=trend,
+            cfg=cfg,
+            snapshot=snapshot,
+            profit_now=profit_now,
+            hold_score=hold_score,
+            progressive_loss_ratio=loss_ratio,
+            progressive_allowed_loss_ratio=allowed_loss_ratio,
+            progressive_reference_reason=reference_reason,
+            direction_state=direction,
+            direction_confidence=direction_confidence,
+            state=state,
+        )
+    else:
+        _record_exit_pressure(state, None)
     if hold_to_settlement:
-        return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score, progressive_loss_ratio=loss_ratio, progressive_allowed_loss_ratio=allowed_loss_ratio, progressive_reference_reason=reference_reason)
-    return _decision("hold", "poly_edge_intact", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score, progressive_loss_ratio=loss_ratio, progressive_allowed_loss_ratio=allowed_loss_ratio, progressive_reference_reason=reference_reason)
+        return _decision("hold", "hold_to_settlement", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score, progressive_loss_ratio=loss_ratio, progressive_allowed_loss_ratio=allowed_loss_ratio, progressive_reference_reason=reference_reason, direction_state=direction, direction_confidence=direction_confidence, state=state)
+    return _decision("hold", "poly_edge_intact", side=side, price=bid, limit_price=bid_limit, distance_bps=own_distance, trend_bps=trend, cfg=cfg, snapshot=snapshot, profit_now=profit_now, hold_score=hold_score, progressive_loss_ratio=loss_ratio, progressive_allowed_loss_ratio=allowed_loss_ratio, progressive_reference_reason=reference_reason, direction_state=direction, direction_confidence=direction_confidence, state=state)
 
 
 def _reference_distance_exit_floor(remaining_sec: float, cfg: PolySourceConfig) -> float | None:

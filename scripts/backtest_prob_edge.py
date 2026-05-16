@@ -35,6 +35,18 @@ def _counts(items: list[dict[str, Any]], key: str) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda pair: (-pair[1], pair[0])))
 
 
+def _amount_bucket(value: Any) -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if amount >= 2.5:
+        return "3x"
+    if amount >= 1.5:
+        return "2x"
+    return "1x"
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay probability-edge strategy from collector JSONL")
     parser.add_argument("--jsonl", type=Path, required=True)
@@ -78,6 +90,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-entry-ask", type=float, default=0.65)
     parser.add_argument("--max-entry-fill-price", type=float, default=0.0)
     parser.add_argument("--min-poly-entry-score", type=float, default=0.0)
+    parser.add_argument("--direction-observe-start-age-sec", type=float, default=30.0)
+    parser.add_argument("--direction-min-observed-sec", type=float, default=0.0)
+    parser.add_argument("--direction-recent-window-sec", type=float, default=30.0)
+    parser.add_argument("--direction-fresh-cross-sec", type=float, default=20.0)
+    parser.add_argument("--direction-choppy-recent-crosses", type=int, default=2)
+    parser.add_argument("--direction-choppy-total-crosses", type=int, default=0)
+    parser.add_argument("--direction-choppy-cross-rate-per-min", type=float, default=1.5)
+    parser.add_argument("--direction-stable-min-same-side-sec", type=float, default=30.0)
+    parser.add_argument("--direction-stable-max-recent-crosses", type=int, default=1)
+    parser.add_argument("--direction-confidence-enabled", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--min-direction-confidence", type=float, default=0.0)
+    parser.add_argument("--direction-confidence-score-override", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--direction-confidence-high-reference-bps", type=float, default=3.0)
+    parser.add_argument("--direction-confidence-prior-streak-min", type=int, default=3)
+    parser.add_argument("--exit-direction-confidence-enabled", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--exit-min-direction-confidence", type=float, default=0.78)
+    parser.add_argument("--exit-direction-confidence-min-hold-sec", type=float, default=20.0)
+    parser.add_argument("--exit-direction-confidence-pressure-count", type=int, default=2)
+    parser.add_argument("--late-ev-exit-enabled", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--late-ev-exit-min-hold-sec", type=float, default=60.0)
+    parser.add_argument("--late-ev-exit-min-remaining-sec", type=float, default=45.0)
+    parser.add_argument("--late-ev-exit-remaining-sec", default="120,80,45")
+    parser.add_argument("--late-ev-exit-margin", default="0.18,0.12,0.06")
+    parser.add_argument("--late-ev-exit-min-cross-bps", type=float, default=0.5)
+    parser.add_argument("--late-ev-exit-min-cross-sec", type=float, default=5.0)
     parser.add_argument("--progressive-stop-warmup-sec", type=float, default=30.0)
     parser.add_argument("--progressive-stop-full-sec", type=float, default=120.0)
     parser.add_argument("--progressive-stop-initial-loss-ratio", type=float, default=0.60)
@@ -90,6 +127,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reentry-max-entry-fill-price", type=float, default=0.65)
     parser.add_argument("--entry-size-score-mid", type=float, default=6.0)
     parser.add_argument("--entry-size-score-full", type=float, default=6.5)
+    parser.add_argument("--entry-size-full-confidence", type=float, default=0.95)
     parser.add_argument("--entry-size-high-price-cap", type=float, default=0.70)
     parser.add_argument("--entry-size-full-min-age-sec", type=float, default=150.0)
     parser.add_argument("--entry-size-mid-multiplier", type=float, default=2.0)
@@ -158,6 +196,31 @@ def main() -> int:
         max_entry_ask=args.max_entry_ask,
         max_entry_fill_price=args.max_entry_fill_price,
         min_poly_entry_score=args.min_poly_entry_score,
+        direction_observe_start_age_sec=args.direction_observe_start_age_sec,
+        direction_min_observed_sec=args.direction_min_observed_sec,
+        direction_recent_window_sec=args.direction_recent_window_sec,
+        direction_fresh_cross_sec=args.direction_fresh_cross_sec,
+        direction_choppy_recent_crosses=args.direction_choppy_recent_crosses,
+        direction_choppy_total_crosses=args.direction_choppy_total_crosses,
+        direction_choppy_cross_rate_per_min=args.direction_choppy_cross_rate_per_min,
+        direction_stable_min_same_side_sec=args.direction_stable_min_same_side_sec,
+        direction_stable_max_recent_crosses=args.direction_stable_max_recent_crosses,
+        direction_confidence_enabled=args.direction_confidence_enabled,
+        min_direction_confidence=args.min_direction_confidence,
+        direction_confidence_score_override=args.direction_confidence_score_override,
+        direction_confidence_high_reference_bps=args.direction_confidence_high_reference_bps,
+        direction_confidence_prior_streak_min=args.direction_confidence_prior_streak_min,
+        exit_direction_confidence_enabled=args.exit_direction_confidence_enabled,
+        exit_min_direction_confidence=args.exit_min_direction_confidence,
+        exit_direction_confidence_min_hold_sec=args.exit_direction_confidence_min_hold_sec,
+        exit_direction_confidence_pressure_count=args.exit_direction_confidence_pressure_count,
+        late_ev_exit_enabled=args.late_ev_exit_enabled,
+        late_ev_exit_min_hold_sec=args.late_ev_exit_min_hold_sec,
+        late_ev_exit_min_remaining_sec=args.late_ev_exit_min_remaining_sec,
+        late_ev_exit_remaining_sec=tuple(_float_list(args.late_ev_exit_remaining_sec)),
+        late_ev_exit_margin=tuple(_float_list(args.late_ev_exit_margin)),
+        late_ev_exit_min_cross_bps=args.late_ev_exit_min_cross_bps,
+        late_ev_exit_min_cross_sec=args.late_ev_exit_min_cross_sec,
         progressive_stop_warmup_sec=args.progressive_stop_warmup_sec,
         progressive_stop_full_sec=args.progressive_stop_full_sec,
         progressive_stop_initial_loss_ratio=args.progressive_stop_initial_loss_ratio,
@@ -170,6 +233,7 @@ def main() -> int:
         reentry_max_entry_fill_price=args.reentry_max_entry_fill_price,
         entry_size_score_mid=args.entry_size_score_mid,
         entry_size_score_full=args.entry_size_score_full,
+        entry_size_full_confidence=args.entry_size_full_confidence,
         entry_size_high_price_cap=args.entry_size_high_price_cap,
         entry_size_full_min_age_sec=args.entry_size_full_min_age_sec,
         entry_size_mid_multiplier=args.entry_size_mid_multiplier,
@@ -191,6 +255,15 @@ def main() -> int:
         "exit_reasons": _counts(result.trades, "exit_reason"),
         "entry_phases": _counts(result.trades, "entry_phase"),
         "entry_sides": _counts(result.trades, "entry_side"),
+        "direction_qualities": _counts(result.trades, "direction_quality"),
+        "direction_recent_crosses": _counts(result.trades, "direction_cross_count_recent"),
+        "entry_amount_buckets": _counts(
+            [{**trade, "amount_bucket": _amount_bucket(trade.get("entry_amount_usd"))} for trade in result.trades],
+            "amount_bucket",
+        ),
+        "direction_correct_losses": [
+            trade for trade in result.trades if trade.get("direction_correct") is True and float(trade.get("pnl") or 0.0) <= 0.0
+        ],
         "sample_trades": result.trades[:5],
     }
     if not args.no_grid:

@@ -2,8 +2,8 @@ strategy:
   strategy_mode: poly_single_source
 
 poly_source:
-  entry_start_age_sec: 130
-  entry_end_age_sec: 240
+  entry_start_age_sec: 120
+  entry_end_age_sec: 190
   final_no_entry_remaining_sec: 30
   pre_entry_observation_start_age_sec: 60
   early_to_core_age_sec: 120
@@ -25,7 +25,32 @@ poly_source:
   poly_return_bps: 0.3
   max_entry_ask: 0.70
   max_entry_fill_price: 0.70
-  min_poly_entry_score: 6.2
+  min_poly_entry_score: 5.2
+  direction_observe_start_age_sec: 30
+  direction_min_observed_sec: 30
+  direction_recent_window_sec: 30
+  direction_fresh_cross_sec: 0
+  direction_choppy_recent_crosses: 3
+  direction_choppy_total_crosses: 6
+  direction_choppy_cross_rate_per_min: 99
+  direction_stable_min_same_side_sec: 20
+  direction_stable_max_recent_crosses: 1
+  direction_confidence_enabled: true
+  min_direction_confidence: 0.88
+  direction_confidence_score_override: true
+  direction_confidence_high_reference_bps: 3.0
+  direction_confidence_prior_streak_min: 3
+  exit_direction_confidence_enabled: false
+  exit_min_direction_confidence: 0.78
+  exit_direction_confidence_min_hold_sec: 999
+  exit_direction_confidence_pressure_count: 2
+  late_ev_exit_enabled: true
+  late_ev_exit_min_hold_sec: 80
+  late_ev_exit_min_remaining_sec: 45
+  late_ev_exit_remaining_sec: "140,80,45"
+  late_ev_exit_margin: "0.18,0.12,0.06"
+  late_ev_exit_min_cross_bps: 0.5
+  late_ev_exit_min_cross_sec: 5.0
   progressive_stop_warmup_sec: 30
   progressive_stop_full_sec: 120
   progressive_stop_initial_loss_ratio: 0.50
@@ -36,8 +61,9 @@ poly_source:
   reentry_cooldown_sec: 20
   reentry_min_score_bonus: 0.5
   reentry_max_entry_fill_price: 0.70
-  entry_size_score_mid: 6.5
-  entry_size_score_full: 7.0
+  entry_size_score_mid: 5.6
+  entry_size_score_full: 6.3
+  entry_size_full_confidence: 0.95
   entry_size_high_price_cap: 0.70
   entry_size_full_min_age_sec: 150
   entry_size_mid_multiplier: 2.0

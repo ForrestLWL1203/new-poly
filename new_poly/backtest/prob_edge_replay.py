@@ -61,6 +61,31 @@ class BacktestConfig:
     max_entry_ask: float = 0.65
     max_entry_fill_price: float = 0.0
     min_poly_entry_score: float = 0.0
+    direction_observe_start_age_sec: float = 30.0
+    direction_min_observed_sec: float = 0.0
+    direction_recent_window_sec: float = 30.0
+    direction_fresh_cross_sec: float = 20.0
+    direction_choppy_recent_crosses: int = 2
+    direction_choppy_total_crosses: int = 0
+    direction_choppy_cross_rate_per_min: float = 1.5
+    direction_stable_min_same_side_sec: float = 30.0
+    direction_stable_max_recent_crosses: int = 1
+    direction_confidence_enabled: bool = False
+    min_direction_confidence: float = 0.0
+    direction_confidence_score_override: bool = False
+    direction_confidence_high_reference_bps: float = 3.0
+    direction_confidence_prior_streak_min: int = 3
+    exit_direction_confidence_enabled: bool = False
+    exit_min_direction_confidence: float = 0.78
+    exit_direction_confidence_min_hold_sec: float = 20.0
+    exit_direction_confidence_pressure_count: int = 2
+    late_ev_exit_enabled: bool = False
+    late_ev_exit_min_hold_sec: float = 60.0
+    late_ev_exit_min_remaining_sec: float = 45.0
+    late_ev_exit_remaining_sec: tuple[float, ...] = (120.0, 80.0, 45.0)
+    late_ev_exit_margin: tuple[float, ...] = (0.18, 0.12, 0.06)
+    late_ev_exit_min_cross_bps: float = 0.5
+    late_ev_exit_min_cross_sec: float = 5.0
     progressive_stop_warmup_sec: float = 30.0
     progressive_stop_full_sec: float = 120.0
     progressive_stop_initial_loss_ratio: float = 0.60
@@ -73,6 +98,7 @@ class BacktestConfig:
     reentry_max_entry_fill_price: float = 0.65
     entry_size_score_mid: float = 6.0
     entry_size_score_full: float = 6.5
+    entry_size_full_confidence: float = 0.95
     entry_size_high_price_cap: float = 0.70
     entry_size_full_min_age_sec: float = 150.0
     entry_size_mid_multiplier: float = 2.0
@@ -112,6 +138,31 @@ class BacktestConfig:
             max_entry_ask=self.max_entry_ask,
             max_entry_fill_price=self.max_entry_fill_price,
             min_poly_entry_score=self.min_poly_entry_score,
+            direction_observe_start_age_sec=self.direction_observe_start_age_sec,
+            direction_min_observed_sec=self.direction_min_observed_sec,
+            direction_recent_window_sec=self.direction_recent_window_sec,
+            direction_fresh_cross_sec=self.direction_fresh_cross_sec,
+            direction_choppy_recent_crosses=self.direction_choppy_recent_crosses,
+            direction_choppy_total_crosses=self.direction_choppy_total_crosses,
+            direction_choppy_cross_rate_per_min=self.direction_choppy_cross_rate_per_min,
+            direction_stable_min_same_side_sec=self.direction_stable_min_same_side_sec,
+            direction_stable_max_recent_crosses=self.direction_stable_max_recent_crosses,
+            direction_confidence_enabled=self.direction_confidence_enabled,
+            min_direction_confidence=self.min_direction_confidence,
+            direction_confidence_score_override=self.direction_confidence_score_override,
+            direction_confidence_high_reference_bps=self.direction_confidence_high_reference_bps,
+            direction_confidence_prior_streak_min=self.direction_confidence_prior_streak_min,
+            exit_direction_confidence_enabled=self.exit_direction_confidence_enabled,
+            exit_min_direction_confidence=self.exit_min_direction_confidence,
+            exit_direction_confidence_min_hold_sec=self.exit_direction_confidence_min_hold_sec,
+            exit_direction_confidence_pressure_count=self.exit_direction_confidence_pressure_count,
+            late_ev_exit_enabled=self.late_ev_exit_enabled,
+            late_ev_exit_min_hold_sec=self.late_ev_exit_min_hold_sec,
+            late_ev_exit_min_remaining_sec=self.late_ev_exit_min_remaining_sec,
+            late_ev_exit_remaining_sec=self.late_ev_exit_remaining_sec,
+            late_ev_exit_margin=self.late_ev_exit_margin,
+            late_ev_exit_min_cross_bps=self.late_ev_exit_min_cross_bps,
+            late_ev_exit_min_cross_sec=self.late_ev_exit_min_cross_sec,
             progressive_stop_warmup_sec=self.progressive_stop_warmup_sec,
             progressive_stop_full_sec=self.progressive_stop_full_sec,
             progressive_stop_initial_loss_ratio=self.progressive_stop_initial_loss_ratio,
@@ -124,6 +175,7 @@ class BacktestConfig:
             reentry_max_entry_fill_price=self.reentry_max_entry_fill_price,
             entry_size_score_mid=self.entry_size_score_mid,
             entry_size_score_full=self.entry_size_score_full,
+            entry_size_full_confidence=self.entry_size_full_confidence,
             entry_size_high_price_cap=self.entry_size_high_price_cap,
             entry_size_full_min_age_sec=self.entry_size_full_min_age_sec,
             entry_size_mid_multiplier=self.entry_size_mid_multiplier,
@@ -535,13 +587,13 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
     unsettled = 0
     settlement_uncertain = 0
     skip_reasons: Counter[str] = Counter()
+    state = StrategyState()
 
     for slug, group in _group_rows(rows):
         windows += 1
         if cfg.compute_poly_returns:
             group = _with_computed_poly_returns(group, entry_start_age_sec=cfg.entry_start_age_sec)
         group_settlement = _settlement(group, boundary_usd=cfg.settlement_boundary_usd)
-        state = StrategyState(current_market_slug=slug)
         state.reset_for_market(slug)
         active_trade: dict[str, Any] | None = None
         skip_next_row = False
@@ -654,6 +706,10 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         cfg.amount_usd,
                         score=decision.poly_entry_score,
                         entry_price=fill_price,
+                        reference_distance_bps=decision.poly_reference_distance_bps,
+                        direction_quality=decision.direction_quality,
+                        direction_cross_count_recent=decision.direction_cross_count_recent,
+                        direction_confidence=decision.direction_confidence,
                         cfg=poly_cfg,
                         phase=decision.phase,
                         age_sec=fill_snap.age_sec,
@@ -689,6 +745,18 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                         "poly_entry_price_quality_score": decision.poly_entry_price_quality_score,
                         "poly_entry_market_quality_score": decision.poly_entry_market_quality_score,
                         "poly_entry_overextended": decision.poly_entry_overextended,
+                        "direction_quality": decision.direction_quality,
+                        "direction_current_side": decision.direction_current_side,
+                        "direction_dominant_side": decision.direction_dominant_side,
+                        "direction_same_side_duration_sec": decision.direction_same_side_duration_sec,
+                        "direction_cross_count_total": decision.direction_cross_count_total,
+                        "direction_cross_count_recent": decision.direction_cross_count_recent,
+                        "direction_cross_rate_per_min": decision.direction_cross_rate_per_min,
+                        "direction_support_margin": decision.direction_support_margin,
+                        "direction_observed_sec": decision.direction_observed_sec,
+                        "direction_confidence": decision.direction_confidence,
+                        "prior_streak_len": decision.prior_streak_len,
+                        "prior_streak_side": decision.prior_streak_side,
                         "poly_reference_distance_bps": decision.poly_reference_distance_bps,
                         "poly_return_bps": decision.poly_return_bps,
                         "poly_trend_lookback_sec": decision.poly_trend_lookback_sec,
@@ -737,6 +805,9 @@ def run_backtest(rows: Iterable[dict[str, Any]], config: BacktestConfig | None =
                 equity_points.append(equity)
                 trades.append(active_trade)
                 unsettled += 1
+
+        if group_settlement.get("winning_side") in {"up", "down"}:
+            state.record_window_settlement(slug, str(group_settlement["winning_side"]))
 
     wins = sum(1 for trade in trades if trade.get("pnl", 0.0) > 0)
     total_pnl = round(sum(float(trade.get("pnl") or 0.0) for trade in trades), 6)
