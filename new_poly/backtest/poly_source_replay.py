@@ -73,12 +73,7 @@ class BacktestConfig:
     late_ev_exit_min_cross_bps: float = 0.5
     late_ev_exit_min_cross_sec: float = 5.0
     extreme_loss_ratio: float = 0.90
-    entry_size_score_mid: float = 6.0
-    entry_size_score_full: float = 6.5
-    entry_size_full_confidence: float = 0.95
-    entry_size_full_min_age_sec: float = 150.0
-    entry_size_mid_multiplier: float = 2.0
-    entry_size_full_multiplier: float = 3.0
+    entry_amount_tiers: tuple[tuple[float, float], ...] = ()
     poly_score_component_logs: str = "compact"
     poly_buy_price_buffer_ticks: float = 2.0
     poly_exit_min_hold_sec: float = 3.0
@@ -124,12 +119,7 @@ class BacktestConfig:
             late_ev_exit_min_cross_bps=self.late_ev_exit_min_cross_bps,
             late_ev_exit_min_cross_sec=self.late_ev_exit_min_cross_sec,
             extreme_loss_ratio=self.extreme_loss_ratio,
-            entry_size_score_mid=self.entry_size_score_mid,
-            entry_size_score_full=self.entry_size_score_full,
-            entry_size_full_confidence=self.entry_size_full_confidence,
-            entry_size_full_min_age_sec=self.entry_size_full_min_age_sec,
-            entry_size_mid_multiplier=self.entry_size_mid_multiplier,
-            entry_size_full_multiplier=self.entry_size_full_multiplier,
+            entry_amount_tiers=self.entry_amount_tiers,
             poly_score_component_logs=self.poly_score_component_logs,
             entry_tick_size=self.entry_tick_size,
             buy_price_buffer_ticks=self.poly_buy_price_buffer_ticks,

@@ -38,12 +38,7 @@ poly_source:
   late_ev_exit_min_cross_bps: 0.5
   late_ev_exit_min_cross_sec: 5.0
   extreme_loss_ratio: 0.90
-  entry_size_score_mid: 5.6
-  entry_size_score_full: 6.3
-  entry_size_full_confidence: 0.95
-  entry_size_full_min_age_sec: 150
-  entry_size_mid_multiplier: 2.0
-  entry_size_full_multiplier: 3.0
+  entry_amount_tiers: "0.88:1,0.90:3,0.93:5"
   poly_score_component_logs: compact
   entry_tick_size: 0.01
   buy_price_buffer_ticks: 2

@@ -41,9 +41,7 @@ def test_poly_single_source_config_loads() -> None:
     assert cfg.poly_source.max_entry_ask == 0.75
     assert cfg.poly_source.max_entry_fill_price == 0.75
     assert cfg.poly_source.min_poly_entry_score == 5.2
-    assert cfg.poly_source.entry_size_score_mid == 5.6
-    assert cfg.poly_source.entry_size_score_full == 6.3
-    assert cfg.poly_source.entry_size_full_min_age_sec == 150.0
+    assert cfg.poly_source.entry_amount_tiers == ((0.88, 1.0), (0.9, 3.0), (0.93, 5.0))
     assert cfg.poly_source.poly_reference_distance_bps == 1.5
     assert cfg.poly_source.max_poly_reference_distance_bps == 4.0
     assert cfg.poly_source.extreme_loss_ratio == 0.90

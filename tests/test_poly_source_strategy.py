@@ -162,43 +162,20 @@ def test_poly_source_uses_direction_state_side_not_single_tick_side() -> None:
     assert decision.side == "down"
 
 
-def test_poly_source_entry_amount_requires_stable_direction_for_full_size() -> None:
-    cfg = PolySourceConfig(entry_size_score_mid=5.6, entry_size_score_full=6.3)
-
-    assert entry_amount_usd(
-        1.0,
-        score=7.0,
-        entry_price=0.55,
-        reference_distance_bps=4.0,
-        direction_quality="acceptable",
-        cfg=cfg,
-        age_sec=160.0,
-    ) == pytest.approx(2.0)
-    assert entry_amount_usd(
-        1.0,
-        score=7.0,
-        entry_price=0.55,
-        reference_distance_bps=4.0,
-        direction_quality="stable",
-        direction_cross_count_recent=0,
-        cfg=cfg,
-        age_sec=160.0,
-    ) == pytest.approx(3.0)
-
-
-def test_poly_source_entry_amount_scales_linearly_by_direction_confidence() -> None:
+def test_poly_source_entry_amount_uses_confidence_amount_tiers() -> None:
     cfg = PolySourceConfig(
         direction_confidence_enabled=True,
         min_direction_confidence=0.85,
-        entry_size_full_confidence=0.95,
-        entry_size_full_multiplier=3.0,
+        entry_amount_tiers=((0.88, 1.0), (0.90, 3.0), (0.93, 5.0)),
     )
 
     assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.84, cfg=cfg) == pytest.approx(1.0)
-    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.85, cfg=cfg) == pytest.approx(1.0)
-    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.90, cfg=cfg) == pytest.approx(2.0)
-    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.95, cfg=cfg) == pytest.approx(3.0)
-    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.99, cfg=cfg) == pytest.approx(3.0)
+    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.88, cfg=cfg) == pytest.approx(1.0)
+    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.899, cfg=cfg) == pytest.approx(1.0)
+    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.90, cfg=cfg) == pytest.approx(3.0)
+    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.929, cfg=cfg) == pytest.approx(3.0)
+    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.93, cfg=cfg) == pytest.approx(5.0)
+    assert entry_amount_usd(1.0, score=0.0, entry_price=0.60, direction_confidence=0.99, cfg=cfg) == pytest.approx(5.0)
 
 
 def test_poly_source_records_prior_same_side_window_streak() -> None:
@@ -366,34 +343,6 @@ def test_poly_source_score_threshold_can_block_entry() -> None:
 
     assert decision.action == "skip"
     assert decision.reason == "poly_score_too_low"
-
-
-def test_poly_source_entry_amount_scales_by_score() -> None:
-    cfg = PolySourceConfig(
-        entry_size_score_mid=6.0,
-        entry_size_score_full=6.5,
-        entry_size_full_min_age_sec=150.0,
-    )
-
-    assert entry_amount_usd(1.0, score=5.99, entry_price=0.55, reference_distance_bps=4.0, cfg=cfg) == pytest.approx(1.0)
-    assert entry_amount_usd(1.0, score=6.0, entry_price=0.55, reference_distance_bps=4.0, cfg=cfg) == pytest.approx(2.0)
-    assert entry_amount_usd(1.0, score=6.5, entry_price=0.55, reference_distance_bps=4.0, cfg=cfg) == pytest.approx(3.0)
-    assert entry_amount_usd(1.0, score=7.0, entry_price=0.55, reference_distance_bps=4.0, cfg=cfg, age_sec=149.0) == pytest.approx(2.0)
-    assert entry_amount_usd(1.0, score=7.0, entry_price=0.55, reference_distance_bps=4.0, cfg=cfg, age_sec=150.0) == pytest.approx(3.0)
-    assert entry_amount_usd(1.0, score=7.5, entry_price=0.70, reference_distance_bps=4.0, cfg=cfg) == pytest.approx(3.0)
-
-
-def test_poly_source_entry_amount_requires_reference_depth_for_size_increase() -> None:
-    cfg = PolySourceConfig(
-        entry_size_score_mid=5.6,
-        entry_size_score_full=6.3,
-        entry_size_full_min_age_sec=150.0,
-    )
-
-    assert entry_amount_usd(1.0, score=5.8, entry_price=0.55, reference_distance_bps=2.9, cfg=cfg) == pytest.approx(1.0)
-    assert entry_amount_usd(1.0, score=5.8, entry_price=0.55, reference_distance_bps=3.0, cfg=cfg) == pytest.approx(2.0)
-    assert entry_amount_usd(1.0, score=6.5, entry_price=0.55, reference_distance_bps=3.4, cfg=cfg, age_sec=160.0) == pytest.approx(2.0)
-    assert entry_amount_usd(1.0, score=6.5, entry_price=0.55, reference_distance_bps=3.5, cfg=cfg, age_sec=160.0) == pytest.approx(3.0)
 
 
 def test_poly_source_entry_score_caps_overextended_reference_distance() -> None:

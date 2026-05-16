@@ -274,6 +274,46 @@ def _float_tuple(value: Any, default: tuple[float, ...]) -> tuple[float, ...]:
     return parsed or default
 
 
+def _amount_tiers(value: Any, default: tuple[tuple[float, float], ...] = ()) -> tuple[tuple[float, float], ...]:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    else:
+        raw_items = [value]
+    tiers: list[tuple[float, float]] = []
+    for item in raw_items:
+        if isinstance(item, str):
+            if ":" in item:
+                left, right = item.split(":", 1)
+            elif "=" in item:
+                left, right = item.split("=", 1)
+            else:
+                parts = [part.strip() for part in item.split("/") if part.strip()]
+                if len(parts) != 2:
+                    continue
+                left, right = parts
+            try:
+                tiers.append((float(left), float(right)))
+            except ValueError:
+                continue
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            try:
+                tiers.append((float(item[0]), float(item[1])))
+            except (TypeError, ValueError):
+                continue
+        elif isinstance(item, dict):
+            threshold = item.get("min_confidence", item.get("confidence"))
+            amount = item.get("amount_usd", item.get("amount"))
+            try:
+                tiers.append((float(threshold), float(amount)))
+            except (TypeError, ValueError):
+                continue
+    return tuple(sorted(tiers, key=lambda pair: pair[0])) or default
+
+
 def load_bot_config(path: Path) -> BotConfig:
     raw = _load_yaml(path)
     strategy_mode = str(_deep_get(raw, ("strategy", "strategy_mode"), _deep_get(raw, ("strategy_mode",), "poly_single_source")))
@@ -322,12 +362,7 @@ def load_bot_config(path: Path) -> BotConfig:
         late_ev_exit_min_cross_bps=float(_deep_get(raw, ("poly_source", "late_ev_exit_min_cross_bps"), 0.5)),
         late_ev_exit_min_cross_sec=float(_deep_get(raw, ("poly_source", "late_ev_exit_min_cross_sec"), 5.0)),
         extreme_loss_ratio=float(_deep_get(raw, ("poly_source", "extreme_loss_ratio"), 0.90)),
-        entry_size_score_mid=float(_deep_get(raw, ("poly_source", "entry_size_score_mid"), 6.0)),
-        entry_size_score_full=float(_deep_get(raw, ("poly_source", "entry_size_score_full"), 6.5)),
-        entry_size_full_confidence=float(_deep_get(raw, ("poly_source", "entry_size_full_confidence"), 0.95)),
-        entry_size_full_min_age_sec=float(_deep_get(raw, ("poly_source", "entry_size_full_min_age_sec"), 150.0)),
-        entry_size_mid_multiplier=float(_deep_get(raw, ("poly_source", "entry_size_mid_multiplier"), 2.0)),
-        entry_size_full_multiplier=float(_deep_get(raw, ("poly_source", "entry_size_full_multiplier"), 3.0)),
+        entry_amount_tiers=_amount_tiers(_deep_get(raw, ("poly_source", "entry_amount_tiers"), None)),
         poly_score_component_logs=str(_deep_get(raw, ("poly_source", "poly_score_component_logs"), "compact")),
         entry_tick_size=float(_deep_get(raw, ("poly_source", "entry_tick_size"), 0.01)),
         buy_price_buffer_ticks=float(_deep_get(raw, ("poly_source", "buy_price_buffer_ticks"), 2.0)),
@@ -932,12 +967,7 @@ def _backtest_base_config(cfg: BotConfig) -> BacktestConfig:
         late_ev_exit_min_cross_sec=cfg.poly_source.late_ev_exit_min_cross_sec,
         poly_score_component_logs=cfg.poly_source.poly_score_component_logs,
         poly_buy_price_buffer_ticks=cfg.poly_source.buy_price_buffer_ticks,
-        entry_size_score_mid=cfg.poly_source.entry_size_score_mid,
-        entry_size_score_full=cfg.poly_source.entry_size_score_full,
-        entry_size_full_confidence=cfg.poly_source.entry_size_full_confidence,
-        entry_size_full_min_age_sec=cfg.poly_source.entry_size_full_min_age_sec,
-        entry_size_mid_multiplier=cfg.poly_source.entry_size_mid_multiplier,
-        entry_size_full_multiplier=cfg.poly_source.entry_size_full_multiplier,
+        entry_amount_tiers=cfg.poly_source.entry_amount_tiers,
         extreme_loss_ratio=cfg.poly_source.extreme_loss_ratio,
         poly_exit_min_hold_sec=cfg.poly_source.exit_min_hold_sec,
         poly_hold_to_settlement_min_reference_distance_bps=cfg.poly_source.hold_to_settlement_min_reference_distance_bps,

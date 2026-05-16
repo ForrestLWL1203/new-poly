@@ -46,12 +46,7 @@ class PolySourceConfig:
     late_ev_exit_min_cross_bps: float = 0.5
     late_ev_exit_min_cross_sec: float = 5.0
     extreme_loss_ratio: float = 0.90
-    entry_size_score_mid: float = 6.0
-    entry_size_score_full: float = 6.5
-    entry_size_full_confidence: float = 0.95
-    entry_size_full_min_age_sec: float = 150.0
-    entry_size_mid_multiplier: float = 2.0
-    entry_size_full_multiplier: float = 3.0
+    entry_amount_tiers: tuple[tuple[float, float], ...] = ()
     poly_score_component_logs: str = "compact"
     entry_tick_size: float = 0.01
     buy_price_buffer_ticks: float = 2.0
@@ -193,6 +188,16 @@ def _entry_score(distance_bps: float, trend_bps: float, ask: float, bid: float |
     )
 
 
+def _tiered_entry_amount(direction_confidence: float | None, cfg: PolySourceConfig) -> float | None:
+    if direction_confidence is None or not cfg.entry_amount_tiers:
+        return None
+    matched: float | None = None
+    for threshold, amount in sorted(cfg.entry_amount_tiers, key=lambda item: item[0]):
+        if direction_confidence >= threshold:
+            matched = amount
+    return matched
+
+
 def _direction_confidence(
     *,
     direction: DirectionState | None,
@@ -272,22 +277,9 @@ def entry_amount_usd(
     if cfg.direction_confidence_enabled:
         if direction_confidence is None or direction_confidence < cfg.min_direction_confidence:
             return base
-        span = max(1e-9, cfg.entry_size_full_confidence - cfg.min_direction_confidence)
-        progress = _clamp((direction_confidence - cfg.min_direction_confidence) / span, 0.0, 1.0)
-        multiplier = 1.0 + progress * (max(1.0, cfg.entry_size_full_multiplier) - 1.0)
-        return round(base * multiplier, 6)
-    reference_distance = reference_distance_bps if reference_distance_bps is not None else 0.0
-    if direction_quality is not None and direction_quality not in {"acceptable", "stable"}:
-        return base
-    full_size_allowed = age_sec is None or age_sec >= cfg.entry_size_full_min_age_sec
-    stable_direction = direction_quality is None or (
-        direction_quality == "stable"
-        and (direction_cross_count_recent is None or direction_cross_count_recent <= cfg.direction_stable_max_recent_crosses)
-    )
-    if full_size_allowed and stable_direction and score >= cfg.entry_size_score_full and reference_distance >= 3.5:
-        return round(base * max(1.0, cfg.entry_size_full_multiplier), 6)
-    if score >= cfg.entry_size_score_mid and reference_distance >= 3.0:
-        return round(base * max(1.0, cfg.entry_size_mid_multiplier), 6)
+        tier_amount = _tiered_entry_amount(direction_confidence, cfg)
+        if tier_amount is not None:
+            return round(max(0.0, tier_amount), 6)
     return base
 
 

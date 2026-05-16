@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.backtest.poly_source_replay import BacktestConfig, run_backtest, scan_poly_source_configs
+from scripts.backtest_poly_source import _amount_bucket
 
 
 def _poly_row(
@@ -219,3 +220,11 @@ def test_backtest_honored_entry_events_use_logged_amount_when_size_missing() -> 
     assert result.trades[0]["entry_amount_usd"] == 3.0
     assert result.trades[0]["shares"] == pytest.approx(5.0)
     assert result.trades[0]["pnl"] == pytest.approx(2.0)
+
+
+def test_backtest_amount_bucket_uses_actual_usd_amounts() -> None:
+    assert _amount_bucket(None) == "unknown"
+    assert _amount_bucket(1.0) == "$1"
+    assert _amount_bucket(3.0) == "$3"
+    assert _amount_bucket(5.0) == "$5"
+    assert _amount_bucket(2.75) == "$2.75"

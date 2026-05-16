@@ -12,7 +12,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from new_poly.backtest.poly_source_replay import BacktestConfig, run_backtest, scan_poly_source_configs
-from new_poly.bot_runtime import _backtest_base_config, load_bot_config
+from new_poly.bot_runtime import _amount_tiers, _backtest_base_config, load_bot_config
 
 
 def _float_list(value: str) -> list[float]:
@@ -48,11 +48,9 @@ def _amount_bucket(value: Any) -> str:
         amount = float(value)
     except (TypeError, ValueError):
         return "unknown"
-    if amount >= 2.5:
-        return "3x"
-    if amount >= 1.5:
-        return "2x"
-    return "1x"
+    if amount.is_integer():
+        return f"${int(amount)}"
+    return f"${amount:.2f}".rstrip("0").rstrip(".")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -111,12 +109,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--late-ev-exit-min-cross-bps", type=float, default=0.5)
     parser.add_argument("--late-ev-exit-min-cross-sec", type=float, default=5.0)
     parser.add_argument("--extreme-loss-ratio", type=float, default=0.90)
-    parser.add_argument("--entry-size-score-mid", type=float, default=6.0)
-    parser.add_argument("--entry-size-score-full", type=float, default=6.5)
-    parser.add_argument("--entry-size-full-confidence", type=float, default=0.95)
-    parser.add_argument("--entry-size-full-min-age-sec", type=float, default=150.0)
-    parser.add_argument("--entry-size-mid-multiplier", type=float, default=2.0)
-    parser.add_argument("--entry-size-full-multiplier", type=float, default=3.0)
+    parser.add_argument("--entry-amount-tiers", default="")
     parser.add_argument("--poly-score-component-logs", choices=("compact", "full"), default="compact")
     parser.add_argument("--poly-exit-min-hold-sec", type=float, default=3.0)
     parser.add_argument("--poly-hold-to-settlement-min-reference-distance-bps", type=float, default=1.0)
@@ -141,6 +134,7 @@ def main() -> int:
     buy_slippage_ticks = args.slippage_ticks if args.buy_slippage_ticks is None else args.buy_slippage_ticks
     sell_slippage_ticks = args.slippage_ticks if args.sell_slippage_ticks is None else args.sell_slippage_ticks
     if args.config is not None:
+        entry_amount_tiers = _amount_tiers(args.entry_amount_tiers)
         cfg = _backtest_base_config(load_bot_config(args.config))
         cfg = BacktestConfig(
             **{
@@ -149,6 +143,7 @@ def main() -> int:
                 "sell_slippage_ticks": sell_slippage_ticks,
                 "honor_order_events": args.honor_order_events,
                 "settlement_boundary_usd": args.settlement_boundary_usd,
+                **({"entry_amount_tiers": entry_amount_tiers} if entry_amount_tiers else {}),
             }
         )
     else:
@@ -203,12 +198,7 @@ def main() -> int:
         late_ev_exit_min_cross_bps=args.late_ev_exit_min_cross_bps,
         late_ev_exit_min_cross_sec=args.late_ev_exit_min_cross_sec,
         extreme_loss_ratio=args.extreme_loss_ratio,
-        entry_size_score_mid=args.entry_size_score_mid,
-        entry_size_score_full=args.entry_size_score_full,
-        entry_size_full_confidence=args.entry_size_full_confidence,
-        entry_size_full_min_age_sec=args.entry_size_full_min_age_sec,
-        entry_size_mid_multiplier=args.entry_size_mid_multiplier,
-        entry_size_full_multiplier=args.entry_size_full_multiplier,
+        entry_amount_tiers=_amount_tiers(args.entry_amount_tiers),
         poly_score_component_logs=args.poly_score_component_logs,
         poly_exit_min_hold_sec=args.poly_exit_min_hold_sec,
         poly_hold_to_settlement_min_reference_distance_bps=args.poly_hold_to_settlement_min_reference_distance_bps,
