@@ -384,7 +384,7 @@ def test_post_exit_observation_ticks_are_throttled_and_keep_poly_context() -> No
     assert len(runner.logger.rows) == 2
 
 
-def test_poly_source_tick_logs_keep_backtest_fields_and_drop_repeated_analysis() -> None:
+def test_poly_source_held_tick_logs_keep_exit_diagnostics_and_bypass_dedupe() -> None:
     from new_poly.bot_logging import write_tick_row
 
     options = build_runtime_options(build_arg_parser().parse_args([
@@ -418,7 +418,18 @@ def test_poly_source_tick_logs_keep_backtest_fields_and_drop_repeated_analysis()
         "volatility_stale": False,
         "realized_pnl": 0.0,
         "position": {"token_side": "up", "entry_avg_price": 0.42},
-        "decision": {"action": "skip", "reason": "poly_score_too_low", "poly_entry_score": 5.5},
+        "decision": {
+            "action": "hold",
+            "reason": "stop_suppressed",
+            "side": "up",
+            "loss_ratio": 0.35,
+            "direction_confidence": 0.91,
+            "reference_exit_reason": "same_side_floor_broken",
+            "reference_cross_depth_bps": 0.0,
+            "reference_cross_age_sec": 0.0,
+            "late_ev_margin": -0.12,
+            "poly_entry_score": 5.5,
+        },
         "up": {
             "ask": 0.43,
             "bid": 0.41,
@@ -458,10 +469,24 @@ def test_poly_source_tick_logs_keep_backtest_fields_and_drop_repeated_analysis()
             "lead_polymarket_return_3s_bps": 0.7,
             "lead_polymarket_return_10s_bps": 1.4,
         },
-        decision=StrategyDecision(action="skip", reason="poly_score_too_low"),
+        decision=StrategyDecision(action="hold", reason="stop_suppressed", side="up"),
+    )
+    write_tick_row(
+        logger=logger,
+        loop=loop,
+        options=options,
+        state=state,
+        row={**row, "decision": dict(row["decision"])},
+        reference_meta={
+            "polymarket_price": 100050.0,
+            "polymarket_price_age_sec": 0.2,
+            "lead_polymarket_return_3s_bps": 0.7,
+            "lead_polymarket_return_10s_bps": 1.4,
+        },
+        decision=StrategyDecision(action="hold", reason="stop_suppressed", side="up"),
     )
 
-    assert len(logger.rows) == 1
+    assert len(logger.rows) == 2
     compact = logger.rows[0]
     assert compact["event"] == "tick"
     assert compact["market_slug"] == "m1"
@@ -475,8 +500,20 @@ def test_poly_source_tick_logs_keep_backtest_fields_and_drop_repeated_analysis()
         "bid_depth_ok": True,
         "book_age_ms": 80,
     }
-    assert "decision" not in compact
-    assert "position" not in compact
+    assert compact["decision"] == {
+        "action": "hold",
+        "reason": "stop_suppressed",
+        "side": "up",
+        "loss_ratio": 0.35,
+        "direction_confidence": 0.91,
+        "reference_exit_reason": "same_side_floor_broken",
+        "reference_cross_depth_bps": 0.0,
+        "reference_cross_age_sec": 0.0,
+        "late_ev_margin": -0.12,
+    }
+    assert compact["position"] == {"token_side": "up", "entry_avg_price": 0.42}
+    assert "poly_entry_score" not in compact["decision"]
+    assert "force_write_tick" not in compact
     assert "reference" not in compact
     assert "mode" not in compact
     assert "window_start" not in compact

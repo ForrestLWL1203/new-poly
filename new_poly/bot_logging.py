@@ -46,6 +46,31 @@ _POST_EXIT_OBSERVATION_FIELDS = {
     "observation_interval_sec",
 }
 
+# Held-position ticks need enough context to explain why a late stop did or did
+# not fire, without restoring the old noisy full tick payload.
+_HELD_POSITION_DECISION_FIELDS = {
+    "action",
+    "reason",
+    "side",
+    "phase",
+    "price",
+    "limit_price",
+    "profit_now",
+    "loss_ratio",
+    "direction_quality",
+    "direction_confidence",
+    "direction_cross_count_recent",
+    "direction_same_side_duration_sec",
+    "poly_reference_distance_bps",
+    "poly_return_bps",
+    "poly_trend_lookback_sec",
+    "poly_return_since_entry_start_bps",
+    "reference_exit_reason",
+    "reference_cross_depth_bps",
+    "reference_cross_age_sec",
+    "late_ev_margin",
+}
+
 # Minimal per-side book fields consumed by backtest replay.
 _BACKTEST_TOKEN_FIELDS = {
     "ask",
@@ -112,6 +137,8 @@ def write_tick_row(
     reference_meta: dict[str, Any],
     decision: StrategyDecision | None,
 ) -> None:
+    if options.analysis_logs and state.has_position and row.get("event") == "tick":
+        row["force_write_tick"] = True
     clob_diag = row.pop("_clob_ws", None)
     if isinstance(clob_diag, dict) and _clob_diag_should_attach(
         diag=clob_diag,
@@ -151,6 +178,13 @@ def compact_high_frequency_row(row: dict[str, Any], *, options: RuntimeOptions) 
             for key in _POST_EXIT_OBSERVATION_FIELDS
             if key in row and (value := row.get(key)) is not None
         })
+    elif row.get("position"):
+        position = row.get("position")
+        if isinstance(position, dict):
+            compacted["position"] = position
+        decision = _compact_held_position_decision(row.get("decision"))
+        if decision:
+            compacted["decision"] = decision
 
     _merge_price_context(compacted, row.get("reference"))
     _merge_price_context(compacted, row.get("analysis"))
@@ -181,5 +215,15 @@ def _compact_token_row(source: Any) -> dict[str, Any]:
     return {
         key: value
         for key in _BACKTEST_TOKEN_FIELDS
+        if key in source and (value := source.get(key)) is not None
+    }
+
+
+def _compact_held_position_decision(source: Any) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {}
+    return {
+        key: value
+        for key in _HELD_POSITION_DECISION_FIELDS
         if key in source and (value := source.get(key)) is not None
     }
